@@ -1,0 +1,76 @@
+# ============================================================================
+# soc-alert-triage-automation — .gitignore
+# ============================================================================
+
+# --- Secrets & environment files (NEVER commit real credentials) -----------
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+*.p12
+*.pfx
+secrets/
+credentials/
+credentials.json
+*.token
+
+# --- Python -----------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.tox/
+.nox/
+.coverage
+coverage.xml
+htmlcov/
+dist/
+build/
+*.egg-info/
+.eggs/
+
+# --- Node / n8n tooling -----------------------------------------------------
+node_modules/
+.n8n/
+# n8n runtime data (exported workflow JSONs under n8n/workflows ARE committed)
+n8n-data/
+
+# --- Runtime data: never commit alert, incident, or database data ----------
+# keep the directory placeholder, ignore everything inside it
+data/*
+!data/.gitkeep
+*.db
+*.sqlite
+*.sqlite3
+logs/
+*.log
+
+# --- Docker -----------------------------------------------------------------
+# Environment-specific overrides are machine-local by design
+docker-compose.override.yml
+
+# --- Local security scan / audit output (not part of the repo) -------------
+bandit-report.json
+pip-audit-report.txt
+safety-report.json
+trivy-report.json
+
+# --- IDE & editors ----------------------------------------------------------
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# --- OS / misc --------------------------------------------------------------
+.tmp/
+tmp/
+.cache/

@@ -1,0 +1,3 @@
+Runtime data directory (bind-mounted into the triage-api container as /data).
+Contents (SQLite database, caches, logs) are git-ignored by design — never commit
+alert, incident, or audit data. See ARCHITECTURE.md §13–§15.

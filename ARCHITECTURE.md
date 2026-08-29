@@ -1,0 +1,547 @@
+# Architecture
+
+**Project:** AI-Assisted SOC Alert Triage & Incident Response Automation
+**Scope of this document:** complete system design for a small-to-medium SOC lab that is
+production-*style* (structured, testable, secure by default) while remaining a
+portfolio/homelab project. No production deployment is claimed.
+
+---
+
+## Table of Contents
+
+1. [Goals & Non-Goals](#1-goals--non-goals)
+2. [System Context](#2-system-context)
+3. [Components & Responsibilities](#3-components--responsibilities)
+4. [End-to-End Data Flow](#4-end-to-end-data-flow)
+5. [Alert Lifecycle & Canonical Schema](#5-alert-lifecycle--canonical-schema)
+6. [Ingestion & Normalization](#6-ingestion--normalization)
+7. [Enrichment Subsystem](#7-enrichment-subsystem)
+8. [Risk Scoring Engine](#8-risk-scoring-engine)
+9. [Decision & Routing Engine](#9-decision--routing-engine)
+10. [Incidents, Notifications & Feedback](#10-incidents-notifications--feedback)
+11. [n8n Workflow Architecture](#11-n8n-workflow-architecture)
+12. [Python Service (Triage API) Architecture](#12-python-service-triage-api-architecture)
+13. [Docker & Deployment Architecture](#13-docker--deployment-architecture)
+14. [Configuration & Secret Management](#14-configuration--secret-management)
+15. [Logging, Audit & Observability](#15-logging-audit--observability)
+16. [Error Handling & Resilience](#16-error-handling--resilience)
+17. [Testing Strategy](#17-testing-strategy)
+18. [Security Architecture Summary](#18-security-architecture-summary)
+19. [Scaling Path](#19-scaling-path)
+20. [Architectural Decision Records (ADRs)](#20-architectural-decision-records-adrs)
+
+---
+
+## 1. Goals & Non-Goals
+
+**Goals**
+
+1. Automate the repetitive L1 triage loop: ingest → normalize → enrich → score → route → notify → capture feedback.
+2. Explainability first: every score and decision carries machine-readable + human-readable justifications.
+3. Work entirely on free tiers / self-hosted open source (public VirusTotal API, self-hosted MISP, optional TheHive **Community Edition**).
+4. Safe by default: no destructive response actions without explicit human approval; no offensive capabilities anywhere in the codebase.
+5. Realistic: models real Wazuh 4.x alert shapes, real SOC tiering/SLA concepts, real analyst feedback loop.
+
+**Non-Goals**
+
+- Autonomous containment/punishment of hosts or users without approval.
+- Replacing a SIEM — Wazuh stays the detection engine; this platform triages its output.
+- High-scale ingestion (>~50 alerts/sec). The design targets a lab/SMB SOC (~10k alerts/day ceiling), with a documented scaling path.
+- Any offensive tooling (exploitation, DoS, malware analysis execution, etc.).
+
+---
+
+## 2. System Context
+
+```mermaid
+flowchart TB
+    subgraph edge["Docker network: soc-edge (published)"]
+        N8N["n8n :5678"]
+    end
+
+    subgraph core["Docker network: soc-core (internal)"]
+        API["triage-api (FastAPI) :8000"]
+        DB[("SQLite volume → PostgreSQL profile")]
+        MP["Mailpit (SMTP sink) :1025/:8025"]
+        WAZ["wazuh-manager (profile: full)"]
+        MISP["MISP (profile: intel)"]
+        PG[("PostgreSQL (profile: postgres)")]
+    end
+
+    AG["Wazuh agents (lab only, optional)"] -->|1514/1515| WAZ
+    WAZ -->|"integrator script → POST /api/v1/alerts/ingest"| API
+    SIM["Simulator (scripts/send_test_alert)"] -->|"POST /alerts/ingest"| API
+    API --> DB
+    API -->|"IOC lookups (cached, rate-limited)"| VT["VirusTotal public API"]
+    API -->|"attribute search"| MISP
+    API -->|"webhook: alert scored"| N8N
+    N8N -->|"SMTP → analyst mailboxes"| MP
+    N8N -->|"chat webhook (optional)"| CHAT["Slack / Discord / Teams"]
+    N8N -->|"feedback POST /api/v1/alerts/{id}/feedback"| API
+    ANALYST["Analyst (L1/L2)"] -->|"mail / chat / n8n form"| N8N
+```
+
+Only `n8n` (5678) and `triage-api` (8000) publish ports on the host by default; Mailpit
+publishes its UI (8025) for lab convenience. Wazuh enrollment ports (1514/1515/1516)
+publish only under the `full` profile. MISP and PostgreSQL stay internal (profiles
+`intel` / `postgres`).
+
+---
+
+## 3. Components & Responsibilities
+
+| Component | Technology | Responsibilities | Phase |
+| --- | --- | --- | --- |
+| **Triage API** | Python 3.11, FastAPI, SQLAlchemy, Pydantic v2 | Ingest endpoint; normalization; dedupe; IOC extraction; enrichment orchestration; scoring; decision engine; persistence; REST surface for alerts/incidents/feedback/health; audit trail | 1–3 |
+| **Scoring engine** | Pure-Python package (`soc_triage.scoring`) | Deterministic 0–100 scoring from a versioned, config-driven factor set; emits justifications; fully unit-testable (no I/O) | 1 (v1), 2 (v2) |
+| **Enrichment adapters** | httpx + cache | VirusTotal v3 client (token bucket, TTL cache), MISP client, static allowlist/asset-inventory loader; graceful degradation on outage/quota | 2 |
+| **n8n** | n8n (self-hosted) | Notification fan-out, SLA escalation timers, incident ticket creation, analyst feedback form, daily digest; workflow JSONs version-controlled in `n8n/workflows/` | 1–3 |
+| **Wazuh manager** | Wazuh 4.x | Detection source: rules/decoders/FIM; ships alerts via its `integrator` module + custom script; optional API queries for agent context | 4 |
+| **Simulator** | `scripts/send_test_alert` | Replays synthetic alerts from `docs/sample-alerts/` (also CI fixtures) so the whole pipeline is demoable without Wazuh | 1 |
+| **Persistence** | SQLite (file volume) → PostgreSQL | Tables: `alerts`, `ioc_observations`, `incidents`, `feedback`, `audit_log`, `dead_letters`; migrations via Alembic | 1 / 3 |
+| **Mailpit** | axllent/mailpit | Local SMTP sink + web UI — proves email flows without touching real relays | 1 |
+| **MISP (optional)** | MISP docker (profile `intel`) | Self-hosted threat intel: seeded with public/synthetic events; attribute lookups enrich alerts | 2 |
+| **SOC console (later)** | Static HTML + JSON endpoints (optionally Grafana profile) | Alert queue, score justifications, incident board, FP-rate trends | 3 |
+| **TheHive CE (optional, later)** | TheHive 5 Community Edition | Case management export — CE only, never Premium | 4+ |
+| **LLM assistant (optional)** | any OpenAI-compatible API | Draft analyst-facing summaries/suggestions appended **after** deterministic scoring; always labeled; disabled by default | 5 |
+
+---
+
+## 4. End-to-End Data Flow
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant W as Wazuh integrator
+    participant API as Triage API
+    participant VT as VirusTotal
+    participant M as MISP
+    participant DB as Database
+    participant N as n8n
+    participant AN as Analyst
+
+    W->>API: POST /api/v1/alerts/ingest (X-API-Key, Wazuh JSON)
+    API->>API: authn, schema check, size/rate limits
+    API->>API: normalize → canonical alert
+    API->>DB: dedupe check (rule+agent window) → insert or bump recurrence
+    API->>API: extract IOCs (ip / domain / hash)
+    API->>API: allowlist check (suppress known-good)
+    API->>VT: lookup uncached IOCs (token-bucket ≤4/min)
+    API->>M: search attributes (if profile enabled)
+    API->>DB: persist enrichments (or mark enrichment:partial on failure)
+    API->>API: risk scoring (factor weights, tier, justifications)
+    API->>API: decision matrix (incident / queue / suppress / auto-close)
+    API->>DB: persist alert state + audit entry
+    API--)N: webhook: alert scored (severity, summary, runbook link)
+    N--)AN: email (SMTP→Mailpit) + chat webhook
+    AN--)N: acknowledge / triage verdict (n8n form)
+    N--)API: POST /alerts/{id}/feedback
+    API->>DB: store verdict, update status, audit
+    Note over N: if no ack within SLA → escalation workflow re-notifies L2
+```
+
+**Design rules along the flow**
+
+- Every step appends to an append-only `audit_log` (who/what/when/before→after).
+- Any enrichment failure **must not** block scoring: the alert proceeds, flagged
+  `enrichment_status: partial|failed` (see §16).
+- The scoring engine is a pure function: `(canonical_alert, enrichments, config) → score + justification`.
+- Analysts can always trace: alert → IOCs → intel verdicts → factor scores → decision → notification/SLA events.
+
+---
+
+## 5. Alert Lifecycle & Canonical Schema
+
+### 5.1 Status machine
+
+```mermaid
+stateDiagram-v2
+    [*] --> received
+    received --> normalized: schema ok
+    normalized --> received: invalid (→ dead_letters)
+    normalized --> enriched: IOC lookups done/partial
+    enriched --> scored: risk computed
+    scored --> routed: decision chosen
+    routed --> incident_open: tier = high/critical
+    routed --> awaiting_triage: tier = medium
+    routed --> suppressed: allowlist / dedupe absorb
+    routed --> auto_closed: info/low + TTL expired, no recurrence
+    incident_open --> resolved
+    awaiting_triage --> resolved
+    awaiting_triage --> incident_open: analyst escalates
+    incident_open --> false_positive: analyst verdict
+    awaiting_triage --> false_positive: analyst verdict
+    resolved --> [*]
+    false_positive --> [*]
+```
+
+### 5.2 Canonical alert record (Pydantic model, Phase 1)
+
+```jsonc
+{
+  "alert_id": "3f9d2b1e-…-uuid",             // internal UUID
+  "source": "wazuh",                          // wazuh | simulator
+  "received_at": "2026-08-29T10:15:30Z",
+  "source_event": {                           // trimmed original payload (full_log kept)
+    "rule": { "id": "5710", "level": 5, "description": "…",
+              "groups": ["syslog","sshd","authentication_failed"],
+              "mitre": { "id": ["T1110"], "tactic": ["Credential Access"] } },
+    "agent": { "id": "001", "name": "web-prod-01", "ip": "10.0.1.10" },
+    "location": "/var/log/auth.log",
+    "full_log": "…sanitized raw line…"
+  },
+  "iocs": [
+    { "type": "ip", "value": "203.0.113.50", "role": "source",
+      "enrichment": { "vt": { "reputation": "malicious", "malicious": 38,
+                              "suspicious": 4, "cached": true },
+                      "misp": { "matched_event_ids": ["1024"],
+                                "tags": ["apt","tlp:amber"] },
+                      "allowlist": { "matched": false } } }
+  ],
+  "dedupe": { "group_key": "5710:001", "occurrences": 9,
+              "first_seen": "…", "last_seen": "…" },
+  "asset": { "name": "web-prod-01", "tier": "tier-1", "owner": "platform-team" },
+  "risk": {
+    "score": 78, "tier": "high", "engine_version": "v2",
+    "factors": [
+      { "name": "rule_severity", "points": 26, "max": 30,
+        "detail": "Wazuh level 5 → band 5-6" },
+      { "name": "threat_intel", "points": 19, "max": 25,
+        "detail": "VT malicious=38/70; MISP event 1024 tags: apt" }
+    ]
+  },
+  "decision": { "action": "open_incident", "severity": "SEV2",
+                "reasons": ["tier=high", "intel confirms malicious srcip"],
+                "runbook": "runbooks/ssh-brute-force.md", "decided_at": "…" },
+  "enrichment_status": "complete",            // complete | partial | failed | skipped
+  "status": "incident_open",
+  "incident_id": "INC-2026-08-29-0007"
+}
+```
+
+Notes: raw payloads are size-capped; the platform never adds sensitive fields of its own —
+it stores what Wazuh already logged (see SECURITY.md data policy).
+
+---
+
+## 6. Ingestion & Normalization
+
+**Endpoint:** `POST /api/v1/alerts/ingest`
+
+- AuthN: `X-API-Key` (constant-time comparison). Upgrade path: HMAC-SHA256 signature
+  (`X-Signature` over body + timestamp) for per-source keys — see SECURITY.md.
+- Guards: request body ≤ 256 KiB; per-key rate limit (default 120 req/min, tunable);
+  Pydantic validation with a *tolerant* schema (unknown fields preserved under
+  `source_event`, never rejected for extras — Wazuh rulesets evolve).
+
+**Normalization:** map Wazuh 4.x JSON → canonical record. Key mappings:
+`rule.level`, `rule.id`, `rule.groups[]`, `rule.mitre`, `agent.{id,name,ip}`,
+`data.srcip/dstuser/srcuser`, `full_log`. The normalizer is fixture-tested against every
+file in `docs/sample-alerts/` (they double as contract tests).
+
+**Deduplication:** `group_key = rule.id + agent.id`. Within a 15-minute window, repeat
+alerts bump `occurrences`/`last_seen` instead of creating new rows; recurrence feeds the
+scoring factor. If `occurrences` crosses escalation thresholds (e.g., 10), the dedupe
+group is re-scored even if no new alert arrives.
+
+**Dead letters:** payloads that fail validation 3× land in `dead_letters` with the parse
+error — nothing is silently dropped.
+
+---
+
+## 7. Enrichment Subsystem
+
+### 7.1 IOC extraction (Phase 1)
+
+Regex/grammar extraction from canonical fields, **not** from arbitrary `full_log` text in
+the MVP (v2 may extend): `data.srcip`, `data.dstip`, `data.virustotal.*`, FIM path fields.
+Types: `ipv4`, `ipv6`, `domain`, `md5`, `sha1`, `sha256`, `filepath`.
+
+### 7.2 Enrichment chain (ordered, per IOC)
+
+| Order | Source | Behavior | On failure |
+| --- | --- | --- | --- |
+| 1 | **Allowlist** (`app/config/allowlists.yaml`) | known-good scanner IPs, backup jobs, CDN ranges → mark `allowlisted`, apply suppression modifier | fail-open (log warn) |
+| 2 | **Local cache** (TTL 6 h hashes / 1 h IPs) | SQLite-backed; avoids quota burn | fail-open |
+| 3 | **VirusTotal v3** (public tier) | token bucket **4 req/min, 500/day**; only hash/IP/domain endpoints; never abort on quota — queue & continue | mark `vt: quota_exceeded`, continue |
+| 4 | **MISP** (`/attributes/restSearch`, profile `intel`) | attribute + event context, tags (e.g., `apt`, `tlp:amber`, false-positive tags) | mark `misp: unavailable`, continue |
+
+### 7.3 Guarantees
+
+- Enrichment **never blocks** the pipeline beyond a 5 s budget: slow uncached lookups are
+  skipped, the alert proceeds, and a background retry fills gaps later (best-effort
+  re-score on arrival).
+- Every outbound call is logged (target host only — never API keys), timed, and counted
+  (quota usage per day) so quota state is observable.
+- Optional sources auto-disable when their env keys are empty — the system must run fully
+  functional (scoring v1) with **zero external services**.
+
+---
+
+## 8. Risk Scoring Engine
+
+Deterministic, config-driven, versioned (`scoring.v1`, `scoring.v2`). Weights live in
+`app/config/scoring.yaml` (schema-validated, git-versioned) — tuning requires no code
+change, and every change is a reviewable diff.
+
+### 8.1 Factor set v1 (MVP — no external intel)
+
+| Factor | Max | Computation sketch |
+| --- | --- | --- |
+| `rule_severity` | 40 | band map of Wazuh `rule.level`: 0–2→0 · 3–4→6 · 5–6→14 · 7–8→22 · 9–10→30 · 11–15→40 |
+| `rule_groups_mitre` | 15 | `authentication_failed`/`malware`/`attack` groups +4 each; any MITRE technique +4; ≥2 tactics +3 (cap 15) |
+| `asset_criticality` | 25 | inventory tier: critical=25 · high=18 · medium=10 · low=5 · unknown=8 |
+| `recurrence_velocity` | 20 | ≥3 in 15 min → +12; ≥10 in 24 h → +8; rising burst +6 (cap 20) |
+| `allowlist_modifier` | −20 | allowlisted source subtracts points (floor 0) |
+
+### 8.2 Factor set v2 (adds threat intel, Phase 2)
+
+| Factor | Max | Computation sketch |
+| --- | --- | --- |
+| `rule_severity` | 30 | same bands, rescaled |
+| `rule_groups_mitre` | 10 | as above |
+| `asset_criticality` | 20 | as above |
+| `recurrence_velocity` | 15 | as above |
+| `threat_intel` | 25 | VT: malicious≥10→15 · 2–9→8 · suspicious-only→4. MISP: event match→10, `apt`/threat-actor tag→+5 (factor cap 25) |
+| `allowlist_modifier` | −25 | as above |
+
+### 8.3 Tiers & output
+
+- Total clipped to 0–100: `0–24 informational` · `25–44 low` · `45–69 medium` · `70–84 high` · `85–100 critical`.
+- Output always includes `engine_version`, per-factor `points/max/detail`, and a generated
+  one-paragraph human summary (template-based in v1/v2; optional LLM polish in Phase 5,
+  clearly labeled `ai_assisted: true` and never used for the numeric score).
+- Golden-file tests pin expected scores for the sample-alert scenarios; any weight change
+  must consciously update the goldens (that is the tuning workflow).
+
+---
+
+## 9. Decision & Routing Engine
+
+Policy table (Phase 1 target; thresholds configurable in `app/config/decisions.yaml`):
+
+| Tier | Action | Notification | Ack SLA | Notes |
+| --- | --- | --- | --- | --- |
+| **critical (85–100)** | Open incident **SEV1** + propose containment runbook | page (urgent email + chat) | 15 min | containment actions require analyst approval |
+| **high (70–84)** | Open incident **SEV2** | email + chat | 30 min | |
+| **medium (45–69)** | Queue `awaiting_triage` | batched digest (2 h) | 4 h | re-score on recurrence escalation |
+| **low (25–44)** | Dashboard only | daily digest | — | |
+| **informational (0–24)** | Auto-close after 7-day TTL if no recurrence | none | — | closed rows retained for FP analytics |
+
+Additional routing rules:
+
+- **Allowlisted → suppressed** regardless of score (audit entry retained).
+- **MITRE-tagged** alerts link a runbook from `docs/runbooks/<scenario>.md` (Phase 3).
+- Decisions are re-evaluated when recurrence thresholds cross or late enrichment lands.
+
+---
+
+## 10. Incidents, Notifications & Feedback
+
+**Incidents** (Phase 3): `incidents` table with id `INC-YYYY-MM-DD-NNNN`, severity,
+linked alert/dedupe groups, timeline (audit-derived), and resolution notes. Optional
+TheHive CE export creates a mirrored case (never required).
+
+**Notifications** (n8n-mediated): the API never talks to SMTP/chat directly; it POSTs a
+compact `scored_alert` event to the n8n webhook (with `N8N_CALLBACK_TOKEN`). The message
+contains: agent, rule, top IOCs + intel verdicts, score + top factors, runbook link, a
+deep link to the alert in the console, and acknowledgement actions. Lab email → Mailpit sink.
+
+**Feedback loop:** analyst submits `true_positive | false_positive | escalate | contain`
+via n8n form or direct API; stored in `feedback` + audit; `false_positive` on a rule+agent
+pair 3× raises a "tuning suggestion" in the digest (humans approve rule changes — the
+platform never auto-edits Wazuh rules).
+
+---
+
+## 11. n8n Workflow Architecture
+
+Workflows are exported JSON under `n8n/workflows/` (version-controlled; import per
+`n8n/README.md`). One concern per workflow:
+
+| ID | Workflow | Trigger | Flow |
+| --- | --- | --- | --- |
+| WF1 | `soc-triage-router` | webhook `/webhook/soc-alert-scored` (API callback) | auth check → Switch on tier → route to WF2/WF3 |
+| WF2 | `soc-analyst-notify` | called by WF1 | render message (IOCs, score factors, runbook) → Email (SMTP) + chat webhook → hand off to WF4 |
+| WF3 | `soc-incident-create` | called by WF1 (high/critical) | create incident via API (or TheHive CE case if enabled) → attach to notification |
+| WF4 | `soc-sla-escalation` | from WF2 | Wait node (15/30 min) → if no ack (checked via API) → escalate: re-notify with L2 tag, loop max 2× |
+| WF5 | `soc-analyst-feedback` | Form trigger (`/form/triage`) | form fields (alert_id, verdict, notes) → POST `/api/v1/alerts/{id}/feedback` (token auth) → confirmation |
+| WF6 | `soc-daily-digest` | Cron 07:00 UTC | query API stats endpoints → email digest (volumes, top rules, FP rate, tuning suggestions) |
+
+**n8n error strategy:** a global error workflow posts to the API `/internal/n8n-errors`
+for audit + console visibility; every node sets explicit continue/fail behavior; secrets
+live in n8n credentials (encrypted via `N8N_ENCRYPTION_KEY`), never in exported JSON —
+the repo's workflow files contain only credential *references*.
+
+---
+
+## 12. Python Service (Triage API) Architecture
+
+```
+app/src/soc_triage/
+├── main.py                 # app factory, lifespan (db init, config load), health
+├── api/                    # routers: alerts (ingest/get/list), incidents, feedback,
+│                           #        stats, health, internal (n8n errors)
+├── core/                   # config (pydantic-settings, env-driven), logging (structlog),
+│                           # security (api-key auth, rate limiting), errors, ids
+├── models/                 # SQLAlchemy ORM + Pydantic schemas (canonical alert, etc.)
+├── ingest/                 # wazuh normalizer, dedupe, request guards
+├── enrichment/             # ioc_extractor, vt_client, misp_client, allowlist, cache
+├── scoring/                # engine.py (pure), factors.py, config loader, summaries
+├── decisions/              # policy table, router, runbook registry
+├── notifications/          # n8n webhook client (outbound only)
+└── audit.py                # append-only audit_log writer
+```
+
+**Layering rules (enforced in review):**
+
+- `api/` only translates HTTP ↔ services; business logic lives in domain packages.
+- Domain packages (`ingest`, `enrichment`, `scoring`, `decisions`) **never** import FastAPI.
+- All I/O-bound external calls go through injected clients (`httpx.AsyncClient`) — tests inject fakes.
+- DB access only in `models/` repositories; the scoring engine has **zero** I/O.
+- Background work: Phase 1 uses FastAPI background tasks + a periodic re-score loop;
+  Phase 3 may extract an asyncio worker process if load demands (no Celery/Redis until
+  measurably needed — see ADR-4).
+
+---
+
+## 13. Docker & Deployment Architecture
+
+**Stacks via compose profiles** (lands in Phase 1, design fixed now):
+
+| Service | Image (pinned by tag) | Profile | Networks | Published ports | Purpose |
+| --- | --- | --- | --- | --- | --- |
+| `triage-api` | built from `deploy/triage-api.Dockerfile` | default | soc-core, soc-edge | 8000 | Triage API |
+| `n8n` | `n8nio/n8n:<pinned>` | default | soc-edge, soc-core | 5678 | orchestration |
+| `mailpit` | `axllent/mailpit:<pinned>` | default | soc-core | 8025, 1025 | SMTP sink |
+| `wazuh-manager` | `wazuh/wazuh-manager:4.x` | `full` | soc-core | 1514–1516 (agents) | real detection source |
+| `misp-*` | MISP docker stack | `intel` | soc-core | internal only | threat intel |
+| `postgres` | `postgres:16-alpine` | `postgres` | soc-core | internal only | scalable DB |
+| `grafana` | `grafana/grafana:<pinned>` | `observability` | soc-core | 3000 | optional dashboards |
+
+**Conventions:** named volumes for `/data` (API), n8n home, Wazuh var, MISP/PG data;
+healthchecks on every service (`/health`, `/healthz`, SMTP ping); `restart: unless-stopped`;
+CPU/memory limits per service; containers run non-root (the API image creates an `app`
+user); images pinned by tag (digest pinning when a release is cut); `deploy/` holds
+Dockerfiles + compose fragments so the root `docker-compose.yml` stays small.
+
+**Two run modes:**
+
+- **`sim` (default):** no Wazuh needed — the simulator replays `docs/sample-alerts/` for demos/CI.
+- **`full`:** adds the Wazuh manager profile; agents enroll over 1514/1515; the
+  `integrator` custom script forwards matched rules to the ingest endpoint.
+
+---
+
+## 14. Configuration & Secret Management
+
+- **12-factor rule:** all runtime configuration comes from environment variables, loaded by
+  `pydantic-settings` into a typed, validated `Settings` object; the app **fails fast** at
+  startup if required secrets are missing or still set to `change-me*` placeholders.
+- **Secrets** (API keys, tokens, passwords, `N8N_ENCRYPTION_KEY`) live only in `.env`
+  (git-ignored) or an orchestrator secret store; `.env.example` documents every key with
+  placeholder values and generation hints. `scripts/check_secrets.sh` scans tracked files.
+- **Policies** (scoring weights, decision thresholds, allowlists, asset inventory) are
+  **non-secret YAML** under `app/config/` — version-controlled, schema-validated,
+  hot-reloadable (explicit refresh endpoint, audit-logged).
+- **Disable-by-empty:** optional integrations (VT, MISP, TheHive, LLM, chat) activate only
+  when their env keys are non-empty; the core pipeline runs with zero externals.
+- **Test/prod parity:** the same image runs everywhere; only env differs. `SOC_ENV` gates
+  dangerous conveniences (e.g., debug endpoints exist only when `SOC_ENV=development`).
+
+---
+
+## 15. Logging, Audit & Observability
+
+- **Structured JSON logs** (`structlog`) to stdout — Docker-friendly; one line per event;
+  fields: `ts, level, event, alert_id, dedupe_group, component, duration_ms, outcome`.
+- **Correlation:** `alert_id` (and `incident_id`) propagate through API → enrichment →
+  decision → n8n callback payload, so one alert is traceable end-to-end across services.
+- **Secret hygiene in logs:** loggers use allow-listed fields; a unit test asserts no env
+  secret value ever appears in log output (canary-value fuzz test).
+- **Audit trail:** append-only `audit_log` table (actor, action, entity, before/after JSON,
+  timestamp) for every state transition, decision, config change, and analyst verdict.
+  This is the system of record for "why did the SOC bot do X".
+- **Metrics (Phase 3):** Prometheus `/metrics` — ingest rate, dedupe ratio, VT quota usage,
+  scoring distribution, incident counts, SLA-breach counter; Grafana profile visualizes.
+- **Health:** `/health` (liveness: process + DB ping) and `/ready` (readiness: config valid,
+  migrations applied, n8n reachable best-effort).
+
+---
+
+## 16. Error Handling & Resilience
+
+| Failure | Detection | Behavior |
+| --- | --- | --- |
+| Invalid payload | Pydantic validation | 422 + dead-letter record; retried ≤3× then kept for inspection |
+| Ingest auth failure | API key mismatch | 401 + security log (rate-limited responses to avoid log flooding) |
+| VirusTotal 429/quota | status + retry-after | token bucket blocks send; IOC marked `quota_exceeded`; background retry next window |
+| VirusTotal/MISP outage | timeout (3 s), retries (2× exponential + jitter) | mark `unavailable`, continue pipeline, `enrichment_status: partial` |
+| DB unavailable | connection error | 503 + liveness fail; ingest returns retryable 503 (Wazuh integrator buffers) |
+| n8n webhook unreachable | timeout 2 s | event parked in `pending_notifications`, retried by periodic loop (≤24 h); alert status unaffected |
+| Scoring engine exception | try/except boundary | fallback score from `rule_severity` only + `engine_degraded` audit flag (never crash ingest) |
+| Duplicate delivery | idempotency key (`source_event.id` when present) | return existing alert (200, `duplicate: true`) |
+
+Principles: **fail open for enrichment, fail closed for secrets, fail loud for the
+pipeline**. Nothing is dropped silently; every degraded path writes an audit entry.
+
+---
+
+## 17. Testing Strategy
+
+(Detail, gates, and coverage targets live in [DEVELOPMENT_PLAN.md](DEVELOPMENT_PLAN.md#testing-strategy).)
+
+| Layer | Tooling | Scope |
+| --- | --- | --- |
+| Unit | pytest; pure functions | scoring engine (golden files per sample scenario), normalizer, dedupe keys, IOC extractor, decision matrix, config validation |
+| Contract | pytest + `docs/sample-alerts/*.json` | every sample parses, normalizes, scores — sample updates are breaking-change detectors |
+| Integration | FastAPI TestClient + temp SQLite | auth, ingest→state-machine transitions, feedback, audit rows, error paths |
+| External fakes | `respx` / fake httpx clients | VT rate limiter & quota behavior, MISP outage, timeout paths |
+| E2E smoke (Phase 1+) | compose `sim` profile | simulator → API → SQLite state + n8n webhook receiver; nightly job in CI |
+| Security tests | canary-secret log fuzz, authz matrix | no secrets in logs; unauthenticated calls rejected; rate limits enforced |
+
+---
+
+## 18. Security Architecture Summary
+
+Full policy: [SECURITY.md](SECURITY.md). Key points:
+
+- Defensive-only scope enforced by policy and review; no offensive tooling will be merged.
+- AuthN: `X-API-Key` ingest (constant-time compare), `N8N_CALLBACK_TOKEN` for workflow
+  callbacks; documented upgrade to HMAC request signing; all endpoints rate-limited;
+  admin/read endpoints get a separate analyst token in Phase 3.
+- Network segmentation (`soc-edge` vs `soc-core`), minimal published ports, non-root
+  containers, pinned images, healthchecks, resource limits.
+- Data minimization: synthetic test data only; doc-range IPs (RFC 5737/3849); retention
+  windows documented in SECURITY.md.
+- Platform threat model (STRIDE-lite) maintained in SECURITY.md with per-phase mitigations.
+
+---
+
+## 19. Scaling Path
+
+Designed-in upgrades, deliberately deferred until needed:
+
+1. **SQLite → PostgreSQL** (profile exists from Phase 3; Alembic migrations identical).
+2. **Background tasks → dedicated worker** (asyncio worker process; same codebase, `--worker` entrypoint).
+3. **Single n8n → queue mode** (Redis + multiple executors) if workflow volume grows.
+4. **Per-source HMAC keys + mTLS** on ingest when multiple Wazuh managers report in.
+5. **Read replicas / metrics retention** for the console; Grafana long-term storage optional.
+
+The MVP targets ~10k alerts/day comfortably; the ceilings and trigger criteria for each
+upgrade are documented so the "production-style" story holds up in review.
+
+---
+
+## 20. Architectural Decision Records (ADRs)
+
+| # | Decision | Rationale | Alternatives rejected |
+| --- | --- | --- | --- |
+| ADR-1 | **n8n for orchestration** | visual, self-hosted, free; separates notification/escalation logic from the core API; highly demonstrable in a SOC portfolio | Celery (code-heavy, less visible), TheHive-only automation (couples triage to a case tool) |
+| ADR-2 | **FastAPI + Pydantic v2** | typed validation of messy Wazuh payloads; async I/O for enrichment; OpenAPI docs for free | Flask (no native async), Django (too heavy for this service shape) |
+| ADR-3 | **SQLite first** | zero-config lab; identical SQLAlchemy/Alembic schema eases the Postgres move | Postgres-only (heavier MVP), TinyDB (no SQL rigor) |
+| ADR-4 | **No Celery/Redis in MVP** | expected load is tiny; background tasks suffice; scaling path documented | queue-first (accidental complexity, more containers to babysit) |
+| ADR-5 | **Deterministic scoring before any LLM** | explainability & auditability are non-negotiable in a SOC; analysts must trust every number; LLM is additive, optional, labeled | LLM-first scoring (unexplainable, nondeterministic, hallucination risk) |
+| ADR-6 | **Webhook-push ingest via Wazuh `integrator`** | simplest supported Wazuh path; JSON alerts; no indexer dependency | Filebeat→indexer (heavy), polling the Wazuh API (lag, quota) |
+| ADR-7 | **Free-tier hard constraint** | the portfolio must run for anyone at $0: public VT (4/min), self-hosted MISP, TheHive CE only, LLM optional/disabled | any paid-tier dependency (excluded by charter) |
+| ADR-8 | **Human-approved response actions** | containment (host isolation, user disable) is gated behind explicit analyst approval with audit — safely demonstrable automation | autonomous response (unsafe, out of scope) |

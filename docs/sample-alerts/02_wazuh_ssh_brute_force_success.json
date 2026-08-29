@@ -1,0 +1,28 @@
+{
+  "id": "1770000000.100002",
+  "timestamp": "2026-08-29T10:23:41.000+0000",
+  "rule": {
+    "level": 3,
+    "description": "sshd: authentication success",
+    "id": "5715",
+    "firedtimes": 1,
+    "mail": false,
+    "groups": ["syslog", "sshd", "authentication_success"]
+  },
+  "agent": {
+    "id": "001",
+    "name": "web-prod-01",
+    "ip": "10.0.1.10",
+    "labels": { "asset_tier": "tier-1", "owner": "platform-team" }
+  },
+  "manager": { "name": "wazuh-manager" },
+  "decoder": { "name": "sshd" },
+  "data": {
+    "srcip": "203.0.113.50",
+    "srcport": 52011,
+    "dstuser": "svc_deploy",
+    "protocol": "ssh"
+  },
+  "location": "/var/log/auth.log",
+  "full_log": "Aug 29 10:23:41 web-prod-01 sshd[3987]: Accepted password for svc_deploy from 203.0.113.50 port 52011 ssh2"
+}
