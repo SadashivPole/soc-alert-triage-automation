@@ -1,0 +1,38 @@
+{
+  "id": "1770000000.100003",
+  "timestamp": "2026-08-29T11:02:07.000+0000",
+  "rule": {
+    "level": 7,
+    "description": "Integrity checksum changed for: /etc/passwd",
+    "id": "550",
+    "firedtimes": 1,
+    "mail": true,
+    "groups": ["syscheck", "syscheck_file_modified", "rootcheck"],
+    "mitre": {
+      "id": ["T1566"],
+      "tactic": ["Persistence", "Privilege Escalation"],
+      "technique": ["Modify Authentication Process"]
+    }
+  },
+  "agent": {
+    "id": "002",
+    "name": "db-prod-01",
+    "ip": "10.0.2.20",
+    "labels": { "asset_tier": "critical", "owner": "data-platform" }
+  },
+  "manager": { "name": "wazuh-manager" },
+  "decoder": { "name": "syscheck_integrity_changed" },
+  "syscheck": {
+    "path": "/etc/passwd",
+    "mode": "scheduled",
+    "event": "modified",
+    "md5_before": "bc478d7a48bfab117da4b9bdcb5aee36",
+    "md5_after": "cb1e913a5dd676ba1ee0715c0a604b07",
+    "sha256_after": "5ac4ad709135aadc306574382fcb94d33c1bb4fcdd8eb2f7b43e6b71dc6d1e95",
+    "uname_before": "root",
+    "gname_before": "root",
+    "inode_after": 12361
+  },
+  "location": "syscheck",
+  "full_log": "Integrity checksum changed for: '/etc/passwd' Size changed from 1805 to 1899. Permissions changed from 644 to 644."
+}
