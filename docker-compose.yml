@@ -1,0 +1,135 @@
+# Phase 2C — SOAR Lab Configuration
+# Docker configuration is statically validated; Docker/n8n/Mailpit container
+# runtime was NOT executed in this sandbox.
+# Services: triage-api + n8n + mailpit
+# No TheHive, no autonomous containment, no new providers.
+# Based on ARCHITECTURE.md §13, SECURITY.md §4.
+
+version: "3.9"
+
+services:
+  triage-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: soc-triage-api
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      # 12-factor: all config from env (see .env)
+      SOC_ENV: ${SOC_ENV:-development}
+      SOC_LOG_LEVEL: ${SOC_LOG_LEVEL:-INFO}
+      SOC_INSTANCE_NAME: ${SOC_INSTANCE_NAME:-soc-lab}
+      TRIAGE_API_HOST: 0.0.0.0
+      TRIAGE_API_PORT: 8000
+      TRIAGE_DB_URL: ${TRIAGE_DB_URL:-sqlite:////data/soc_triage.db}
+      TRIAGE_DEDUPE_WINDOW_SECONDS: ${TRIAGE_DEDUPE_WINDOW_SECONDS:-900}
+      TRIAGE_INGEST_API_KEY: ${TRIAGE_INGEST_API_KEY:-lab-test-key-change-in-production}
+      N8N_CALLBACK_TOKEN: ${N8N_CALLBACK_TOKEN:-lab-n8n-token-change-in-production}
+      N8N_WEBHOOK_TOKEN: ${N8N_WEBHOOK_TOKEN:-lab-n8n-token-change-in-production}
+      N8N_WEBHOOK_URL: ${N8N_WEBHOOK_URL:-http://n8n:5678/webhook/soc-alert-scored}
+      TRIAGE_API_BASE_URL: ${TRIAGE_API_BASE_URL:-http://triage-api:8000}
+    volumes:
+      - ./data:/data
+    networks:
+      - soc-core
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+    # NOTE: n8n and Mailpit are optional integration targets. The API starts
+    # independently and notifications fail open when those services are down.
+    # No `depends_on` is declared so an n8n/Mailpit outage cannot block startup.
+
+  n8n:
+    image: n8nio/n8n:1.85.0
+    container_name: soc-n8n
+    restart: unless-stopped
+    ports:
+      - "5678:5678"
+    environment:
+      # Shared secret for webhook/auth (never in JSON, never logged)
+      N8N_WEBHOOK_TOKEN: ${N8N_WEBHOOK_TOKEN:-lab-n8n-token-change-in-production}
+      N8N_CALLBACK_TOKEN: ${N8N_CALLBACK_TOKEN:-lab-n8n-token-change-in-production}
+      N8N_WEBHOOK_BASE_URL: ${N8N_WEBHOOK_BASE_URL:-http://n8n:5678}
+      # The checked-in workflows resolve the API base from TRIAGE_API_BASE_URL.
+      TRIAGE_API_BASE_URL: ${TRIAGE_API_BASE_URL:-http://triage-api:8000}
+      # Compatibility alias retained for deployments that reference TRIAGE_API_URL.
+      TRIAGE_API_URL: ${TRIAGE_API_BASE_URL:-http://triage-api:8000}
+      N8N_ENCRYPTION_KEY: ${N8N_ENCRYPTION_KEY:-lab-encryption-key-do-not-use-in-prod}
+      # Optional SMTP to Mailpit for notifications. Values match the $env.*
+      # references used by the checked-in workflows.
+      SMTP_HOST: mailpit
+      SMTP_PORT: 1025
+      SMTP_SECURE: false
+      SMTP_USER: ""
+      SMTP_PASS: ""
+      SMTP_FROM: ${SMTP_FROM:-soc@lab.local}
+      SOC_FROM_EMAIL: ${SOC_FROM_EMAIL:-soc@lab.local}
+      SOC_ANALYST_EMAILS: ${SOC_ANALYST_EMAILS:-analyst@lab.local}
+      SOC_L1_EMAIL: ${SOC_L1_EMAIL:-analyst@lab.local}
+      SOC_L2_EMAILS: ${SOC_L2_EMAILS:-l2@lab.local}
+      SOC_L2_EMAIL: ${SOC_L2_EMAIL:-l2@lab.local}
+      SLACK_CHANNEL_L1: ${SLACK_CHANNEL_L1:-#soc-l1}
+    volumes:
+      # Persistent n8n home (workflows, credentials, DB if using SQLite)
+      - n8n-data:/home/node/.n8n
+      # Mount existing workflow JSONs (source of truth per n8n/README.md)
+      - ./n8n/workflows:/workflows:ro
+      # Lab-only import helper executed before n8n starts.
+      - ./scripts/n8n-import-workflows.sh:/usr/local/bin/n8n-import-workflows.sh:ro
+    networks:
+      - soc-core
+      - soc-edge
+    # Import WF1/WF2/WF3/WF5 before the n8n server starts. The JSONs have
+    # stable ids so re-running a fresh compose startup updates the existing
+    # records instead of creating duplicates.
+    command:
+      - sh
+      - -c
+      - "sh /usr/local/bin/n8n-import-workflows.sh && n8n start"
+    # Healthcheck using n8n's internal endpoint if available; fallback to port open
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:5678/healthz || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  mailpit:
+    image: axllent/mailpit:v1.20
+    container_name: soc-mailpit
+    restart: unless-stopped
+    ports:
+      - "1025:1025"   # SMTP
+      - "8025:8025"   # Web UI
+    environment:
+      MP_SMTP_AUTH_ACCEPT_ANY: 1
+      MP_SMTP_AUTH_ALLOW_INSECURE: 1
+      MP_WEBROOT: /
+      MP_DB: /data/mailpit.db
+      # Do not expose real secrets; lab only
+      MP_SMTP_AUTO_TLS: "false"
+    volumes:
+      - ./data/mailpit:/data
+    networks:
+      - soc-core
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8025/api/v1/status || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+
+networks:
+  soc-core:
+    driver: bridge
+  soc-edge:
+    driver: bridge
+
+volumes:
+  n8n-data:
+    driver: local
