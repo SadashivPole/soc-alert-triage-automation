@@ -17,6 +17,7 @@ dependencies = [
     "structlog>=24.1,<26",
     "SQLAlchemy>=2.0,<3",
     "alembic>=1.13,<3",
+    "PyYAML>=6.0,<7",
 ]
 
 [project.optional-dependencies]
@@ -26,6 +27,7 @@ dev = [
     "httpx2>=2,<3",
     "ruff>=0.5,<1",
     "mypy>=1.10,<2",
+    "types-PyYAML>=6.0,<7",
 ]
 
 [tool.setuptools.packages.find]

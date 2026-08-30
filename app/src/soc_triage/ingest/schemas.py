@@ -53,6 +53,9 @@ class WazuhAgent(BaseModel):
     id: str
     name: str
     ip: str | None = None
+    #: Optional inventory labels (``asset_tier`` / ``owner``) — carried into
+    #: the canonical asset context for scoring (Phase 1F, ARCHITECTURE §5.2).
+    labels: dict[str, Any] | None = None
 
     @field_validator("id", mode="before")
     @classmethod

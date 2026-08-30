@@ -524,13 +524,19 @@ def test_api_persists_audit_records_for_ingest(db_url: str) -> None:
             == 202
         )
 
-    # New engine over the same file: the rows are durable.
+    # New engine over the same file: the rows are durable. Phase 1F appends
+    # `alert.scored` + `alert.decided` after each new alert's `alert.created`
+    # (exact duplicates are echoed, never re-scored).
     audit = _audit_rows(create_app_engine(db_url))
     assert [e.action for e in audit] == [
         "dedupe.generation_started",
         "alert.created",
+        "alert.scored",
+        "alert.decided",
         "alert.duplicate_absorbed",
         "alert.created",
+        "alert.scored",
+        "alert.decided",
     ]
 
 

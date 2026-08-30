@@ -9,8 +9,10 @@ from sqlalchemy import Engine
 from sqlalchemy.orm import sessionmaker
 
 from ..core.config import Settings
+from ..decisions import DecisionEngine
 from ..enrichment import EnrichmentChain
 from ..ingest.deduplication import Deduplicator
+from ..scoring import RiskScorer
 
 
 def get_app_settings(request: Request) -> Settings:
@@ -50,22 +52,40 @@ def get_session_factory(request: Request) -> sessionmaker:
     return factory
 
 
+def get_scorer(request: Request) -> RiskScorer:
+    """Return the deterministic risk scorer bound to the running application."""
+    scorer: RiskScorer = request.app.state.scorer
+    return scorer
+
+
+def get_decider(request: Request) -> DecisionEngine:
+    """Return the decision engine bound to the running application."""
+    decider: DecisionEngine = request.app.state.decider
+    return decider
+
+
 SettingsDependency = Annotated[Settings, Depends(get_app_settings)]
 DeduplicatorDependency = Annotated[Deduplicator, Depends(get_deduplicator)]
 EnrichmentChainDependency = Annotated[EnrichmentChain, Depends(get_enrichment_chain)]
 DbEngineDependency = Annotated[Engine, Depends(get_db_engine)]
 SessionFactoryDependency = Annotated[sessionmaker, Depends(get_session_factory)]
+ScorerDependency = Annotated[RiskScorer, Depends(get_scorer)]
+DeciderDependency = Annotated[DecisionEngine, Depends(get_decider)]
 
 
 __all__ = [
     "DbEngineDependency",
+    "DeciderDependency",
     "DeduplicatorDependency",
     "EnrichmentChainDependency",
+    "ScorerDependency",
     "SessionFactoryDependency",
     "SettingsDependency",
     "get_app_settings",
     "get_db_engine",
+    "get_decider",
     "get_deduplicator",
     "get_enrichment_chain",
+    "get_scorer",
     "get_session_factory",
 ]

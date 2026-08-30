@@ -71,6 +71,19 @@ class AlertRepository:
             return None
         return CanonicalAlert.model_validate(row.normalized_payload)
 
+    def update_normalized_payload(self, alert_id: uuid.UUID, canonical: CanonicalAlert) -> None:
+        """Overwrite the alert of record's canonical payload (Phase 1F).
+
+        Used to persist the risk assessment and decision back onto the alert
+        row after scoring, so the alert of record carries its score/decision
+        (ARCHITECTURE.md §5.2). Raises :class:`LookupError` if the alert row
+        is missing — callers should only update alerts they just created.
+        """
+        row = self._session.get(Alert, alert_id)
+        if row is None:
+            raise LookupError(f"alert {alert_id} not found")
+        row.normalized_payload = canonical.model_dump(mode="json")
+
 
 class DedupeStateRepository:
     """Persistent storage for the deduplication recurrence state.

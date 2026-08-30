@@ -6,6 +6,43 @@ semantic (`v0.1.0` targeted at the end of Phase 1).
 
 ## [Unreleased]
 
+### Added — Phase 1F: Deterministic Risk Scoring & Decision Engine
+
+- **Result models** (`models/assessment.py`): dependency-free `RiskAssessment`
+  (score 0–100, `RiskTier`, per-factor `ScoreFactor`s, generated summary, and
+  a `degraded` flag), `Decision` (`DecisionAction`: `suppress` / `monitor` /
+  `queue_l1` / `open_incident`, optional `DecisionSeverity` SEV1/SEV2,
+  reasons, `decided_at`), plus the `RiskTier` / enums.
+- **Deterministic, explainable scoring engine** (`scoring/engine.py`): the pure
+  `score_alert(CanonicalAlert, ScoringPolicy) → RiskAssessment` computes seven
+  config-driven factors — `rule_severity` (Wazuh level band map),
+  `rule_groups_mitre` (suspicious groups + MITRE technique/tactic presence),
+  `asset_criticality` (tier→band mapping with an *unknown* fallback),
+  `recurrence_velocity` (occurrences-in-window thresholds), `ioc_evidence`
+  (distinct indicator count), `enrichment_status` (corroboration credit) and a
+  subtractive `allowlist_modifier` — clipped to 0–100 and mapped to a tier.
+  Every factor carries a human-readable `detail`; output is byte-identical for
+  identical input. `RiskScorer` adds the rule-severity-only degraded fallback
+  (fail-open, never crashes ingest).
+- **Configuration-driven policy** (`scoring/policy.py` + `app/config/scoring.yaml`,
+  `decisions/policy.py` + `app/config/decisions.yaml`): versioned, non-secret,
+  schema-validated YAML (fail-loud on invalid/missing config); weights and
+  thresholds are tunable without code changes.
+- **Decision & routing engine** (`decisions/router.py`): pure `decide(...)`
+  maps the risk tier onto an action (critical→SEV1 / high→SEV2 incident,
+  medium→L1 queue, low/informational→monitor) and overrides to `suppress`
+  for allowlisted sources regardless of score. No autonomous response action
+  is taken (SECURITY.md §1, ADR-8).
+- **Persistence & audit**: the assessment is written back onto the alert of
+  record (`AlertRepository.update_normalized_payload`) and append-only
+  `alert.scored` / `alert.decided` audit entries record the score/decision
+  (with before/after snapshots for future re-scoring). The canonical model
+  gains `asset`, `enrichment_status`, `risk`, and `decision` fields; asset
+  tier/owner are derived from agent `labels`.
+- **Fully offline**: scoring/decisioning perform zero I/O and no external
+  calls (no VirusTotal/MISP); enrichment unavailability degrades to a valid
+  score (enrichment `failed`/`skipped` contribute 0).
+
 ### Added — Phase 1E: IOC Extraction & Enrichment Interface
 
 - **IOC domain model** (`models/ioc.py`): `IOCType` (`ipv4`, `domain`, `url`,

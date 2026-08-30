@@ -12,6 +12,7 @@ from uuid import UUID, uuid4
 from ..models.canonical import (
     CanonicalAgent,
     CanonicalAlert,
+    CanonicalAsset,
     CanonicalDedupe,
     CanonicalRule,
     CanonicalSourceEvent,
@@ -58,6 +59,17 @@ def normalize_wazuh_alert(
         ip=alert.agent.ip,
     )
 
+    # Build the asset context from the agent's optional inventory labels
+    # (Phase 1F): `asset_tier` and `owner` drive the `asset_criticality`
+    # scoring factor. Missing labels yield an asset with no tier, which the
+    # scoring engine treats as *unknown* — never an ingestion error.
+    labels = alert.agent.labels if isinstance(alert.agent.labels, dict) else {}
+    canonical_asset = CanonicalAsset(
+        name=canonical_agent.name,
+        tier=labels.get("asset_tier") if isinstance(labels.get("asset_tier"), str) else None,
+        owner=labels.get("owner") if isinstance(labels.get("owner"), str) else None,
+    )
+
     # Build source event (trimmed payload). The structured `data` /
     # `syscheck` blocks are preserved verbatim: they carry the typed evidence
     # (srcip, file hashes, FIM paths) that IOC extraction reads in Phase 1E
@@ -78,6 +90,7 @@ def normalize_wazuh_alert(
         received_at=resolved_received_at,
         source_event=source_event,
         dedupe=dedupe,
+        asset=canonical_asset,
     )
 
 
