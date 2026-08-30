@@ -239,10 +239,32 @@ it stores what Wazuh already logged (see SECURITY.md data policy).
 `data.srcip/dstuser/srcuser`, `full_log`. The normalizer is fixture-tested against every
 file in `docs/sample-alerts/` (they double as contract tests).
 
-**Deduplication:** `group_key = rule.id + agent.id`. Within a 15-minute window, repeat
-alerts bump `occurrences`/`last_seen` instead of creating new rows; recurrence feeds the
-scoring factor. If `occurrences` crosses escalation thresholds (e.g., 10), the dedupe
-group is re-scored even if no new alert arrives.
+**Deduplication & idempotency (Phase 1C):** deduplication is pure domain logic
+(`soc_triage.ingest.deduplication`) — it never imports FastAPI and is fully
+deterministic/unit-testable.
+
+- *Event identity* — deterministic: `wazuh:{event_id}:{rule_id}:{agent_id}` when Wazuh
+  supplies an event id (the idempotency key is bound to rule/agent context so a re-use of
+  an id can never silently collapse divergent content); otherwise a versioned SHA-256
+  content hash (`wazuh-h1:{digest}`) over the full validated payload minus volatile
+  fields (`rule.firedtimes`, a per-delivery counter).
+- *Group key* — `wazuh:{rule_id}:{agent_id}` (percent-encoded components, collision-free).
+- *Configurable window* — `TRIAGE_DEDUPE_WINDOW_SECONDS` (default 900 s). An arrival is
+  within the window when `received_at − group.last_seen ≤ window`.
+- *Three distinguishable outcomes:* **exact duplicate** (same event identity re-delivered
+  within the window → idempotent: the original canonical alert and its `alert_id` are
+  returned unchanged, `200 duplicate:true`, recurrence state untouched); **repeated**
+  (distinct event within the window → `occurrences`/`last_seen` bump — the recurrence
+  signal scoring later consumes); **new generation** (group's first event or a distinct
+  event after the window → `occurrences` resets to 1, `generation` increments).
+- *Evidence is never silently discarded:* duplicate deliveries are counted
+  (`duplicate_deliveries`, per-event `delivery_count`), logged, and answered with the
+  preserved original alert; a re-delivery with divergent content under a known identity
+  increments `content_variants` and logs a warning. Beyond the window an old event is
+  treated as fresh evidence (a new occurrence), never swallowed.
+- State is in-memory for Phase 1C behind a `Deduplicator` protocol; a persistence-backed
+  implementation must reproduce this contract (thread-safe, exactly-once per identity
+  within the window, monotonic occurrence counters).
 
 **Dead letters:** payloads that fail validation 3× land in `dead_letters` with the parse
 error — nothing is silently dropped.
