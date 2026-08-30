@@ -9,6 +9,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
+from ..enrichment.normalize import strip_url_userinfo
 from ..models.canonical import (
     CanonicalAgent,
     CanonicalAlert,
@@ -18,6 +19,25 @@ from ..models.canonical import (
     CanonicalSourceEvent,
 )
 from .schemas import WazuhAlert
+
+
+def _sanitize_data_block(data: dict) -> dict:
+    """Strip URL userinfo from the *typed* URL fields of a Wazuh ``data`` block.
+
+    SECURITY.md §2: credentials must never become part of a stored indicator or
+    persisted payload. The typed URL fields (``data.url`` and
+    ``data.virustotal.permalink``) are the only structured fields that carry a
+    URL; free-text fields and ``full_log`` remain verbatim (SECURITY.md §5).
+    """
+    url = data.get("url")
+    if isinstance(url, str):
+        data["url"] = strip_url_userinfo(url)
+    virustotal = data.get("virustotal")
+    if isinstance(virustotal, dict):
+        permalink = virustotal.get("permalink")
+        if isinstance(permalink, str):
+            virustotal["permalink"] = strip_url_userinfo(permalink)
+    return data
 
 
 def normalize_wazuh_alert(
@@ -73,14 +93,16 @@ def normalize_wazuh_alert(
     # Build source event (trimmed payload). The structured `data` /
     # `syscheck` blocks are preserved verbatim: they carry the typed evidence
     # (srcip, file hashes, FIM paths) that IOC extraction reads in Phase 1E
-    # (ARCHITECTURE.md §6, §7.1). `full_log` is kept but is *not* an
-    # extraction source by default (SECURITY.md §5, §7).
+    # (ARCHITECTURE.md §6, §7.1). Typed URL fields are userinfo-stripped so a
+    # credential-bearing URL is never persisted (SECURITY.md §2); `full_log`
+    # is kept raw but is *not* an extraction source by default (SECURITY.md §5, §7).
+    raw_data = alert.data.model_dump(mode="json") if alert.data is not None else {}
     source_event = CanonicalSourceEvent(
         rule=canonical_rule,
         agent=canonical_agent,
         location=alert.location,
         full_log=alert.full_log,
-        data=alert.data.model_dump(mode="json") if alert.data is not None else {},
+        data=_sanitize_data_block(raw_data),
         syscheck=dict(alert.syscheck) if alert.syscheck is not None else {},
     )
 

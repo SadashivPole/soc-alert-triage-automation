@@ -39,6 +39,7 @@ from ..models.ioc import (
 )
 from .chain import EnrichmentChain, EnrichmentOutcome, ProviderOutcome
 from .extractor import extract_iocs, extract_iocs_from_text
+from .misp import MISPProvider
 from .policy import (
     DEFAULT_IOC_POLICY,
     DOCUMENTATION_IPV4_NETWORKS,
@@ -51,6 +52,13 @@ from .providers import (
     NoOpEnrichmentProvider,
     ProviderEnrichment,
 )
+from .threat_intel import (
+    LookupRecord,
+    LookupStatus,
+    RetryConfig,
+    TokenBucket,
+)
+from .virustotal import VirusTotalProvider
 
 __all__ = [
     "DEFAULT_IOC_POLICY",
@@ -67,9 +75,15 @@ __all__ = [
     "IOCExtractionPolicy",
     "IOCProvenance",
     "IOCType",
+    "LookupRecord",
+    "LookupStatus",
+    "MISPProvider",
     "NoOpEnrichmentProvider",
     "ProviderEnrichment",
     "ProviderOutcome",
+    "RetryConfig",
+    "TokenBucket",
+    "VirusTotalProvider",
     "extract_iocs",
     "extract_iocs_from_text",
     "ioc_key",

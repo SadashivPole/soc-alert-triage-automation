@@ -54,6 +54,21 @@ class Settings(BaseSettings):
         alias="N8N_CALLBACK_TOKEN",
     )
 
+    # Threat-intelligence enrichment (Phase 2A). Both providers are optional
+    # and **disabled by default**: an empty key (and, for MISP, an empty URL)
+    # means the provider is never called (disable-by-empty, ARCHITECTURE.md §14).
+    # Keys come only from the environment / secret store — never hardcoded.
+    virustotal_api_key: SecretStr = Field(
+        default_factory=lambda: SecretStr(""),
+        alias="VIRUSTOTAL_API_KEY",
+    )
+    misp_url: str = Field(default="", alias="MISP_URL")
+    misp_api_key: SecretStr = Field(
+        default_factory=lambda: SecretStr(""),
+        alias="MISP_API_KEY",
+    )
+    misp_verify_tls: bool = Field(default=True, alias="MISP_VERIFY_TLS")
+
     @property
     def cors_origins(self) -> list[str]:
         """Parse the comma-separated CORS origins into a clean list."""
@@ -79,9 +94,13 @@ class Settings(BaseSettings):
         secret_fields = {
             "triage_ingest_api_key": self.triage_ingest_api_key.get_secret_value(),
             "n8n_callback_token": self.n8n_callback_token.get_secret_value(),
+            "virustotal_api_key": self.virustotal_api_key.get_secret_value(),
+            "misp_api_key": self.misp_api_key.get_secret_value(),
         }
         for name, raw in secret_fields.items():
-            if raw.lower().startswith(_PLACEHOLDER_PREFIX):
+            # Empty values are the documented "disabled" default and are valid
+            # in every environment; only non-empty placeholder values are rejected.
+            if raw and raw.lower().startswith(_PLACEHOLDER_PREFIX):
                 raise ValueError(
                     f"{name} must not use the {_PLACEHOLDER_PREFIX}* placeholder when SOC_ENV={self.soc_env}"
                 )

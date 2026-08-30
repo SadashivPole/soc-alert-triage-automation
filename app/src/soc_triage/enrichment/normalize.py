@@ -98,6 +98,40 @@ def normalize_ipv4(raw: str, *, policy: IOCExtractionPolicy = DEFAULT_IOC_POLICY
     return str(address)
 
 
+#: Authority decomposition of a URL: scheme, authority (userinfo@host:port) and
+#: the rest of the URL. The authority is delimited by the first ``/``, ``?`` or
+#: ``#`` (or end of string).
+_URL_AUTHORITY_RE = re.compile(
+    r"^(?P<prefix>[a-zA-Z][a-zA-Z0-9+.-]*://)(?P<authority>[^/?#]*)(?P<suffix>.*)$"
+)
+
+
+def strip_url_userinfo(raw: str) -> str:
+    """Remove URL userinfo (``user:pass@``) from ``raw``, keeping the rest verbatim.
+
+    A credential-bearing URL must never be persisted in a *structured* (typed)
+    field, even though the free-text ``full_log`` is preserved raw (SECURITY.md
+    §5: the platform keeps what Wazuh already logged). This returns ``raw``
+    unchanged when there is no scheme+authority or no userinfo, so benign URLs
+    are never rewritten. When userinfo *is* present it is dropped — everything
+    from the last ``@`` in the authority back to ``://`` (per RFC 3986 an ``@``
+    inside a password must be percent-encoded, so the last raw ``@`` separates
+    userinfo from host:port).
+
+    Defanged schemes (``hxxp://``, ``[:]``) are normalized first so a defanged
+    credential URL is stripped too.
+    """
+    text = defang_to_plain(raw.strip()).strip("<>\"'`").strip()
+    match = _URL_AUTHORITY_RE.match(text)
+    if match is None:
+        return raw
+    authority = match.group("authority")
+    if "@" not in authority:
+        return raw
+    _, _, hostport = authority.rpartition("@")
+    return f"{match.group('prefix')}{hostport}{match.group('suffix')}"
+
+
 def normalize_domain(raw: str) -> str | None:
     """Return the normalized domain in ``raw``, or ``None`` if invalid."""
     text = defang_to_plain(raw.strip()).strip("<>\"'`").strip().rstrip(".")
@@ -197,4 +231,5 @@ __all__ = [
     "normalize_hash",
     "normalize_ipv4",
     "normalize_url",
+    "strip_url_userinfo",
 ]

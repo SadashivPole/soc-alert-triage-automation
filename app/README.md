@@ -102,9 +102,38 @@ class MyProvider:
         return ProviderEnrichment(provider=self.name, status=..., results={...})
 ```
 
-VirusTotal and MISP are **not** contacted in Phase 1E; the only registered
-provider is the offline `NoOpEnrichmentProvider`, so every ingest reports
-`enrichment_status: skipped`.
+Phase 2A adds two real, optional threat-intel providers behind the same
+contract — `VirusTotalProvider` and `MISPProvider` (both **disabled by
+default**; an empty `VIRUSTOTAL_API_KEY` / `MISP_URL`+`MISP_API_KEY` means the
+chain skips them). With no key configured the chain registers only the offline
+`NoOpEnrichmentProvider` (disabled), so every ingest reports
+`enrichment_status: skipped` and performs zero external calls. Configured
+providers attach sanitized per-indicator provenance
+(`provider`, `indicator_type`, `lookup_status`, `timestamp`, `result`) and
+never leak API keys or block the pipeline on failure.
+
+> **VirusTotal licensing.** The free VirusTotal **Public API** is licensed for
+> lab / non-commercial use only — see the VirusTotal support site's Public API
+> terms. Do not point it at production or commercial workloads; use a
+> licensed/premium key for those. This is documented in `.env.example` as well.
+
+### Credential-bearing URL sanitization (Phase 2A hardening)
+
+A URL such as `https://analyst:SuperSecret123@example.com/login` carries
+credentials in its userinfo. Extraction **never persists them**:
+
+- the canonical `value` is normalized (`normalize_url` drops userinfo);
+- `IOCProvenance.raw_value` stores the *sanitized* URL (not the raw match) for
+  both typed URL fields (`data.url`, `data.virustotal.permalink`) and
+  text-scanned URLs;
+- the URL's userinfo is never re-extracted as an email or domain indicator
+  (`pass@host` inside `user:pass@host` is not an email);
+- the typed URL fields in the persisted canonical payload are userinfo-stripped
+  (`strip_url_userinfo`), so the credential never reaches `normalized_payload`,
+  the API response, audit records, or logs.
+
+Free-text fields and `full_log` remain raw by design (SECURITY.md §5 — the
+platform keeps what Wazuh already logged).
 
 ## Run & test (Phase 1A)
 
