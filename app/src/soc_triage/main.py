@@ -21,7 +21,9 @@ from .db.engine import (
 )
 from .decisions import DecisionEngine, default_decision_policy
 from .enrichment import EnrichmentChain
-from .enrichment.providers import NoOpEnrichmentProvider
+from .enrichment.misp import MISPProvider
+from .enrichment.providers import EnrichmentProvider, NoOpEnrichmentProvider
+from .enrichment.virustotal import VirusTotalProvider
 from .scoring import RiskScorer, default_scoring_policy
 
 logger = get_logger("soc_triage.main")
@@ -83,12 +85,24 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             dedupe_window_seconds=app_settings.triage_dedupe_window_seconds,
         )
 
-        # --- IOC extraction & enrichment (Phase 1E) ---
-        # Extraction is pure (no I/O); the only registered provider is the
-        # offline no-op (disabled), so ingestion performs zero external calls
-        # and reports `enrichment_status: skipped` (ARCHITECTURE.md §7.3).
-        # VirusTotal/MISP providers plug in here in Phase 2.
-        enrichment_chain = EnrichmentChain([NoOpEnrichmentProvider()])
+        # --- IOC extraction & enrichment (Phase 1E / 2A) ---
+        # Extraction is pure (no I/O). Enrichment providers are registered in
+        # a fixed order: the offline no-op (disabled), then VirusTotal and MISP
+        # — both optional and **disabled by default** (empty key/URL ⇒ never
+        # called). With no key configured, ingestion performs zero external
+        # calls and reports `enrichment_status: skipped` (ARCHITECTURE.md §7.3).
+        enrichment_providers: list[EnrichmentProvider] = [
+            NoOpEnrichmentProvider(),
+            VirusTotalProvider(
+                api_key=app_settings.virustotal_api_key.get_secret_value() or None,
+            ),
+            MISPProvider(
+                url=app_settings.misp_url,
+                api_key=app_settings.misp_api_key.get_secret_value() or None,
+                verify_tls=app_settings.misp_verify_tls,
+            ),
+        ]
+        enrichment_chain = EnrichmentChain(enrichment_providers)
         _app.state.enrichment_chain = enrichment_chain
         logger.info(
             "enrichment_ready",

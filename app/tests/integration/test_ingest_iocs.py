@@ -207,16 +207,17 @@ def test_indicators_keep_private_agent_addresses_out(client: TestClient) -> None
 # ---------------------------------------------------------------------------
 
 
-def test_application_registers_a_disabled_offline_provider(client: TestClient) -> None:
-    """Phase 1E ships the no-op provider only — disabled by default."""
+def test_application_registers_all_providers_disabled_by_default(client: TestClient) -> None:
+    """The no-op, VirusTotal and MISP providers are all registered — and all
+    disabled by default (empty keys) so ingestion performs zero external calls."""
     chain = client.app.state.enrichment_chain
 
-    assert [provider.name for provider in chain.providers] == ["noop"]
-    assert [provider.enabled for provider in chain.providers] == [False]
+    assert [provider.name for provider in chain.providers] == ["noop", "virustotal", "misp"]
+    assert [provider.enabled for provider in chain.providers] == [False, False, False]
 
 
 def test_no_external_enrichment_provider_is_enabled(client: TestClient) -> None:
-    """No VirusTotal/MISP provider exists yet (Phase 2 work)."""
+    """Without keys configured, no VirusTotal/MISP provider is active."""
     chain = client.app.state.enrichment_chain
 
     assert {provider.name for provider in chain.providers if provider.enabled} == set()

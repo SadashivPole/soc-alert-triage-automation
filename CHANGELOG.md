@@ -6,6 +6,34 @@ semantic (`v0.1.0` targeted at the end of Phase 1).
 
 ## [Unreleased]
 
+### Added — Phase 2A: Threat Intelligence Provider Integration
+
+- **Shared provider machinery** (`enrichment/threat_intel.py`): a
+  `LookupStatus` vocabulary (`found` / `not_found` / `error` / `rate_limited` /
+  `timeout`) and a sanitized `LookupRecord` provenance model (provider,
+  indicator type, lookup status, ISO-8601 timestamp, allow-listed result
+  metadata); a **non-blocking** `TokenBucket` (an exhausted quota marks
+  lookups `rate_limited` instead of stalling the alert pipeline); a
+  `RetryConfig` with capped exponential backoff + jitter applied **only** to
+  safe, idempotent GETs and only to transient failures (network errors,
+  timeouts, HTTP 429 — honouring `Retry-After` — and 500/502/503/504).
+- **VirusTotal provider** (`enrichment/virustotal.py`): v3 lookups for
+  hashes (`/files`), IPv4 (`/ip_addresses`), domains (`/domains`) and URLs
+  (`/urls`, base64url id). Rate-limited to the free public tier (4 req/min,
+  burst of 4). Stores only `malicious` / `suspicious` / `harmless` /
+  `undetected` / `reputation` — never the raw upstream body.
+- **MISP provider** (`enrichment/misp.py`): self-hosted
+  `/attributes/restSearch` lookups by exact value for every IOC type. Stores
+  only the match count, capped sorted event ids and capped sorted tag names.
+- **Configuration** (`core/config.py` + `.env.example`): `VIRUSTOTAL_API_KEY`,
+  `MISP_URL`, `MISP_API_KEY`, `MISP_VERIFY_TLS`. Both providers are **disabled
+  by default** (disable-by-empty, ARCHITECTURE §14); keys come only from the
+  environment/secret store and are held as `SecretStr`.
+- **Wiring** (`main.py`): the chain now registers `noop` → `virustotal` →
+  `misp` (all disabled by default). A provider failure never blocks scoring or
+  decisioning — the deterministic score/decision behaviour is unchanged
+  (`enrichment_status: failed` contributes 0, as before).
+
 ### Added — Phase 1F: Deterministic Risk Scoring & Decision Engine
 
 - **Result models** (`models/assessment.py`): dependency-free `RiskAssessment`

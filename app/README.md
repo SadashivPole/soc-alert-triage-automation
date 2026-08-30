@@ -102,9 +102,15 @@ class MyProvider:
         return ProviderEnrichment(provider=self.name, status=..., results={...})
 ```
 
-VirusTotal and MISP are **not** contacted in Phase 1E; the only registered
-provider is the offline `NoOpEnrichmentProvider`, so every ingest reports
-`enrichment_status: skipped`.
+Phase 2A adds two real, optional threat-intel providers behind the same
+contract — `VirusTotalProvider` and `MISPProvider` (both **disabled by
+default**; an empty `VIRUSTOTAL_API_KEY` / `MISP_URL`+`MISP_API_KEY` means the
+chain skips them). With no key configured the chain registers only the offline
+`NoOpEnrichmentProvider` (disabled), so every ingest reports
+`enrichment_status: skipped` and performs zero external calls. Configured
+providers attach sanitized per-indicator provenance
+(`provider`, `indicator_type`, `lookup_status`, `timestamp`, `result`) and
+never leak API keys or block the pipeline on failure.
 
 ## Run & test (Phase 1A)
 
