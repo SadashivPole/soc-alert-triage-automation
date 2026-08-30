@@ -29,6 +29,9 @@ False-positive controls beyond validation:
   like ``/etc/passwd`` are not hosts — unless it is the authority of a URL
   (``//host/…``), so URL hosts are still captured;
 * non-routable IPv4 is dropped by policy (see :mod:`.policy`);
+* a URL's **userinfo** is never evidence: the sanitized URL is stored as both
+  the indicator value and the provenance ``raw_value``, and ``user:pass@host``
+  is never re-extracted as an email or domain (SECURITY.md §2);
 * overlapping matches of *different* types are intentionally kept (a URL and
   its host domain are both useful enrichment keys), while identical
   ``(type, value)`` pairs collapse into one indicator with merged provenance.
@@ -171,6 +174,44 @@ def _clean_match(raw: str) -> tuple[str, str]:
     return raw, trimmed
 
 
+def _url_authority_spans(text: str) -> tuple[list[tuple[int, int]], list[tuple[int, int]]]:
+    """Return ``(authority_spans, userinfo_spans)`` for the URLs in ``text``.
+
+    Userinfo (``user:pass@``) is **not evidence**: an ``user@host`` / ``pass@host``
+    substring inside a URL's authority must never be re-extracted as an email or
+    domain — that would leak credentials into the IOC set (SECURITY.md §2).
+
+    * ``authority_spans`` cover each URL's whole netloc (``userinfo@host:port``)
+      and are used to suppress *email* matches that overlap it (the email local
+      part may legally start with ``/``, so a ``//user@host`` match must be
+      dropped, not just ``user@host``);
+    * ``userinfo_spans`` cover only the userinfo portion (before the ``@``) and
+      are used to suppress *domain* matches that are really the username/
+      password, while still allowing the *host* (after the ``@``) as a domain.
+    """
+    authority_spans: list[tuple[int, int]] = []
+    userinfo_spans: list[tuple[int, int]] = []
+    for match in _URL_RE.finditer(text):
+        raw = match.group(0)
+        scheme_idx = raw.find("://")
+        if scheme_idx == -1:
+            continue
+        rest_start = scheme_idx + 3
+        rest = raw[rest_start:]
+        end = len(rest)
+        for sep in ("/", "?", "#"):
+            idx = rest.find(sep)
+            if idx != -1:
+                end = min(end, idx)
+        authority_start = match.start() + rest_start
+        authority_end = authority_start + end
+        authority_spans.append((authority_start, authority_end))
+        at = rest[:end].rfind("@")
+        if at != -1:
+            userinfo_spans.append((authority_start, authority_start + at))
+    return authority_spans, userinfo_spans
+
+
 def _domain_boundary_ok(text: str, start: int, end: int) -> bool:
     """Reject path-like domain matches (``/etc/passwd``), allow URL hosts.
 
@@ -210,19 +251,33 @@ def _scan_text(
             )
         )
 
+    authority_spans, userinfo_spans = _url_authority_spans(text)
+
+    def within(spans: list[tuple[int, int]], offset: int) -> bool:
+        return any(start <= offset < end for start, end in spans)
+
+    def overlaps(spans: list[tuple[int, int]], start: int, end: int) -> bool:
+        return any(s < end and start < e for s, e in spans)
+
     for match in _URL_RE.finditer(text):
         raw, trimmed = _clean_match(match.group(0))
         value = normalize_url(trimmed)
         if value is not None:
-            add(IOCType.URL, raw, value, match.start())
+            # SECURITY: store only the sanitized (userinfo-free) URL as the
+            # provenance raw value — never the original credential-bearing match.
+            add(IOCType.URL, value, value, match.start())
 
     for match in _EMAIL_RE.finditer(text):
+        if overlaps(authority_spans, match.start(), match.end()):
+            continue  # a URL's userinfo is not an email (SECURITY.md §2)
         raw, trimmed = _clean_match(match.group(0))
         value = normalize_email(trimmed)
         if value is not None:
             add(IOCType.EMAIL, raw, value, match.start())
 
     for match in _DOMAIN_RE.finditer(text):
+        if within(userinfo_spans, match.start()):
+            continue  # a URL's userinfo is not a domain (SECURITY.md §2)
         if not _domain_boundary_ok(text, match.start(), match.end()):
             continue
         raw, trimmed = _clean_match(match.group(0))
@@ -344,6 +399,9 @@ def extract_iocs(
         normalized = _scan_typed_field(kind, value, policy)
         if normalized is None:
             continue
+        # SECURITY: for URLs the provenance raw value is the *sanitized* URL
+        # (userinfo removed), never the original credential-bearing field value.
+        raw_value = normalized if kind is IOCType.URL else value
         candidates.append(
             _Candidate(
                 type=kind,
@@ -351,7 +409,7 @@ def extract_iocs(
                 provenance=IOCProvenance(
                     field=path,
                     extractor=EXTRACTOR_TYPED_FIELD,
-                    raw_value=value,
+                    raw_value=raw_value,
                     location=location,
                 ),
             )

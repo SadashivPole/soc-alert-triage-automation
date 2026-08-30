@@ -34,6 +34,23 @@ semantic (`v0.1.0` targeted at the end of Phase 1).
   decisioning — the deterministic score/decision behaviour is unchanged
   (`enrichment_status: failed` contributes 0, as before).
 
+### Fixed — Phase 2A hardening: IOC provenance credential leak
+
+- Credential-bearing URLs (`https://user:pass@host/…`) are now stripped of
+  their userinfo **everywhere** they would otherwise be persisted
+  (SECURITY.md §2):
+  - `IOCProvenance.raw_value` stores the sanitized URL (not the raw match) for
+    both typed URL fields (`data.url`, `data.virustotal.permalink`) and
+    text-scanned URLs;
+  - a URL's userinfo is never re-extracted as an email or domain indicator
+    (`pass@host` inside `user:pass@host` is not an email);
+  - the typed URL fields in the canonical alert's `data` block are
+    userinfo-stripped (`strip_url_userinfo`) so the credential never reaches
+    `normalized_payload`, the API response, audit records, or logs.
+- Documented the VirusTotal Public API as lab/non-commercial use only
+  (`.env.example`, `app/README.md`) and removed the stale MISP API-key
+  placeholder (empty value = disabled).
+
 ### Added — Phase 1F: Deterministic Risk Scoring & Decision Engine
 
 - **Result models** (`models/assessment.py`): dependency-free `RiskAssessment`
