@@ -13,6 +13,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field
 
+from .assessment import Decision, RiskAssessment
 from .ioc import IOC
 
 
@@ -32,6 +33,24 @@ class CanonicalAgent(BaseModel):
     id: str
     name: str
     ip: str | None = None
+
+
+class CanonicalAsset(BaseModel):
+    """Asset context for scoring (ARCHITECTURE.md §5.2, §8.1).
+
+    Populated from the agent's ``labels`` (``asset_tier`` / ``owner``) when the
+    source supplies them; ``tier`` drives the ``asset_criticality`` scoring
+    factor. ``tier`` is ``None`` when the source carries no tier label, which
+    the scoring engine treats as *unknown* (a policy-configured neutral
+    contribution) rather than an error.
+    """
+
+    model_config = {"frozen": True}
+
+    name: str | None = None
+    #: Raw tier label as supplied by the source (e.g. ``tier-1``, ``critical``).
+    tier: str | None = None
+    owner: str | None = None
 
 
 class CanonicalSourceEvent(BaseModel):
@@ -83,7 +102,8 @@ class CanonicalAlert(BaseModel):
     Phase 1B implemented: alert_id, source, received_at, source_event.
     Phase 1C populates: dedupe (identity, recurrence, idempotency info).
     Phase 1E populates: iocs (indicators + provenance, enrichment payloads).
-    Future phases will add: asset, risk, decision, etc.
+    Phase 1F populates: asset (tier/owner for scoring), enrichment_status,
+    risk (the deterministic score) and decision (the routing outcome).
     """
 
     alert_id: UUID
@@ -94,6 +114,15 @@ class CanonicalAlert(BaseModel):
     #: Indicators extracted from this alert (ARCHITECTURE.md §5.2, §7.1).
     #: Normalized, provenance-carrying, and deduplicated by (type, value).
     iocs: list[IOC] = Field(default_factory=list)
+    #: Asset context (name/tier/owner) derived from agent labels, when present.
+    asset: CanonicalAsset | None = None
+    #: Enrichment run outcome (``complete`` | ``partial`` | ``failed`` |
+    #: ``skipped``) — consumed by the scoring ``enrichment_status`` factor.
+    enrichment_status: str | None = None
+    #: Deterministic risk assessment (Phase 1F scoring engine output).
+    risk: RiskAssessment | None = None
+    #: Routing decision derived from the risk tier and alert context.
+    decision: Decision | None = None
 
     model_config = {"frozen": True}
 
@@ -101,6 +130,7 @@ class CanonicalAlert(BaseModel):
 __all__ = [
     "CanonicalAgent",
     "CanonicalAlert",
+    "CanonicalAsset",
     "CanonicalDedupe",
     "CanonicalRule",
     "CanonicalSourceEvent",

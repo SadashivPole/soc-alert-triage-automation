@@ -20,11 +20,14 @@ from uuid import UUID
 from pydantic import BaseModel, Field
 
 from .ingest.deduplication import DedupeStatus, DeliveryDecision
+from .models.assessment import Decision, RiskAssessment
 
 # --- Audit vocabulary ------------------------------------------------------
 
 #: Components acting on behalf of the pipeline (the "who").
 ACTOR_INGEST = "ingest"
+ACTOR_SCORING = "scoring"
+ACTOR_DECISION = "decisions"
 
 ENTITY_ALERT = "alert"
 ENTITY_DEDUPE_GROUP = "dedupe_group"
@@ -34,6 +37,8 @@ ACTION_ALERT_CREATED = "alert.created"
 ACTION_DUPLICATE_ABSORBED = "alert.duplicate_absorbed"
 ACTION_GENERATION_STARTED = "dedupe.generation_started"
 ACTION_CONTENT_DIVERGENCE = "alert.content_divergence"
+ACTION_ALERT_SCORED = "alert.scored"
+ACTION_ALERT_DECIDED = "alert.decided"
 
 
 class AuditEntry(BaseModel):
@@ -151,14 +156,84 @@ def audit_entries_for_decision(decision: DeliveryDecision) -> list[AuditEntry]:
     return entries
 
 
+def _risk_snapshot(risk: RiskAssessment | None) -> dict[str, Any] | None:
+    """A small structured snapshot of a risk assessment (no raw data).
+
+    Keeps audit rows compact and secret-free (SECURITY.md §5, §7): the score,
+    tier, engine version, and per-factor points only — not the full detail
+    strings or alert payload.
+    """
+    if risk is None:
+        return None
+    return {
+        "score": risk.score,
+        "tier": risk.tier.value,
+        "engine_version": risk.engine_version,
+        "degraded": risk.degraded,
+        "factors": {factor.name: factor.points for factor in risk.factors},
+    }
+
+
+def _decision_snapshot(decision: Decision | None) -> dict[str, Any] | None:
+    """A small structured snapshot of a decision (no raw data)."""
+    if decision is None:
+        return None
+    return {
+        "action": decision.action.value,
+        "severity": decision.severity.value if decision.severity is not None else None,
+        "reasons": list(decision.reasons),
+    }
+
+
+def audit_entries_for_assessment(
+    alert_id: UUID,
+    *,
+    risk: RiskAssessment,
+    decision: Decision,
+    previous_risk: RiskAssessment | None = None,
+    previous_decision: Decision | None = None,
+) -> list[AuditEntry]:
+    """Map one score+decision assessment onto its append-only audit entries.
+
+    Emits ``alert.scored`` and ``alert.decided`` records. ``previous_*``
+    populate the ``before`` snapshot when this is a re-assessment (e.g. a
+    recurrence-escalation re-score, ARCHITECTURE.md §9); on the first
+    assessment ``before`` is ``None``. This is the system of record for "why
+    did the SOC bot score X and route to Y".
+    """
+    return [
+        AuditEntry(
+            actor=ACTOR_SCORING,
+            action=ACTION_ALERT_SCORED,
+            entity_type=ENTITY_ALERT,
+            entity_id=str(alert_id),
+            before=_risk_snapshot(previous_risk),
+            after=_risk_snapshot(risk),
+        ),
+        AuditEntry(
+            actor=ACTOR_DECISION,
+            action=ACTION_ALERT_DECIDED,
+            entity_type=ENTITY_ALERT,
+            entity_id=str(alert_id),
+            before=_decision_snapshot(previous_decision),
+            after=_decision_snapshot(decision),
+        ),
+    ]
+
+
 __all__ = [
     "ACTION_ALERT_CREATED",
+    "ACTION_ALERT_DECIDED",
+    "ACTION_ALERT_SCORED",
     "ACTION_CONTENT_DIVERGENCE",
     "ACTION_DUPLICATE_ABSORBED",
     "ACTION_GENERATION_STARTED",
+    "ACTOR_DECISION",
     "ACTOR_INGEST",
+    "ACTOR_SCORING",
     "ENTITY_ALERT",
     "ENTITY_DEDUPE_GROUP",
     "AuditEntry",
+    "audit_entries_for_assessment",
     "audit_entries_for_decision",
 ]

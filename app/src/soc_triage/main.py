@@ -19,8 +19,10 @@ from .db.engine import (
     create_session_factory,
     run_migrations,
 )
+from .decisions import DecisionEngine, default_decision_policy
 from .enrichment import EnrichmentChain
 from .enrichment.providers import NoOpEnrichmentProvider
+from .scoring import RiskScorer, default_scoring_policy
 
 logger = get_logger("soc_triage.main")
 
@@ -97,6 +99,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             ],
         )
 
+        # --- Deterministic scoring & decisioning (Phase 1F) ---
+        # Policies are versioned, non-secret YAML under app/config/ and are
+        # schema-validated at load (fail loud). Both engines are pure —
+        # zero I/O, zero external calls (ARCHITECTURE.md §8, §9, §12).
+        scoring_policy = default_scoring_policy()
+        decision_policy = default_decision_policy()
+        _app.state.scorer = RiskScorer(scoring_policy)
+        _app.state.decider = DecisionEngine(decision_policy)
+        logger.info(
+            "scoring_ready",
+            component="main",
+            engine_version=scoring_policy.engine_version,
+            decision_policy=decision_policy.policy_version,
+        )
+
         try:
             yield
         finally:
@@ -107,8 +124,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         title="SOC Alert Triage API",
         version=__version__,
         description=(
-            "Defensive SOC alert triage pipeline (Phase 1E: ingest, dedupe, persistent "
-            "storage, audit, IOC extraction & enrichment interface)."
+            "Defensive SOC alert triage pipeline (Phase 1F: ingest, dedupe, persistent "
+            "storage, audit, IOC extraction & enrichment interface, deterministic "
+            "risk scoring & decision engine)."
         ),
         lifespan=lifespan,
     )

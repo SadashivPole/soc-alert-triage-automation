@@ -1,0 +1,15 @@
+# Decision & routing policy (ARCHITECTURE.md §9, §14).
+# Non-secret, versioned, schema-validated on load. Every risk tier must have
+# an entry; `open_incident` requires a severity.
+
+policy_version: decisions.v1
+
+tier_actions:
+  informational: { action: monitor }
+  low: { action: monitor }
+  medium: { action: queue_l1 }
+  high: { action: open_incident, severity: SEV2 }
+  critical: { action: open_incident, severity: SEV1 }
+
+# Applied when a source is allowlisted, regardless of score (§9).
+allowlisted_action: suppress

@@ -29,20 +29,34 @@ from __future__ import annotations
 import json
 from datetime import UTC, datetime
 from typing import Any
+from uuid import UUID
 
 from fastapi import APIRouter, Request, status
 from fastapi.responses import JSONResponse
 from pydantic import ValidationError
+from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.orm import sessionmaker
 
+from ..audit import audit_entries_for_assessment
 from ..core.errors import error_response
 from ..core.logging import get_logger
 from ..db.errors import StorageError
+from ..db.session import session_scope
 from ..enrichment import EnrichmentContext, extract_iocs
 from ..ingest.auth import RequireApiKey
 from ..ingest.deduplication import DedupeStatus, InvalidDedupeInputError
 from ..ingest.normalizer import normalize_wazuh_alert
 from ..ingest.schemas import WazuhAlert
-from .dependencies import DeduplicatorDependency, EnrichmentChainDependency
+from ..models.assessment import Decision, RiskAssessment
+from ..models.canonical import CanonicalAlert
+from ..models.repositories import AlertRepository, AuditRepository
+from .dependencies import (
+    DeciderDependency,
+    DeduplicatorDependency,
+    EnrichmentChainDependency,
+    ScorerDependency,
+    SessionFactoryDependency,
+)
 
 logger = get_logger("soc_triage.ingest")
 
@@ -72,12 +86,16 @@ async def ingest_alert(
     request: Request,
     deduplicator: DeduplicatorDependency,
     enrichment_chain: EnrichmentChainDependency,
+    scorer: ScorerDependency,
+    decider: DeciderDependency,
+    session_factory: SessionFactoryDependency,
     _: None = RequireApiKey,
 ) -> JSONResponse:
-    """Ingest, validate, extract IOCs, deduplicate, and normalize an alert.
+    """Ingest, validate, extract IOCs, deduplicate, score, and decide an alert.
 
     Returns:
-        202 with the canonical alert (new or recurring within the window).
+        202 with the canonical alert (new or recurring within the window),
+        including its deterministic risk score and routing decision.
         200 with the preserved original alert when the delivery is an exact
         duplicate (idempotent response, ``duplicate: true``).
         401 if the API key is missing or invalid.
@@ -148,7 +166,12 @@ async def ingest_alert(
                 received_at=received_at,
             ),
         )
-        canonical = canonical.model_copy(update={"iocs": list(enrichment.iocs)})
+        canonical = canonical.model_copy(
+            update={
+                "iocs": list(enrichment.iocs),
+                "enrichment_status": enrichment.status.value,
+            }
+        )
         outcome = deduplicator.process(wazuh_alert, canonical, received_at)
     except InvalidDedupeInputError as exc:
         # Invalid identity inputs (e.g. blank rule/agent id): surface as a
@@ -186,6 +209,36 @@ async def ingest_alert(
     # response echoes the original's IOCs, never a second extraction of the
     # same delivery (idempotency, ARCHITECTURE.md §16).
     recorded_iocs = outcome.canonical_alert.iocs
+
+    # --- Score & decide (Phase 1F) ---
+    # Scoring/decisioning are deterministic and offline. For an exact
+    # duplicate the preserved original alert already carries its persisted
+    # assessment (from the first delivery), so we echo it unchanged rather
+    # than re-scoring (idempotency). Otherwise we score, decide, and persist
+    # the assessment back onto the alert of record, then audit both.
+    if is_duplicate:
+        assessed = outcome.canonical_alert
+    else:
+        risk = scorer.score(outcome.canonical_alert)
+        decision = decider.decide(risk, alert=outcome.canonical_alert, decided_at=received_at)
+        assessed = outcome.canonical_alert.model_copy(update={"risk": risk, "decision": decision})
+        _persist_assessment(
+            session_factory,
+            alert_id=outcome.alert_id,
+            canonical=assessed,
+            risk=risk,
+            decision=decision,
+            occurred_at=received_at,
+        )
+        logger.info(
+            "alert_scored",
+            component="scoring",
+            alert_id=str(outcome.alert_id),
+            score=risk.score,
+            tier=risk.tier.value,
+            decision=decision.action.value,
+            degraded=risk.degraded,
+        )
     logger.info(
         "iocs_extracted",
         component="enrichment",
@@ -220,9 +273,45 @@ async def ingest_alert(
             "dedupe": outcome.dedupe.model_dump(mode="json"),
             "iocs": [ioc.model_dump(mode="json") for ioc in recorded_iocs],
             "enrichment_status": enrichment.status.value,
-            "normalized": outcome.canonical_alert.model_dump(mode="json"),
+            "risk": assessed.risk.model_dump(mode="json") if assessed.risk else None,
+            "decision": assessed.decision.model_dump(mode="json") if assessed.decision else None,
+            "normalized": assessed.model_dump(mode="json"),
         },
     )
+
+
+def _persist_assessment(
+    session_factory: sessionmaker,
+    *,
+    alert_id: UUID,
+    canonical: CanonicalAlert,
+    risk: RiskAssessment,
+    decision: Decision,
+    occurred_at: datetime,
+) -> None:
+    """Persist a scored alert's assessment + audit entries (best-effort).
+
+    The alert row already exists (the deduplicator committed it); this writes
+    the risk assessment and decision back onto its canonical payload and
+    appends the ``alert.scored`` / ``alert.decided`` audit entries in one
+    atomic unit of work. A storage failure here is logged and the assessment
+    is still returned in the response — the alert itself is already durable,
+    and re-scoring can recover the assessment (fail-open, ARCHITECTURE §16).
+    """
+    try:
+        with session_scope(session_factory) as session:
+            AlertRepository(session).update_normalized_payload(alert_id, canonical)
+            AuditRepository(session).append(
+                audit_entries_for_assessment(alert_id, risk=risk, decision=decision),
+                occurred_at=occurred_at,
+            )
+    except SQLAlchemyError as exc:
+        logger.error(
+            "assessment_persistence_failed",
+            component="scoring",
+            alert_id=str(alert_id),
+            error_type=type(exc).__name__,
+        )
 
 
 async def _read_body_with_limit(request: Request, max_size: int) -> bytes | None:

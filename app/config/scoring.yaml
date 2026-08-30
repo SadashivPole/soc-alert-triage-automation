@@ -1,0 +1,78 @@
+# Deterministic risk scoring policy (ARCHITECTURE.md §8, §14).
+# Non-secret, versioned, schema-validated on load. Tuning this file is a
+# reviewable diff; changing a weight here changes the scores the golden tests
+# pin, so any edit must be accompanied by an intentional golden update.
+
+engine_version: scoring.v1
+
+# Wazuh rule.level → points (band map). Levels outside all bands score 0.
+rule_severity:
+  max: 40
+  bands:
+    - { min: 0, max: 2, points: 0 }
+    - { min: 3, max: 4, points: 6 }
+    - { min: 5, max: 6, points: 14 }
+    - { min: 7, max: 8, points: 22 }
+    - { min: 9, max: 10, points: 30 }
+    - { min: 11, max: 15, points: 40 }
+
+# Suspicious rule groups + MITRE ATT&CK presence (capped at max).
+rule_groups_mitre:
+  max: 15
+  group_keywords: [authentication_failed, malware, attack]
+  group_points: 4
+  mitre_points: 4
+  multi_tactic_points: 3
+  multi_tactic_threshold: 2
+
+# Asset criticality from the source's tier label (agent.labels.asset_tier).
+# Unknown labels (or no label) resolve to `unknown_points`.
+asset_criticality:
+  max: 25
+  unknown_points: 8
+  bands:
+    critical: 25
+    high: 18
+    medium: 10
+    low: 5
+  tier_aliases:
+    critical: [critical]
+    high: [high, tier-1, tier-0, tier1, tier0]
+    medium: [medium, standard, tier-2, tier2]
+    low: [low, tier-3, tier3]
+
+# Recurrence: occurrences within the generation span (capped at max).
+recurrence_velocity:
+  max: 20
+  rules:
+    - { name: rapid_burst, min_occurrences: 3, max_window_seconds: 900, points: 12 }
+    - { name: rising_burst, min_occurrences: 5, max_window_seconds: 900, points: 6 }
+    - { name: sustained_volume, min_occurrences: 10, max_window_seconds: 86400, points: 8 }
+
+# Distinct extracted indicators as evidence (capped at max).
+ioc_evidence:
+  max: 15
+  per_indicator: 3
+  max_counted: 5
+
+# Corroboration credit for enrichment coverage. `failed`/`skipped` contribute
+# 0 (fail-safe: unavailable enrichment never corrupts the score).
+enrichment_status:
+  max: 5
+  points:
+    complete: 5
+    partial: 2
+    skipped: 0
+    failed: 0
+
+# Subtract points when a source is allowlisted (floor at 0 overall).
+allowlist:
+  subtract: 20
+
+# Score bands → risk tier. Must cover 0–100 contiguously (validated).
+tiers:
+  - { name: informational, min: 0, max: 24 }
+  - { name: low, min: 25, max: 44 }
+  - { name: medium, min: 45, max: 69 }
+  - { name: high, min: 70, max: 84 }
+  - { name: critical, min: 85, max: 100 }

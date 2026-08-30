@@ -112,6 +112,22 @@ def ioc_key(ioc: IOC) -> str:
     return f"{ioc.type.value}:{ioc.value}"
 
 
+def ioc_is_allowlisted(ioc: IOC) -> bool:
+    """Whether an indicator is marked allowlisted by an enrichment provider.
+
+    An allowlist provider (Phase 2) attaches ``{"allowlist": {"matched":
+    true}}`` to the indicator's ``enrichment`` mapping. Scoring (the
+    ``allowlist_modifier`` factor) and the decision engine (the ``suppress``
+    route, ARCHITECTURE.md §9) both consume this signal. Absence of the key —
+    the normal case in Phase 1F, where no provider runs — is **not** an
+    allowlist match.
+    """
+    allowlist = ioc.enrichment.get("allowlist")
+    if not isinstance(allowlist, dict):
+        return False
+    return bool(allowlist.get("matched"))
+
+
 def ioc_sort_key(ioc: IOC) -> tuple[str, str]:
     """Deterministic ordering key: indicator type first, then value.
 
@@ -128,6 +144,7 @@ __all__ = [
     "IOC",
     "IOCProvenance",
     "IOCType",
+    "ioc_is_allowlisted",
     "ioc_key",
     "ioc_sort_key",
 ]
