@@ -22,6 +22,7 @@ from ..core.logging import get_logger
 from ..ingest.auth import RequireApiKey
 from ..ingest.normalizer import normalize_wazuh_alert
 from ..ingest.schemas import WazuhAlert
+from .dependencies import DeduplicatorDependency
 
 logger = get_logger("soc_triage.ingest")
 
@@ -43,6 +44,7 @@ MAX_BODY_SIZE = 256 * 1024
 )
 async def ingest_alert(
     request: Request,
+    deduplicator: DeduplicatorDependency,
     _: None = RequireApiKey,
 ) -> JSONResponse:
     """Ingest and validate a single Wazuh alert.
@@ -101,9 +103,16 @@ async def ingest_alert(
             details=exc.errors(),
         )
 
-    # --- Normalize ---
+    # --- Deduplicate ---
     received_at = datetime.now(UTC)
-    canonical = normalize_wazuh_alert(wazuh_alert, received_at=received_at)
+    dedupe_result = deduplicator.process_alert(wazuh_alert, received_at)
+
+    # --- Normalize ---
+    canonical = normalize_wazuh_alert(
+        wazuh_alert,
+        received_at=received_at,
+        dedupe=dedupe_result.dedupe_info,
+    )
 
     logger.info(
         "alert_ingested",
@@ -112,12 +121,15 @@ async def ingest_alert(
         rule_id=canonical.source_event.rule.id,
         rule_level=canonical.source_event.rule.level,
         agent_name=canonical.source_event.agent.name,
+        dedupe_status=dedupe_result.status.value,
+        occurrences=canonical.dedupe.occurrences if canonical.dedupe else 1,
     )
 
     return JSONResponse(
         status_code=status.HTTP_202_ACCEPTED,
         content={
             "status": "accepted",
+            "dedupe_status": dedupe_result.status.value,
             "alert_id": str(canonical.alert_id),
             "received_at": canonical.received_at.isoformat(),
             "normalized": canonical.model_dump(mode="json"),

@@ -44,6 +44,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         lifespan=lifespan,
     )
     app.state.settings = app_settings
+
+    from .ingest.deduplication import MemoryDeduplicator
+
+    app.state.deduplicator = MemoryDeduplicator(
+        window_seconds=app_settings.triage_dedupe_window_seconds
+    )
+
     register_exception_handlers(app)
     app.include_router(api_router)
     return app

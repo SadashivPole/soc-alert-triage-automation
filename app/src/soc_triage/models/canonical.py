@@ -41,18 +41,29 @@ class CanonicalSourceEvent(BaseModel):
     full_log: str | None = None
 
 
+class CanonicalDedupe(BaseModel):
+    """Deduplication information for the alert."""
+
+    group_key: str
+    occurrences: int
+    first_seen: datetime
+    last_seen: datetime
+
+
 class CanonicalAlert(BaseModel):
     """Canonical alert record after normalization.
 
     This is the internal representation used throughout the triage pipeline.
     Phase 1B implements: alert_id, source, received_at, source_event.
-    Future phases will add: iocs, dedupe, asset, risk, decision, etc.
+    Phase 1C adds: dedupe.
+    Future phases will add: iocs, asset, risk, decision, etc.
     """
 
     alert_id: UUID
     source: str = "wazuh"
     received_at: datetime
     source_event: CanonicalSourceEvent
+    dedupe: CanonicalDedupe | None = None
 
     model_config = {"frozen": True}
 
@@ -60,6 +71,7 @@ class CanonicalAlert(BaseModel):
 __all__ = [
     "CanonicalAgent",
     "CanonicalAlert",
+    "CanonicalDedupe",
     "CanonicalRule",
     "CanonicalSourceEvent",
 ]
