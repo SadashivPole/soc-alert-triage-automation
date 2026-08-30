@@ -253,3 +253,51 @@ def test_error_envelope_structure(client: TestClient) -> None:
     assert "error" in body
     assert "code" in body["error"]
     assert "message" in body["error"]
+
+
+def test_ingest_deduplication_behavior(client: TestClient) -> None:
+    """Ingesting the same alert twice should trigger exact duplication,
+    and a repeated alert should increment occurrences.
+    """
+    import json
+    from pathlib import Path
+
+    from tests.conftest import TEST_INGEST_KEY
+
+    fixture_path = Path(__file__).parents[1] / "fixtures" / "01_wazuh_ssh_brute_force.json"
+    payload1 = json.loads(fixture_path.read_text())
+
+    # 1. First alert (New generation)
+    resp1 = client.post(
+        "/api/v1/alerts/ingest",
+        headers={"X-API-Key": TEST_INGEST_KEY},
+        json=payload1,
+    )
+    assert resp1.status_code == 202
+    body1 = resp1.json()
+    assert body1["dedupe_status"] == "new_generation"
+    assert body1["normalized"]["dedupe"]["occurrences"] == 1
+
+    # 2. Exact duplicate
+    resp2 = client.post(
+        "/api/v1/alerts/ingest",
+        headers={"X-API-Key": TEST_INGEST_KEY},
+        json=payload1,
+    )
+    assert resp2.status_code == 202
+    body2 = resp2.json()
+    assert body2["dedupe_status"] == "exact_duplicate"
+    assert body2["normalized"]["dedupe"]["occurrences"] == 1
+
+    # 3. Repeated alert within window
+    payload3 = dict(payload1)
+    payload3["id"] = "1770000000.100002"  # Different event id
+    resp3 = client.post(
+        "/api/v1/alerts/ingest",
+        headers={"X-API-Key": TEST_INGEST_KEY},
+        json=payload3,
+    )
+    assert resp3.status_code == 202
+    body3 = resp3.json()
+    assert body3["dedupe_status"] == "repeated"
+    assert body3["normalized"]["dedupe"]["occurrences"] == 2

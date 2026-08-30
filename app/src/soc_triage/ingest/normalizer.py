@@ -12,6 +12,7 @@ from uuid import UUID, uuid4
 from ..models.canonical import (
     CanonicalAgent,
     CanonicalAlert,
+    CanonicalDedupe,
     CanonicalRule,
     CanonicalSourceEvent,
 )
@@ -24,6 +25,7 @@ def normalize_wazuh_alert(
     alert_id: UUID | None = None,
     received_at: datetime | None = None,
     source: str = "wazuh",
+    dedupe: CanonicalDedupe | None = None,
 ) -> CanonicalAlert:
     """Convert a validated Wazuh alert into the canonical schema.
 
@@ -32,6 +34,7 @@ def normalize_wazuh_alert(
         alert_id: Optional pre-assigned UUID; generated if omitted.
         received_at: Optional reception timestamp; defaults to now (UTC).
         source: Source label (``wazuh`` or ``simulator``).
+        dedupe: Optional deduplication information.
 
     Returns:
         A frozen CanonicalAlert instance.
@@ -68,6 +71,7 @@ def normalize_wazuh_alert(
         source=source,
         received_at=resolved_received_at,
         source_event=source_event,
+        dedupe=dedupe,
     )
 
 

@@ -41,6 +41,9 @@ class Settings(BaseSettings):
     triage_api_port: int = Field(default=8000, alias="TRIAGE_API_PORT", ge=1, le=65535)
     triage_cors_origins: str = Field(default="http://localhost:8080", alias="TRIAGE_CORS_ORIGINS")
     triage_db_url: str = Field(default="sqlite:////data/soc_triage.db", alias="TRIAGE_DB_URL")
+    triage_dedupe_window_seconds: int = Field(
+        default=900, alias="TRIAGE_DEDUPE_WINDOW_SECONDS", ge=1
+    )
 
     triage_ingest_api_key: SecretStr = Field(
         default_factory=lambda: SecretStr("change-me-generate-a-long-random-value"),
