@@ -49,15 +49,31 @@ n8n/
 
 ### Import Guide
 
+#### Docker Compose (Phase 2C lab)
+
+`docker compose up` runs `scripts/n8n-import-workflows.sh` inside the n8n
+container before `n8n start`. The helper deterministically imports and activates
+WF1, WF2, WF3 and WF5 from `n8n/workflows/`.
+
+- Workflow JSONs are mounted read-only at `/workflows`.
+- The JSONs contain stable ids, so re-running startup updates the existing
+  records rather than creating duplicates.
+- The helper targets only the four canonical lab files; unrelated JSON files in
+  the mount are not imported.
+- Workflows are activated automatically before the n8n server starts (n8n's CLI
+  currently deactivates imported workflows by default).
+
+#### Manual import (when not using Docker Compose)
+
 1. In n8n UI, go to Workflows → Import from File → select JSON from `n8n/workflows/`
 2. Configure credentials:
    - SMTP: create SMTP credential (lab: Mailpit host mailpit:1025, no auth), name it `smtp_lab_credential_ref` or update workflow credential reference
    - No secrets in JSON — only references
 3. Set env vars in n8n container:
-   - `N8N_CALLBACK_TOKEN` (shared token)
+   - `N8N_CALLBACK_TOKEN`, `N8N_WEBHOOK_TOKEN` (shared token)
    - `N8N_WEBHOOK_BASE_URL` (e.g. http://n8n:5678)
-   - `TRIAGE_API_URL` (e.g. http://triage-api:8000)
-   - `SOC_ANALYST_EMAILS`, `SOC_L2_EMAILS`, `SMTP_FROM`, `CHAT_WEBHOOK_URL`
+   - `TRIAGE_API_BASE_URL` (e.g. http://triage-api:8000)
+   - `SOC_FROM_EMAIL`, `SOC_L1_EMAIL`, `SOC_L2_EMAIL`, `SLACK_CHANNEL_L1`
 4. Activate workflows: WF1, WF2, WF3, WF5 (order matters: router calls others via webhook)
 5. Test: `./scripts/send_test_alert.py docs/sample-alerts/01_wazuh_ssh_brute_force.json` → check Mailpit UI at :8025 and audit_log
 

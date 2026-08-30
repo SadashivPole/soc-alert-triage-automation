@@ -1,4 +1,6 @@
-# Phase 2C — End-to-End SOAR Lab Validation (minimum runtime)
+# Phase 2C — SOAR Lab Configuration
+# Docker configuration is statically validated; Docker/n8n/Mailpit container
+# runtime was NOT executed in this sandbox.
 # Services: triage-api + n8n + mailpit
 # No TheHive, no autonomous containment, no new providers.
 # Based on ARCHITECTURE.md §13, SECURITY.md §4.
@@ -53,32 +55,41 @@ services:
       N8N_WEBHOOK_TOKEN: ${N8N_WEBHOOK_TOKEN:-lab-n8n-token-change-in-production}
       N8N_CALLBACK_TOKEN: ${N8N_CALLBACK_TOKEN:-lab-n8n-token-change-in-production}
       N8N_WEBHOOK_BASE_URL: ${N8N_WEBHOOK_BASE_URL:-http://n8n:5678}
+      # The checked-in workflows resolve the API base from TRIAGE_API_BASE_URL.
+      TRIAGE_API_BASE_URL: ${TRIAGE_API_BASE_URL:-http://triage-api:8000}
+      # Compatibility alias retained for deployments that reference TRIAGE_API_URL.
       TRIAGE_API_URL: ${TRIAGE_API_BASE_URL:-http://triage-api:8000}
       N8N_ENCRYPTION_KEY: ${N8N_ENCRYPTION_KEY:-lab-encryption-key-do-not-use-in-prod}
-      # Optional SMTP to Mailpit for notifications
+      # Optional SMTP to Mailpit for notifications. Values match the $env.*
+      # references used by the checked-in workflows.
       SMTP_HOST: mailpit
       SMTP_PORT: 1025
       SMTP_SECURE: false
       SMTP_USER: ""
       SMTP_PASS: ""
       SMTP_FROM: ${SMTP_FROM:-soc@lab.local}
+      SOC_FROM_EMAIL: ${SOC_FROM_EMAIL:-soc@lab.local}
       SOC_ANALYST_EMAILS: ${SOC_ANALYST_EMAILS:-analyst@lab.local}
+      SOC_L1_EMAIL: ${SOC_L1_EMAIL:-analyst@lab.local}
       SOC_L2_EMAILS: ${SOC_L2_EMAILS:-l2@lab.local}
+      SOC_L2_EMAIL: ${SOC_L2_EMAIL:-l2@lab.local}
+      SLACK_CHANNEL_L1: ${SLACK_CHANNEL_L1:-#soc-l1}
     volumes:
       # Persistent n8n home (workflows, credentials, DB if using SQLite)
       - n8n-data:/home/node/.n8n
       # Mount existing workflow JSONs (source of truth per n8n/README.md)
       - ./n8n/workflows:/workflows:ro
+      # Lab-only import helper executed before n8n starts.
+      - ./scripts/n8n-import-workflows.sh:/usr/local/bin/n8n-import-workflows.sh:ro
     networks:
       - soc-core
       - soc-edge
-    # Import workflows automatically using n8n import (optional init); for lab we mount and can import manually
+    # Import WF1/WF2/WF3/WF5 before the n8n server starts. The JSONs have
+    # stable ids so re-running a fresh compose startup updates the existing
+    # records instead of creating duplicates.
     command: >
       sh -c "
-        if [ -d /workflows ]; then
-          echo 'Workflows mounted at /workflows';
-          ls /workflows;
-        fi;
+        sh /usr/local/bin/n8n-import-workflows.sh &&
         n8n start
       "
     # Healthcheck using n8n's internal endpoint if available; fallback to port open
