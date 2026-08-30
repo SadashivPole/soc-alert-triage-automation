@@ -12,7 +12,10 @@
       "name": "Webhook - Analyst Feedback",
       "type": "n8n-nodes-base.webhook",
       "typeVersion": 1,
-      "position": [460, 300],
+      "position": [
+        460,
+        300
+      ],
       "webhookId": "soc-analyst-feedback-webhook-id",
       "notes": "Analyst feedback via form/email. Validates token, forwards to triage-api POST /feedback. No autonomous containment - contain_requested creates an approval-required request; no containment action is executed."
     },
@@ -24,7 +27,10 @@
       "name": "Validate Token & Verdict",
       "type": "n8n-nodes-base.function",
       "typeVersion": 1,
-      "position": [680, 300],
+      "position": [
+        680,
+        300
+      ],
       "notes": "Real token validation against $env secret (exact match, reject missing/wrong, never log). Validates verdict allow-list. contain_requested creates an approval-required request; no containment action is executed - no host isolation/user disable/containment. No destructive, no autonomous, no secrets."
     },
     {
@@ -86,7 +92,10 @@
       "name": "Form - Feedback",
       "type": "n8n-nodes-base.form",
       "typeVersion": 1,
-      "position": [900, 200],
+      "position": [
+        900,
+        200
+      ],
       "notes": "Human approval form. contain_requested creates an approval-required request; no containment action is executed. No autonomous response."
     },
     {
@@ -118,7 +127,7 @@
           "parameters": [
             {
               "name": "X-N8N-Token",
-              "value": "={{ $env.N8N_CALLBACK_TOKEN }}"
+              "value": "={{ $env.N8N_WEBHOOK_TOKEN || $env.N8N_CALLBACK_TOKEN }}"
             },
             {
               "name": "Content-Type",
@@ -131,8 +140,11 @@
       "name": "HTTP - POST Feedback to API",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4,
-      "position": [1120, 300],
-      "notes": "POST feedback to triage-api. Token from env credential $env.N8N_CALLBACK_TOKEN. Verdict allow-list enforced. contain_requested creates an approval-required request; no containment action is executed. No autonomous containment."
+      "position": [
+        1120,
+        300
+      ],
+      "notes": "POST feedback to triage-api. Token from env credential $env.N8N_WEBHOOK_TOKEN || $env.N8N_CALLBACK_TOKEN. Verdict allow-list enforced. contain_requested creates an approval-required request; no containment action is executed. No autonomous containment."
     },
     {
       "parameters": {
@@ -150,7 +162,10 @@
       "name": "Switch - Contain Requested?",
       "type": "n8n-nodes-base.switch",
       "typeVersion": 2,
-      "position": [1340, 300],
+      "position": [
+        1340,
+        300
+      ],
       "notes": "If contain_requested, create approval-required ticket only. No containment action is executed - no host isolation, no user disable. Human approval required."
     },
     {
@@ -165,7 +180,10 @@
       "name": "Email - Containment Approval Request",
       "type": "n8n-nodes-base.emailSend",
       "typeVersion": 2,
-      "position": [1560, 200],
+      "position": [
+        1560,
+        200
+      ],
       "notes": "Approval-required containment request. No containment action executed. Human approval only. No autonomous."
     },
     {
@@ -178,7 +196,10 @@
       "name": "Respond - Feedback OK",
       "type": "n8n-nodes-base.respondToWebhook",
       "typeVersion": 1,
-      "position": [1780, 300]
+      "position": [
+        1780,
+        300
+      ]
     }
   ],
   "connections": {

@@ -12,7 +12,10 @@
       "name": "Webhook - Escalation",
       "type": "n8n-nodes-base.webhook",
       "typeVersion": 1,
-      "position": [460, 300],
+      "position": [
+        460,
+        300
+      ],
       "webhookId": "soc-incident-escalation-webhook-id",
       "notes": "High-severity escalation entry. Token from env credential reference. SLA timers + feedback status check via GET /feedback/status (read-only)."
     },
@@ -24,7 +27,10 @@
       "name": "Validate Token",
       "type": "n8n-nodes-base.function",
       "typeVersion": 1,
-      "position": [680, 300],
+      "position": [
+        680,
+        300
+      ],
       "notes": "Real shared-secret validation against $env secret. Reject missing/wrong, accept exact. Never log token. No destructive, no autonomous."
     },
     {
@@ -35,7 +41,10 @@
       "name": "Format Escalation",
       "type": "n8n-nodes-base.function",
       "typeVersion": 1,
-      "position": [900, 300],
+      "position": [
+        900,
+        300
+      ],
       "notes": "Formats high-severity escalation. Includes GET status URL for SLA check. No full_log. contain_requested creates an approval-required request; no containment action is executed - human approval only."
     },
     {
@@ -50,7 +59,10 @@
       "name": "Email - L2 Escalation",
       "type": "n8n-nodes-base.emailSend",
       "typeVersion": 2,
-      "position": [1120, 200],
+      "position": [
+        1120,
+        200
+      ],
       "notes": "Immediate L2 notification for high/critical. Fail-open."
     },
     {
@@ -62,7 +74,10 @@
       "name": "Wait - 15m SLA",
       "type": "n8n-nodes-base.wait",
       "typeVersion": 1,
-      "position": [1120, 400],
+      "position": [
+        1120,
+        400
+      ],
       "notes": "SLA wait 15m for acknowledgement. After wait, check feedback status via GET /feedback/status (read-only). If acknowledged -> no L2 re-escalation. If not -> escalate. Endpoint failure -> fail-safe escalation to L2 (safe documented behavior)."
     },
     {
@@ -75,7 +90,7 @@
           "parameters": [
             {
               "name": "X-N8N-Token",
-              "value": "={{ $env.N8N_CALLBACK_TOKEN }}"
+              "value": "={{ $env.N8N_WEBHOOK_TOKEN || $env.N8N_CALLBACK_TOKEN }}"
             },
             {
               "name": "Content-Type",
@@ -95,8 +110,11 @@
       "name": "HTTP - Check Ack Status (GET)",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4,
-      "position": [1340, 400],
-      "notes": "CRITICAL FIX Phase 2B: Read-only GET /api/v1/alerts/{id}/feedback/status to check acknowledgement. NOT POST /feedback (previous misuse). Returns acknowledged bool, has_feedback, latest_verdict, feedback_count, acknowledged_at. Token from env credential $env.N8N_CALLBACK_TOKEN. If endpoint fails, fail-safe to escalation (safe behavior)."
+      "position": [
+        1340,
+        400
+      ],
+      "notes": "CRITICAL FIX Phase 2B: Read-only GET /api/v1/alerts/{id}/feedback/status to check acknowledgement. NOT POST /feedback (previous misuse). Returns acknowledged bool, has_feedback, latest_verdict, feedback_count, acknowledged_at. Token from env credential $env.N8N_WEBHOOK_TOKEN || $env.N8N_CALLBACK_TOKEN. If endpoint fails, fail-safe to escalation (safe behavior)."
     },
     {
       "parameters": {
@@ -117,7 +135,10 @@
       "name": "Switch - Acknowledged?",
       "type": "n8n-nodes-base.switch",
       "typeVersion": 2,
-      "position": [1560, 400],
+      "position": [
+        1560,
+        400
+      ],
       "notes": "If acknowledged=true (has_feedback with any verdict) -> no L2 escalation. If not acknowledged or endpoint failed (fallback) -> escalate to L2. Fail-safe: endpoint failure results in L2 escalation (documented safe behavior)."
     },
     {
@@ -132,7 +153,10 @@
       "name": "Email - L2 SLA Breach",
       "type": "n8n-nodes-base.emailSend",
       "typeVersion": 2,
-      "position": [1780, 300],
+      "position": [
+        1780,
+        300
+      ],
       "notes": "L2 escalation on SLA breach or status endpoint failure (fail-safe). No autonomous containment. contain_requested creates an approval-required request; no containment action is executed."
     },
     {
@@ -145,7 +169,10 @@
       "name": "Respond - Escalated",
       "type": "n8n-nodes-base.respondToWebhook",
       "typeVersion": 1,
-      "position": [2000, 300]
+      "position": [
+        2000,
+        300
+      ]
     }
   ],
   "connections": {

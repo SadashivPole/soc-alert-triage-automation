@@ -14,7 +14,10 @@
       "name": "Webhook - SOC Alert Scored",
       "type": "n8n-nodes-base.webhook",
       "typeVersion": 1,
-      "position": [460, 300],
+      "position": [
+        460,
+        300
+      ],
       "webhookId": "soc-alert-scored-webhook-id",
       "notes": "Entry point from triage-api. Validates shared token via Function node. No secrets in JSON - token read from $env.N8N_CALLBACK_TOKEN / $env.N8N_WEBHOOK_TOKEN (env credential reference)."
     },
@@ -26,7 +29,10 @@
       "name": "Validate Token & Payload",
       "type": "n8n-nodes-base.function",
       "typeVersion": 1,
-      "position": [680, 300],
+      "position": [
+        680,
+        300
+      ],
       "notes": "CRITICAL FIX: Real shared-secret validation - reads expected secret from $env.N8N_WEBHOOK_TOKEN or $env.N8N_CALLBACK_TOKEN (env credential), compares exact match, rejects missing/wrong, never logs token, never places secret in JSON. Also validates payload schema (no full_log). Human approval NOT required here - only routing."
     },
     {
@@ -48,7 +54,10 @@
       "name": "Switch - Severity Tier",
       "type": "n8n-nodes-base.switch",
       "typeVersion": 2,
-      "position": [900, 300],
+      "position": [
+        900,
+        300
+      ],
       "notes": "Route high/critical to escalation workflow, others to L1 notification. No autonomous containment. contain_requested creates an approval-required request; no containment action is executed."
     },
     {
@@ -76,7 +85,7 @@
           "parameters": [
             {
               "name": "X-N8N-Token",
-              "value": "={{ $env.N8N_CALLBACK_TOKEN }}"
+              "value": "={{ $env.N8N_WEBHOOK_TOKEN || $env.N8N_CALLBACK_TOKEN }}"
             },
             {
               "name": "Content-Type",
@@ -89,8 +98,11 @@
       "name": "HTTP - Call Escalation WF",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4,
-      "position": [1120, 200],
-      "notes": "Calls WF3 high-severity escalation. Timeout 5s, retry 2x. Token from env credential reference $env.N8N_CALLBACK_TOKEN, not hardcoded, not logged."
+      "position": [
+        1120,
+        200
+      ],
+      "notes": "Calls WF3 high-severity escalation. Timeout 5s, retry 2x. Token from env credential reference $env.N8N_WEBHOOK_TOKEN || $env.N8N_CALLBACK_TOKEN, not hardcoded, not logged."
     },
     {
       "parameters": {
@@ -117,7 +129,7 @@
           "parameters": [
             {
               "name": "X-N8N-Token",
-              "value": "={{ $env.N8N_CALLBACK_TOKEN }}"
+              "value": "={{ $env.N8N_WEBHOOK_TOKEN || $env.N8N_CALLBACK_TOKEN }}"
             },
             {
               "name": "Content-Type",
@@ -130,7 +142,10 @@
       "name": "HTTP - Call L1 Notify WF",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4,
-      "position": [1120, 400],
+      "position": [
+        1120,
+        400
+      ],
       "notes": "Calls WF2 L1 notification. Token from env credential reference. Fail-open: triage-api already audited delivery attempt. contain_requested creates an approval-required request; no containment action is executed."
     },
     {
@@ -143,7 +158,10 @@
       "name": "Respond - Routed",
       "type": "n8n-nodes-base.respondToWebhook",
       "typeVersion": 1,
-      "position": [1340, 300]
+      "position": [
+        1340,
+        300
+      ]
     }
   ],
   "connections": {
