@@ -40,14 +40,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app = FastAPI(
         title="SOC Alert Triage API",
         version=__version__,
-        description="Defensive SOC alert triage foundation (Phase 1A).",
+        description="Defensive SOC alert triage pipeline (Phase 1C: ingest, dedupe).",
         lifespan=lifespan,
     )
     app.state.settings = app_settings
 
-    from .ingest.deduplication import MemoryDeduplicator
+    from .ingest.deduplication import InMemoryDeduplicator
 
-    app.state.deduplicator = MemoryDeduplicator(
+    # Phase 1C deduplication: configurable sliding window (ARCHITECTURE.md §6).
+    # State is in-memory by design; the Deduplicator contract is what a later
+    # persistence-backed implementation must reproduce.
+    app.state.deduplicator = InMemoryDeduplicator(
         window_seconds=app_settings.triage_dedupe_window_seconds
     )
 

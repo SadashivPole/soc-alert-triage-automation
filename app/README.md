@@ -3,10 +3,13 @@
 The core service: ingest → normalize → dedupe → enrich → score → decide → persist →
 notify n8n. Full design: [ARCHITECTURE.md §12](../ARCHITECTURE.md#12-python-service-triage-api-architecture).
 
-**Status: Phase 1A — FastAPI foundation implemented** ([DEVELOPMENT_PLAN.md](../DEVELOPMENT_PLAN.md)).
-This includes the application factory, `GET /health` and `GET /ready`,
-typed environment configuration, structured JSON logging, and the shared error
-envelope. Ingest/normalize/scoring/enrichment/notifications are later Phase 1 work.
+**Status: Phase 1C — ingestion, validation & deduplication implemented**
+([DEVELOPMENT_PLAN.md](../DEVELOPMENT_PLAN.md)). This includes the application
+factory, `GET /health` and `GET /ready`, typed environment configuration,
+structured JSON logging, the shared error envelope, Wazuh alert
+ingest/normalize (`POST /api/v1/alerts/ingest`), and deterministic
+deduplication & idempotency (configurable window, preserved canonical alerts,
+recurrence tracking). Scoring/enrichment/notifications are later Phase 1 work.
 
 ```
 app/

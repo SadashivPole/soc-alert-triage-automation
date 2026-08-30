@@ -42,20 +42,34 @@ class CanonicalSourceEvent(BaseModel):
 
 
 class CanonicalDedupe(BaseModel):
-    """Deduplication information for the alert."""
+    """Deduplication and recurrence information for the alert.
+
+    ``occurrences`` counts *distinct events* in the current generation (an
+    exact duplicate re-delivery never increments it). ``first_seen`` /
+    ``last_seen`` bound the generation's recurrence span; together with
+    ``duplicate_deliveries`` they are the recurrence signals later consumed by
+    risk scoring. ``event_identity`` is the deterministic source-event identity
+    (see ``ingest.deduplication``) and ``generation`` counts window-expiry
+    resets of the group.
+    """
 
     group_key: str
-    occurrences: int
+    occurrences: int = Field(default=1, ge=1)
     first_seen: datetime
     last_seen: datetime
+    event_identity: str | None = None
+    generation: int = Field(default=1, ge=1)
+    duplicate_deliveries: int = Field(default=0, ge=0)
+
+    model_config = {"frozen": True}
 
 
 class CanonicalAlert(BaseModel):
     """Canonical alert record after normalization.
 
     This is the internal representation used throughout the triage pipeline.
-    Phase 1B implements: alert_id, source, received_at, source_event.
-    Phase 1C adds: dedupe.
+    Phase 1B implemented: alert_id, source, received_at, source_event.
+    Phase 1C populates: dedupe (identity, recurrence, idempotency info).
     Future phases will add: iocs, asset, risk, decision, etc.
     """
 
