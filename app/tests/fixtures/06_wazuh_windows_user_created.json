@@ -1,0 +1,35 @@
+{
+  "id": "1770000000.100006",
+  "timestamp": "2026-08-29T14:58:03.000+0000",
+  "rule": {
+    "level": 5,
+    "description": "Windows: A user account was created",
+    "id": "60180",
+    "firedtimes": 1,
+    "mail": false,
+    "groups": ["windows", "windows_eventlog", "account_management"],
+    "mitre": {
+      "id": ["T1136"],
+      "tactic": ["Persistence"],
+      "technique": ["Create Account: Local Account"]
+    }
+  },
+  "agent": {
+    "id": "004",
+    "name": "fin-srv-02",
+    "ip": "10.0.4.31",
+    "labels": { "asset_tier": "critical", "owner": "finance-it" }
+  },
+  "manager": { "name": "wazuh-manager" },
+  "decoder": { "name": "windows_eventchannel" },
+  "data": {
+    "EventID": "4720",
+    "dstuser": "svc_temp_backup",
+    "subjectUserName": "adm-jdoe-lab",
+    "subjectDomainName": "CORP-LAB",
+    "targetUserName": "svc_temp_backup",
+    "workstationName": "FIN-WS-07"
+  },
+  "location": "EventChannel",
+  "full_log": "A user account was created. Subject: CORP-LAB\\adm-jdoe-lab  Target: svc_temp_backup  (synthetic lab data)"
+}
