@@ -63,6 +63,7 @@ n8n callback → notification visible in Mailpit. Fully offline (no VT/MISP).
 | 1.10 | n8n WF1 (`soc-triage-router`) + WF2 (`soc-analyst-notify`) exports | imported via `n8n/README.md` |
 | 1.11 | CI workflow (GitHub Actions) | lint (ruff), unit + integration tests, `check_secrets.sh` |
 | 1.12 | API reference (OpenAPI auto-docs) + quickstart in README | honest "lab" wording |
+| 1.13 | IOC extraction & enrichment provider interface (Phase 1E) | pure extractor (ipv4/domain/url/md5/sha1/sha256/email) with provenance + FP policy; injectable `EnrichmentProvider` protocol; disabled no-op provider; **no external calls**; `enrichment_status: skipped` |
 
 **Acceptance criteria**
 
@@ -71,6 +72,8 @@ n8n callback → notification visible in Mailpit. Fully offline (no VT/MISP).
   `occurrences=10`, score per golden file, decision logged, notification email in Mailpit.
 - Wrong/missing `X-API-Key` → 401; oversized body → 413; malformed JSON → 422 + dead letter.
 - With `VIRUSTOTAL_API_KEY` empty, pipeline completes with `enrichment_status: skipped`.
+- Phase 1E: every sample alert extracts the documented indicators, repeated extraction is
+  byte-identical, and no extraction path performs network I/O.
 - Coverage ≥ 85 % on `scoring/`, `ingest/`, `decisions/`, `core/`; CI green.
 
 **Out of scope (deferred):** VT/MISP calls, incidents, escalation timers, console UI.
@@ -81,7 +84,8 @@ n8n callback → notification visible in Mailpit. Fully offline (no VT/MISP).
 
 **Goal:** real intel enrichment with quota safety and graceful degradation; scoring v2.
 
-- 2.1 IOC extractor (structured fields) with unit tests · 2.2 allowlist + asset inventory
+- 2.1 IOC extractor — **delivered early as Phase 1E** (deliverable 1.13); Phase 2
+  resumes at 2.2 · 2.2 allowlist + asset inventory
   YAML loaders · 2.3 VirusTotal v3 client: token bucket (4/min, 500/day), TTL cache,
   quota accounting, fake-server tests (`respx`) · 2.4 MISP client + `intel` compose
   profile + seeding guide (public feeds, clearly-labeled synthetic events) ·

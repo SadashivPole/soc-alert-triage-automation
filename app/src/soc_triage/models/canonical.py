@@ -13,6 +13,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field
 
+from .ioc import IOC
+
 
 class CanonicalRule(BaseModel):
     """Normalized rule information from the source alert."""
@@ -33,12 +35,22 @@ class CanonicalAgent(BaseModel):
 
 
 class CanonicalSourceEvent(BaseModel):
-    """Trimmed original payload with key fields preserved."""
+    """Trimmed original payload with key fields preserved.
+
+    ``data`` and ``syscheck`` keep the structured evidence blocks of a Wazuh
+    alert (FIM hashes live in ``syscheck``, network/context fields in
+    ``data``) so IOC extraction (Phase 1E) can work from typed fields instead
+    of scraping ``full_log`` (ARCHITECTURE.md §7.1).
+    """
 
     rule: CanonicalRule
     agent: CanonicalAgent
     location: str | None = None
     full_log: str | None = None
+    #: Wazuh ``data`` block (unknown fields preserved verbatim by the schema).
+    data: dict[str, Any] = Field(default_factory=dict)
+    #: Wazuh ``syscheck`` (FIM) block: paths plus before/after file hashes.
+    syscheck: dict[str, Any] = Field(default_factory=dict)
 
 
 class CanonicalDedupe(BaseModel):
@@ -70,7 +82,8 @@ class CanonicalAlert(BaseModel):
     This is the internal representation used throughout the triage pipeline.
     Phase 1B implemented: alert_id, source, received_at, source_event.
     Phase 1C populates: dedupe (identity, recurrence, idempotency info).
-    Future phases will add: iocs, asset, risk, decision, etc.
+    Phase 1E populates: iocs (indicators + provenance, enrichment payloads).
+    Future phases will add: asset, risk, decision, etc.
     """
 
     alert_id: UUID
@@ -78,6 +91,9 @@ class CanonicalAlert(BaseModel):
     received_at: datetime
     source_event: CanonicalSourceEvent
     dedupe: CanonicalDedupe | None = None
+    #: Indicators extracted from this alert (ARCHITECTURE.md §5.2, §7.1).
+    #: Normalized, provenance-carrying, and deduplicated by (type, value).
+    iocs: list[IOC] = Field(default_factory=list)
 
     model_config = {"frozen": True}
 

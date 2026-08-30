@@ -19,6 +19,8 @@ from .db.engine import (
     create_session_factory,
     run_migrations,
 )
+from .enrichment import EnrichmentChain
+from .enrichment.providers import NoOpEnrichmentProvider
 
 logger = get_logger("soc_triage.main")
 
@@ -79,6 +81,22 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             dedupe_window_seconds=app_settings.triage_dedupe_window_seconds,
         )
 
+        # --- IOC extraction & enrichment (Phase 1E) ---
+        # Extraction is pure (no I/O); the only registered provider is the
+        # offline no-op (disabled), so ingestion performs zero external calls
+        # and reports `enrichment_status: skipped` (ARCHITECTURE.md §7.3).
+        # VirusTotal/MISP providers plug in here in Phase 2.
+        enrichment_chain = EnrichmentChain([NoOpEnrichmentProvider()])
+        _app.state.enrichment_chain = enrichment_chain
+        logger.info(
+            "enrichment_ready",
+            component="main",
+            providers=[provider.name for provider in enrichment_chain.providers],
+            enabled_providers=[
+                provider.name for provider in enrichment_chain.providers if provider.enabled
+            ],
+        )
+
         try:
             yield
         finally:
@@ -88,7 +106,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app = FastAPI(
         title="SOC Alert Triage API",
         version=__version__,
-        description="Defensive SOC alert triage pipeline (Phase 1D: ingest, dedupe, persistent storage & audit).",
+        description=(
+            "Defensive SOC alert triage pipeline (Phase 1E: ingest, dedupe, persistent "
+            "storage, audit, IOC extraction & enrichment interface)."
+        ),
         lifespan=lifespan,
     )
     app.state.settings = app_settings

@@ -3,17 +3,19 @@
 The core service: ingest → normalize → dedupe → enrich → score → decide → persist →
 notify n8n. Full design: [ARCHITECTURE.md §12](../ARCHITECTURE.md#12-python-service-triage-api-architecture).
 
-**Status: Phase 1D — ingestion, deduplication, persistent storage & audit
-implemented** ([DEVELOPMENT_PLAN.md](../DEVELOPMENT_PLAN.md)). This includes
+**Status: Phase 1E — ingestion, deduplication, persistent storage, audit, IOC
+extraction & the enrichment interface implemented**
+([DEVELOPMENT_PLAN.md](../DEVELOPMENT_PLAN.md)). This includes
 the application factory, `GET /health` and `GET /ready` (with database
 liveness/migration checks), typed environment configuration, structured JSON
 logging, the shared error envelope, Wazuh alert ingest/normalize
 (`POST /api/v1/alerts/ingest`), deterministic deduplication & idempotency
 (configurable window, preserved canonical alerts, recurrence tracking) with
 **SQLite persistence** (normalized alerts, dedupe recurrence/generation
-state, per-event idempotency records, append-only audit log), and Alembic
-migrations applied automatically at startup. Scoring/enrichment/notifications
-are later Phase 1 work.
+state, per-event idempotency records, append-only audit log), Alembic
+migrations applied automatically at startup, and **IOC extraction with a
+provider-based enrichment interface** (offline only — no external calls yet).
+Scoring/decisioning/notifications are later Phase 1 work.
 
 ```
 app/
@@ -24,7 +26,7 @@ app/
 │   ├── db/              # engine/session bootstrap, transactions, storage errors
 │   ├── models/          # SQLAlchemy ORM + repositories + Pydantic schemas
 │   ├── ingest/          # Wazuh normalizer, dedupe (in-memory + persistent), guards
-│   ├── enrichment/      # IOC extractor, VT/MISP clients, allowlist, cache
+│   ├── enrichment/      # IOC extraction, FP policy, provider interface, chain
 │   ├── scoring/         # deterministic scoring engine (pure, zero I/O)
 │   ├── decisions/       # decision matrix + routing
 │   ├── audit.py         # append-only audit policy + entries
@@ -51,6 +53,58 @@ alembic upgrade head
 alembic downgrade base   # reproducible; safe on a scratch database
 alembic check            # no drift between ORM models and schema
 ```
+
+## IOC extraction & enrichment (Phase 1E)
+
+Extraction is a **pure function** — `(CanonicalAlert, policy) → [IOC]` — with no
+I/O, clock, logging or randomness, so the same alert always yields the same
+ordered indicator list. Supported types: `ipv4`, `domain`, `url`, `md5`,
+`sha1`, `sha256`, `email`.
+
+```python
+from soc_triage.enrichment import extract_iocs, EnrichmentChain, NoOpEnrichmentProvider
+
+iocs = extract_iocs(canonical_alert)
+# IOC(type=<IOCType.IPV4: 'ipv4'>, value='203.0.113.50',
+#     provenance=(IOCProvenance(field='source_event.data.srcip',
+#                               extractor='typed_field', raw_value='203.0.113.50',
+#                               offset=None, location='/var/log/auth.log'),),
+#     enrichment={})
+
+outcome = EnrichmentChain([NoOpEnrichmentProvider()]).enrich(iocs)
+outcome.status  # 'skipped' — the offline provider is disabled by default
+```
+
+Every indicator keeps its **provenance**: the canonical field path it came
+from, the alert's source location, the character offset and raw substring for
+text scans, and which strategy found it. Identical `(type, value)` pairs
+collapse into one indicator with merged provenance.
+
+False positives are policy-driven (`soc_triage.enrichment.policy`):
+
+| Control | Default | Why |
+| --- | --- | --- |
+| `include_private_ipv4` | `False` | RFC 1918 / loopback / link-local / CGNAT describe the lab's own estate |
+| `include_documentation_ipv4` | `True` | the synthetic corpus uses RFC 5737 ranges (SECURITY.md §5) |
+| `include_full_log` | `False` | ARCHITECTURE §7.1 — extract from fields, not arbitrary log text |
+| `include_location` | `False` | `location` is a source descriptor, not evidence |
+| `max_iocs` | `200` | bounded responses and bounded future quota usage |
+
+**Adding a provider (Phase 2)** — implement the `EnrichmentProvider` protocol;
+no other change is needed, and the chain stays fail-open:
+
+```python
+class MyProvider:
+    name = "my-intel"  # key under which payloads are stored
+    enabled = bool(API_KEY)  # disable-by-empty (ARCHITECTURE §14)
+
+    def enrich(self, iocs, *, context):
+        return ProviderEnrichment(provider=self.name, status=..., results={...})
+```
+
+VirusTotal and MISP are **not** contacted in Phase 1E; the only registered
+provider is the offline `NoOpEnrichmentProvider`, so every ingest reports
+`enrichment_status: skipped`.
 
 ## Run & test (Phase 1A)
 

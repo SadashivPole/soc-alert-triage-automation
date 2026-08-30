@@ -190,8 +190,16 @@ stateDiagram-v2
     "location": "/var/log/auth.log",
     "full_log": "…sanitized raw line…"
   },
-  "iocs": [
-    { "type": "ip", "value": "203.0.113.50", "role": "source",
+  "iocs": [                                   // Phase 1E: extraction + provenance
+    { "type": "ipv4", "value": "203.0.113.50",
+      "provenance": [
+        { "field": "source_event.data.srcip", "extractor": "typed_field",
+          "raw_value": "203.0.113.50", "offset": null,
+          "location": "/var/log/auth.log" },
+        { "field": "source_event.full_log", "extractor": "text_scan",
+          "raw_value": "203.0.113.50", "offset": 62,
+          "location": "/var/log/auth.log" }
+      ],
       "enrichment": { "vt": { "reputation": "malicious", "malicious": 38,
                               "suspicious": 4, "cached": true },
                       "misp": { "matched_event_ids": ["1024"],
@@ -277,11 +285,47 @@ error — nothing is silently dropped.
 
 ## 7. Enrichment Subsystem
 
-### 7.1 IOC extraction (Phase 1)
+### 7.1 IOC extraction (Phase 1E — implemented)
 
-Regex/grammar extraction from canonical fields, **not** from arbitrary `full_log` text in
-the MVP (v2 may extend): `data.srcip`, `data.dstip`, `data.virustotal.*`, FIM path fields.
-Types: `ipv4`, `ipv6`, `domain`, `md5`, `sha1`, `sha256`, `filepath`.
+A **pure function** (`soc_triage.enrichment.extractor`): `(CanonicalAlert, policy) → [IOC]`
+— no I/O, clock, logging or randomness, so repeated extraction is byte-identical.
+Indicators are deduplicated by `(type, normalized value)` and ordered by the same key.
+
+**Sources.** Regex/grammar extraction from canonical fields, **not** from arbitrary
+`full_log` text (that remains opt-in per deployment):
+
+* *Typed fields* — `agent.ip`, `data.srcip`, `data.dstip`, `data.hostname`, `data.url`,
+  `data.srcuser` / `data.dstuser`, `data.virustotal.{md5,sha1,sha256,permalink}` and the
+  FIM `syscheck.{md5,sha1,sha256}_{before,after}` hashes. The **whole** field value must
+  validate as that one type; a field that fails yields nothing rather than a partial guess.
+* *Text scans* (policy-gated) — `full_log` and `location` are off by default; unrecognized
+  string leaves under `data` / `syscheck` are auto-scanned by default.
+
+**Types (Phase 1E):** `ipv4`, `domain`, `url`, `md5`, `sha1`, `sha256`, `email`.
+(`ipv6` and `filepath` are deferred: neither the corpus nor the scoring engine needs them
+yet, and adding them is a pattern + validator change in one module.)
+
+**Provenance** is preserved per indicator: the canonical field path, the alert's source
+`location`, the character offset and raw substring for text scans, and which strategy found
+it (`typed_field` / `text_scan`). The same value seen in two fields yields one indicator
+with two provenance records.
+
+**False-positive controls** (`soc_triage.enrichment.policy`, frozen and injectable):
+
+| Control | Default | Rationale |
+| --- | --- | --- |
+| Drop non-routable IPv4 (RFC 1918, loopback, link-local, CGNAT, multicast, reserved, unspecified) | on | internal addresses are not external indicators |
+| Drop documentation ranges (RFC 5737 / RFC 2544) | **off** | the synthetic corpus *is* built from those ranges (SECURITY.md §5); deployments ingesting real alerts can flip it |
+| Scan `full_log` / `location` | off | they are descriptors, and path-like values (`/etc/passwd`) would otherwise look like domains |
+| `max_iocs` per alert | 200 | bounded responses and bounded future quota usage |
+
+Plus format-level guards: IPv4 via `ipaddress` (rejects `999.1.1.1`, `010.1.1.1`,
+`1.2.3.4.5`), domains by LDH labels + alphabetic TLD (rejects Windows paths and
+`*.exe` filenames), hashes by hex length (32/40/64), emails by local-part + domain
+rules, URLs canonicalized (host lowercased/IDNA, default port and fragment dropped,
+**userinfo removed** so credentials can never be stored as an indicator). Defang
+markers (`hxxp://`, `evil[.]example[.]com`) are normalized; the raw match is kept in
+provenance.
 
 ### 7.2 Enrichment chain (ordered, per IOC)
 
@@ -301,6 +345,17 @@ Types: `ipv4`, `ipv6`, `domain`, `md5`, `sha1`, `sha256`, `filepath`.
   (quota usage per day) so quota state is observable.
 - Optional sources auto-disable when their env keys are empty — the system must run fully
   functional (scoring v1) with **zero external services**.
+
+**Phase 1E status of this subsystem:** extraction (§7.1) and the provider interface are
+implemented; steps 1–4 below are **not**. Providers implement the runtime-checkable
+`soc_triage.enrichment.providers.EnrichmentProvider` protocol (`name`, `enabled`,
+`enrich(iocs, *, context) → ProviderEnrichment`); `EnrichmentChain` runs them in
+registration order, merges payloads per indicator, and aggregates
+`enrichment_status: complete|partial|failed|skipped`. A provider that raises is recorded
+as `failed` (exception *type* only, never its message) and skipped — enrichment never
+blocks ingestion. The only registered provider today is the offline, disabled-by-default
+`NoOpEnrichmentProvider`, so VirusTotal/MISP lookups arrive in Phase 2 without changing
+the orchestration.
 
 ---
 

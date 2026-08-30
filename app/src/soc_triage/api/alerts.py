@@ -1,10 +1,17 @@
 """Alert ingestion endpoint: POST /api/v1/alerts/ingest.
 
 Accepts Wazuh-shaped alert JSON, validates the schema, normalizes to the
-canonical format, runs it through the deduplicator (Phase 1C), and returns the
-canonical alert of record. This module is routing/orchestration only — all
-deduplication logic lives in :mod:`soc_triage.ingest.deduplication`
-(ARCHITECTURE.md §12: domain packages never import FastAPI).
+canonical format, extracts IOCs and runs the enrichment chain (Phase 1E),
+then deduplicates (Phase 1C) and returns the canonical alert of record.
+This module is routing/orchestration only — deduplication lives in
+:mod:`soc_triage.ingest.deduplication` and extraction/enrichment in
+:mod:`soc_triage.enrichment` (ARCHITECTURE.md §12: domain packages never
+import FastAPI).
+
+IOC provenance is returned (canonical field path, source location, offset);
+``full_log`` is never an extraction source by default and is never echoed by
+this endpoint beyond the pre-existing ``normalized`` payload
+(SECURITY.md §5, §7).
 
 Response contract (ARCHITECTURE.md §6, §16):
 
@@ -30,11 +37,12 @@ from pydantic import ValidationError
 from ..core.errors import error_response
 from ..core.logging import get_logger
 from ..db.errors import StorageError
+from ..enrichment import EnrichmentContext, extract_iocs
 from ..ingest.auth import RequireApiKey
 from ..ingest.deduplication import DedupeStatus, InvalidDedupeInputError
 from ..ingest.normalizer import normalize_wazuh_alert
 from ..ingest.schemas import WazuhAlert
-from .dependencies import DeduplicatorDependency
+from .dependencies import DeduplicatorDependency, EnrichmentChainDependency
 
 logger = get_logger("soc_triage.ingest")
 
@@ -63,9 +71,10 @@ def _utc_now() -> datetime:
 async def ingest_alert(
     request: Request,
     deduplicator: DeduplicatorDependency,
+    enrichment_chain: EnrichmentChainDependency,
     _: None = RequireApiKey,
 ) -> JSONResponse:
-    """Ingest, validate, deduplicate, and normalize a single Wazuh alert.
+    """Ingest, validate, extract IOCs, deduplicate, and normalize an alert.
 
     Returns:
         202 with the canonical alert (new or recurring within the window).
@@ -123,10 +132,23 @@ async def ingest_alert(
             details=exc.errors(),
         )
 
-    # --- Normalize + deduplicate ---
+    # --- Normalize → extract IOCs → enrich → deduplicate ---
     received_at = _utc_now()
     try:
         canonical = normalize_wazuh_alert(wazuh_alert, received_at=received_at)
+        # Extraction is pure and cheap; running it before the deduplication
+        # write means the alert *of record* carries its indicators (they are
+        # persisted with the canonical payload, ARCHITECTURE.md §5.2).
+        iocs = extract_iocs(canonical)
+        enrichment = enrichment_chain.enrich(
+            iocs,
+            context=EnrichmentContext(
+                alert_id=canonical.alert_id,
+                source=canonical.source,
+                received_at=received_at,
+            ),
+        )
+        canonical = canonical.model_copy(update={"iocs": list(enrichment.iocs)})
         outcome = deduplicator.process(wazuh_alert, canonical, received_at)
     except InvalidDedupeInputError as exc:
         # Invalid identity inputs (e.g. blank rule/agent id): surface as a
@@ -160,6 +182,18 @@ async def ingest_alert(
         )
 
     is_duplicate = outcome.status is DedupeStatus.EXACT_DUPLICATE
+    # The alert *of record* owns the indicators: for an exact duplicate the
+    # response echoes the original's IOCs, never a second extraction of the
+    # same delivery (idempotency, ARCHITECTURE.md §16).
+    recorded_iocs = outcome.canonical_alert.iocs
+    logger.info(
+        "iocs_extracted",
+        component="enrichment",
+        alert_id=str(outcome.alert_id),
+        ioc_count=len(recorded_iocs),
+        ioc_types=sorted({ioc.type.value for ioc in recorded_iocs}),
+        enrichment_status=enrichment.status.value,
+    )
     logger.info(
         "alert_ingested",
         component="ingest",
@@ -184,6 +218,8 @@ async def ingest_alert(
             "alert_id": str(outcome.alert_id),
             "received_at": received_at.isoformat(),
             "dedupe": outcome.dedupe.model_dump(mode="json"),
+            "iocs": [ioc.model_dump(mode="json") for ioc in recorded_iocs],
+            "enrichment_status": enrichment.status.value,
             "normalized": outcome.canonical_alert.model_dump(mode="json"),
         },
     )

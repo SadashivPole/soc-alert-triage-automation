@@ -58,12 +58,18 @@ def normalize_wazuh_alert(
         ip=alert.agent.ip,
     )
 
-    # Build source event (trimmed payload)
+    # Build source event (trimmed payload). The structured `data` /
+    # `syscheck` blocks are preserved verbatim: they carry the typed evidence
+    # (srcip, file hashes, FIM paths) that IOC extraction reads in Phase 1E
+    # (ARCHITECTURE.md §6, §7.1). `full_log` is kept but is *not* an
+    # extraction source by default (SECURITY.md §5, §7).
     source_event = CanonicalSourceEvent(
         rule=canonical_rule,
         agent=canonical_agent,
         location=alert.location,
         full_log=alert.full_log,
+        data=alert.data.model_dump(mode="json") if alert.data is not None else {},
+        syscheck=dict(alert.syscheck) if alert.syscheck is not None else {},
     )
 
     return CanonicalAlert(
