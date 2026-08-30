@@ -87,11 +87,10 @@ services:
     # Import WF1/WF2/WF3/WF5 before the n8n server starts. The JSONs have
     # stable ids so re-running a fresh compose startup updates the existing
     # records instead of creating duplicates.
-    command: >
-      sh -c "
-        sh /usr/local/bin/n8n-import-workflows.sh &&
-        n8n start
-      "
+    command:
+      - sh
+      - -c
+      - "sh /usr/local/bin/n8n-import-workflows.sh && n8n start"
     # Healthcheck using n8n's internal endpoint if available; fallback to port open
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:5678/healthz || exit 1"]
