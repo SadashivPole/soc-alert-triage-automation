@@ -1,0 +1,169 @@
+{
+  "name": "WF2_soc-analyst-notify",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "soc-analyst-notify",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "wf2-webhook-notify",
+      "name": "Webhook - L1 Notify",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [460, 300],
+      "webhookId": "soc-analyst-notify-webhook-id",
+      "notes": "Called by WF1 router or directly by triage-api for low/medium alerts. Token from env credential reference, never hardcoded, never logged."
+    },
+    {
+      "parameters": {
+        "functionCode": "// Real token validation for L1 notify (Phase 2B fix)\n// Token from env credential, exact match only, reject missing/wrong, never log\nconst headers = $input.first().json.headers || $json.headers || {};\nconst body = $input.first().json.body || $json.body || $json;\n\nconst expected = ($env.N8N_WEBHOOK_TOKEN || $env.N8N_CALLBACK_TOKEN || '').trim();\nif (!expected) {\n  throw new Error('Server misconfigured: shared token not set in n8n env');\n}\nconst authHeader = (headers['authorization'] || '').trim();\nconst bearer = authHeader.toLowerCase().startsWith('bearer ') ? authHeader.slice(7).trim() : '';\nconst supplied = (headers['x-n8n-token'] || headers['x-callback-token'] || bearer || '').trim();\nif (!supplied) {\n  throw new Error('Missing authentication token - X-N8N-Token required');\n}\nif (supplied !== expected) {\n  throw new Error('Invalid authentication token');\n}\n\n// Ensure no full_log (defense in depth)\nconst payloadStr = JSON.stringify(body).toLowerCase();\nif (payloadStr.includes('full_log')) {\n  throw new Error('Security violation: payload must not contain full_log');\n}\n\nreturn { json: body.payload ? body.payload : body };"
+      },
+      "id": "wf2-validate",
+      "name": "Validate Token",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [680, 300],
+      "notes": "Real shared-secret validation against $env secret. Reject missing/wrong, accept exact. Never log token. Security: no full_log, no secrets, no destructive, no autonomous containment, fail-open."
+    },
+    {
+      "parameters": {
+        "functionCode": "// Format L1 notification (no full_log, summary only)\nconst alert = $input.first().json;\nconst severity = (alert.severity || 'unknown').toUpperCase();\nconst score = alert.score ?? 'n/a';\nconst decision = alert.decision || {};\nconst rule = alert.rule || 'unknown';\nconst iocs = alert.iocs || {};\nconst links = alert.investigation_links || {};\nconst feedbackUrl = links.feedback_url || `${$env.TRIAGE_API_BASE_URL || 'http://triage-api:8000'}/api/v1/alerts/${alert.alert_id}/feedback`;\n\nconst subject = `[SOC][${severity}] Alert ${alert.alert_id} - ${decision.severity || rule}`;\n\nconst bodyText = `\nSOC Alert - L1 Review\n--------------------\nAlert ID: ${alert.alert_id}\nSeverity: ${severity}\nScore: ${score}\nDecision: ${decision.severity || 'unknown'} / ${decision.action || ''}\nRule: ${rule}\nRecurrence: ${alert.recurrence || 'unknown'}\n\nIOCs:\n- IPs: ${(iocs.ips || []).join(', ') || 'none'}\n- Domains: ${(iocs.domains || []).join(', ') || 'none'}\n- Hashes: ${(iocs.hashes || []).join(', ') || 'none'}\n- Users: ${(iocs.users || []).join(', ') || 'none'}\n\nEnrichment: ${JSON.stringify(alert.enrichment || {}).slice(0, 500)}\n\nInvestigation:\n- SIEM: ${links.siem_search_url || 'n/a'}\n- Timeline: ${links.timeline_url || 'n/a'}\n- Feedback: ${feedbackUrl}\n\nNote: contain_requested creates an approval-required request; no containment action is executed. Human approval required.\nNo autonomous response.\n`;\n\nreturn {\n  json: {\n    alert_id: alert.alert_id,\n    severity: alert.severity,\n    subject,\n    bodyText,\n    feedbackUrl,\n    _notify: {\n      formatted_at: new Date().toISOString()\n    }\n  }\n};"
+      },
+      "id": "wf2-format",
+      "name": "Format Notification",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [900, 300],
+      "notes": "Summary-only notification, no full_log, no raw logs. contain_requested creates an approval-required request; no containment action is executed."
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{ $env.SOC_FROM_EMAIL || 'soc@example.com' }}",
+        "toEmail": "={{ $env.SOC_L1_EMAIL || 'soc-l1@example.com' }}",
+        "subject": "={{ $json.subject }}",
+        "text": "={{ $json.bodyText }}",
+        "options": {}
+      },
+      "id": "wf2-email",
+      "name": "Email - L1 Alert",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2,
+      "position": [1120, 200],
+      "notes": "L1 notification. Fail-open: triage-api already audited attempt/result. No secrets in payload."
+    },
+    {
+      "parameters": {
+        "channel": "={{ $env.SLACK_CHANNEL_L1 || '#soc-l1' }}",
+        "text": "={{ $json.subject }}\\n{{ $json.bodyText }}",
+        "options": {}
+      },
+      "id": "wf2-slack",
+      "name": "Slack - L1 Alert",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 1,
+      "position": [1120, 400],
+      "notes": "Optional Slack notification for L1. Fail-open if misconfigured. No destructive actions."
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseData": "={{ { \"status\": \"notified\", \"alert_id\": $json.alert_id, \"notified_at\": $json._notify.formatted_at } }}",
+        "options": {}
+      },
+      "id": "wf2-respond",
+      "name": "Respond - Notified",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1340, 300]
+    }
+  ],
+  "connections": {
+    "Webhook - L1 Notify": {
+      "main": [
+        [
+          {
+            "node": "Validate Token",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Token": {
+      "main": [
+        [
+          {
+            "node": "Format Notification",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Notification": {
+      "main": [
+        [
+          {
+            "node": "Email - L1 Alert",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Slack - L1 Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Email - L1 Alert": {
+      "main": [
+        [
+          {
+            "node": "Respond - Notified",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Slack - L1 Alert": {
+      "main": [
+        [
+          {
+            "node": "Respond - Notified",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "wf2-notify-v2b-fixed",
+  "id": "wf2-soc-analyst-notify",
+  "meta": {
+    "instanceId": "soc-lab",
+    "description": "Phase 2B L1 notification FIXED: real token validation ($env secret exact match, reject missing/wrong, never log), summary-only (no full_log), fail-open, audit attempt/result via triage-api, no destructive, no autonomous, contain_requested creates an approval-required request; no containment action is executed."
+  },
+  "pinData": {},
+  "tags": [
+    {
+      "name": "soc",
+      "createdAt": "2026-08-30"
+    },
+    {
+      "name": "phase-2b",
+      "createdAt": "2026-08-30"
+    },
+    {
+      "name": "security-fix",
+      "createdAt": "2026-08-30"
+    }
+  ]
+}

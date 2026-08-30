@@ -4,11 +4,19 @@ n8n owns everything that happens *after* the Triage API decides: notification fa
 SLA escalation timers, incident creation, the analyst feedback form, and the daily
 digest. Design: [ARCHITECTURE.md §11](../ARCHITECTURE.md#11-n8n-workflow-architecture).
 
-**Status: scaffolded — workflow JSONs land with Phases 1–3.**
+**Phase 2B — Implemented (FIXED):**
+- WF1_soc-triage-router: webhook `/webhook/soc-alert-scored`, **real shared-secret validation** against `$env.N8N_CALLBACK_TOKEN` / `$env.N8N_WEBHOOK_TOKEN` (exact match, reject missing/wrong, accept exact, never log token, never place secret in JSON), payload schema validation (no full_log), severity-based routing. No secrets, no destructive, no autonomous, fail-open.
+- WF2_soc-analyst-notify: L1 notification (email via SMTP credential ref + optional chat webhook), structured payload with alert_id, severity, score, decision, rule info, recurrence, IOC summary, enrichment summary, investigation links. Real token validation, summary-only (no full_log). **contain_requested creates an approval-required request; no containment action is executed.**
+- WF3_soc-incident-escalation: high-severity escalation (urgent email+chat, SLA timer 15m, **ack check via GET /api/v1/alerts/{id}/feedback/status read-only** returning acknowledged bool, has_feedback, latest_verdict, feedback_count, acknowledged_at, NOT POST misuse), L2 escalation if not acknowledged, **endpoint failure → fail-safe L2 escalation (safe documented behavior)**. Real token validation, no secrets, no autonomous containment. **contain_requested creates an approval-required request; no containment action is executed.**
+- WF5_soc-analyst-feedback: analyst acknowledgement form → POST `/api/v1/alerts/{id}/feedback` with shared token, verdict allow-list validation, **contain_requested creates an approval-required request; no containment action is executed (no host isolation, no user disable, no autonomous).** Real token validation (exact match, reject missing/wrong, never log).
 
 ```
 n8n/
 └── workflows/           # exported workflow JSON (WF1–WF6), one file per workflow
+    ├── WF1_soc-triage-router.json
+    ├── WF2_soc-analyst-notify.json
+    ├── WF3_soc-incident-escalation.json
+    └── WF5_soc-analyst-feedback.json
 ```
 
 ## Conventions
@@ -18,4 +26,43 @@ n8n/
   n8n's encrypted credential store (`N8N_ENCRYPTION_KEY`). See [SECURITY.md §2](../SECURITY.md#2-secrets-management).
 - Exported files are named `WF<number>_<name>.json` and must be re-exported on change
   (the n8n UI is not the source of truth — this directory is).
-- An import guide + screenshots land here in Phase 1 alongside WF1/WF2.
+- **Security:** no full_log forwarding, no destructive actions, no autonomous containment, human approval required for response actions.
+- **Resilience:** timeout, retry, fail-open — n8n failure never corrupts alert (triaged-api audits attempt/result).
+
+## Phase 2B Integration Details
+
+### Triage API → n8n (outbound)
+
+- Env: `N8N_WEBHOOK_URL` (empty = disabled, fail-open), `N8N_WEBHOOK_TOKEN` (shared token, fallback to `N8N_CALLBACK_TOKEN`)
+- Payload: structured, validated via Pydantic, contains alert_id, severity/risk tier, score, decision, rule info, recurrence, IOC summary, enrichment summary, investigation links
+- Security: no full_log, no secrets, payload hash for dedup, host-only logging
+- Resilience: timeout 3s default, max retries 3 with exponential backoff + jitter, retry on 429/5xx only, fail-open (alert always accepted)
+- Duplicate prevention: exact duplicates never notify; repo check prevents re-notify same alert_id; audit entries `notification.attempt/delivered/failed/skipped/duplicate_suppressed`
+
+### n8n → Triage API (inbound feedback + status)
+
+- Endpoint: `POST /api/v1/alerts/{id}/feedback` requires shared token via `X-N8N-Token` / `X-Callback-Token` / `Authorization: Bearer` — real validation (exact match, constant-time compare in Python, reject missing/wrong, accept exact, fail-closed when not configured, never log token)
+- Endpoint (FIXED): `GET /api/v1/alerts/{id}/feedback/status` read-only, returns `acknowledged` bool, `has_feedback`, `latest_verdict`, `feedback_count`, `acknowledged_at`, `checked_at` — used by WF3 after SLA wait (NOT POST misuse). If endpoint fails, WF3 fail-safe escalates to L2 (safe documented behavior).
+- Validates verdict allow-list: true_positive, false_positive, benign, escalate, acknowledged, resolved, contain_requested — **contain_requested creates an approval-required request; no containment action is executed (no host isolation, no user disable, no autonomous containment)**
+- Persists to `analyst_feedback` table + audit `feedback.received`
+- Security regression tests: missing token→rejected, wrong token→rejected, correct token→accepted (Python + workflow JSON), acknowledged→no L2 escalation, not acknowledged→L2 escalation, endpoint failure→safe escalation
+
+### Import Guide
+
+1. In n8n UI, go to Workflows → Import from File → select JSON from `n8n/workflows/`
+2. Configure credentials:
+   - SMTP: create SMTP credential (lab: Mailpit host mailpit:1025, no auth), name it `smtp_lab_credential_ref` or update workflow credential reference
+   - No secrets in JSON — only references
+3. Set env vars in n8n container:
+   - `N8N_CALLBACK_TOKEN` (shared token)
+   - `N8N_WEBHOOK_BASE_URL` (e.g. http://n8n:5678)
+   - `TRIAGE_API_URL` (e.g. http://triage-api:8000)
+   - `SOC_ANALYST_EMAILS`, `SOC_L2_EMAILS`, `SMTP_FROM`, `CHAT_WEBHOOK_URL`
+4. Activate workflows: WF1, WF2, WF3, WF5 (order matters: router calls others via webhook)
+5. Test: `./scripts/send_test_alert.py docs/sample-alerts/01_wazuh_ssh_brute_force.json` → check Mailpit UI at :8025 and audit_log
+
+## Testing
+
+- Unit: `pytest app/tests/unit/test_n8n_*.py`
+- Integration: `pytest app/tests/integration/test_n8n_integration.py`
+- Coverage: payload schema validation, successful delivery, timeout, HTTP error, retry, invalid token, n8n unavailable, duplicate prevention, secret leakage

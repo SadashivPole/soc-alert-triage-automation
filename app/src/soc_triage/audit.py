@@ -1,4 +1,4 @@
-"""Append-only audit trail (Phase 1D).
+"""Append-only audit trail (Phase 1D + 2B).
 
 Implements ARCHITECTURE.md §15: an append-only ``audit_log`` recording
 *who/what/when/before→after* for every meaningful state change. The table
@@ -28,9 +28,14 @@ from .models.assessment import Decision, RiskAssessment
 ACTOR_INGEST = "ingest"
 ACTOR_SCORING = "scoring"
 ACTOR_DECISION = "decisions"
+ACTOR_N8N = "n8n"
+ACTOR_ANALYST = "analyst"
+ACTOR_SYSTEM = "system"
 
 ENTITY_ALERT = "alert"
 ENTITY_DEDUPE_GROUP = "dedupe_group"
+ENTITY_NOTIFICATION = "notification"
+ENTITY_FEEDBACK = "feedback"
 
 #: "What" — stable action names (surfaced in logs, consoles, and digests).
 ACTION_ALERT_CREATED = "alert.created"
@@ -39,6 +44,14 @@ ACTION_GENERATION_STARTED = "dedupe.generation_started"
 ACTION_CONTENT_DIVERGENCE = "alert.content_divergence"
 ACTION_ALERT_SCORED = "alert.scored"
 ACTION_ALERT_DECIDED = "alert.decided"
+
+# Phase 2B — n8n SOAR integration
+ACTION_NOTIFICATION_ATTEMPT = "notification.attempt"
+ACTION_NOTIFICATION_DELIVERED = "notification.delivered"
+ACTION_NOTIFICATION_FAILED = "notification.failed"
+ACTION_NOTIFICATION_SKIPPED = "notification.skipped"
+ACTION_NOTIFICATION_DUPLICATE_SUPPRESSED = "notification.duplicate_suppressed"
+ACTION_FEEDBACK_RECEIVED = "feedback.received"
 
 
 class AuditEntry(BaseModel):
@@ -221,19 +234,156 @@ def audit_entries_for_assessment(
     ]
 
 
+def audit_entries_for_notification(
+    alert_id: UUID,
+    *,
+    status: str,
+    http_status: int | None = None,
+    error_type: str | None = None,
+    attempts: int = 0,
+    payload_hash: str | None = None,
+    webhook_host: str | None = None,
+    duration_ms: int = 0,
+    duplicate_suppressed: bool = False,
+) -> list[AuditEntry]:
+    """Map a notification result onto audit entries (Phase 2B).
+
+    Emits ``notification.attempt`` always, plus ``delivered`` / ``failed`` /
+    ``skipped`` / ``duplicate_suppressed``. All fields are safe (no secrets,
+    no full payload).
+    """
+    entries: list[AuditEntry] = []
+
+    entries.append(
+        AuditEntry(
+            actor=ACTOR_N8N,
+            action=ACTION_NOTIFICATION_ATTEMPT,
+            entity_type=ENTITY_NOTIFICATION,
+            entity_id=str(alert_id),
+            after={
+                "alert_id": str(alert_id),
+                "status": status,
+                "http_status": http_status,
+                "attempts": attempts,
+                "payload_hash": payload_hash,
+                "webhook_host": webhook_host,
+            },
+        )
+    )
+
+    if duplicate_suppressed:
+        entries.append(
+            AuditEntry(
+                actor=ACTOR_N8N,
+                action=ACTION_NOTIFICATION_DUPLICATE_SUPPRESSED,
+                entity_type=ENTITY_NOTIFICATION,
+                entity_id=str(alert_id),
+                after={
+                    "alert_id": str(alert_id),
+                    "reason": "already_delivered",
+                },
+            )
+        )
+        return entries
+
+    if status == "delivered":
+        entries.append(
+            AuditEntry(
+                actor=ACTOR_N8N,
+                action=ACTION_NOTIFICATION_DELIVERED,
+                entity_type=ENTITY_NOTIFICATION,
+                entity_id=str(alert_id),
+                after={
+                    "alert_id": str(alert_id),
+                    "http_status": http_status,
+                    "attempts": attempts,
+                    "duration_ms": duration_ms,
+                    "webhook_host": webhook_host,
+                },
+            )
+        )
+    elif status == "failed":
+        entries.append(
+            AuditEntry(
+                actor=ACTOR_N8N,
+                action=ACTION_NOTIFICATION_FAILED,
+                entity_type=ENTITY_NOTIFICATION,
+                entity_id=str(alert_id),
+                after={
+                    "alert_id": str(alert_id),
+                    "http_status": http_status,
+                    "error_type": error_type,
+                    "attempts": attempts,
+                    "duration_ms": duration_ms,
+                    "webhook_host": webhook_host,
+                },
+            )
+        )
+    elif status == "skipped":
+        entries.append(
+            AuditEntry(
+                actor=ACTOR_SYSTEM,
+                action=ACTION_NOTIFICATION_SKIPPED,
+                entity_type=ENTITY_NOTIFICATION,
+                entity_id=str(alert_id),
+                after={
+                    "alert_id": str(alert_id),
+                    "reason": "n8n_disabled_or_duplicate",
+                },
+            )
+        )
+
+    return entries
+
+
+def audit_entries_for_feedback(
+    alert_id: UUID,
+    *,
+    verdict: str,
+    actor: str,
+) -> list[AuditEntry]:
+    """Map a feedback receipt onto an audit entry (Phase 2B)."""
+    return [
+        AuditEntry(
+            actor=ACTOR_ANALYST,
+            action=ACTION_FEEDBACK_RECEIVED,
+            entity_type=ENTITY_FEEDBACK,
+            entity_id=str(alert_id),
+            after={
+                "alert_id": str(alert_id),
+                "verdict": verdict,
+                "actor": actor,
+            },
+        )
+    ]
+
+
 __all__ = [
     "ACTION_ALERT_CREATED",
     "ACTION_ALERT_DECIDED",
     "ACTION_ALERT_SCORED",
     "ACTION_CONTENT_DIVERGENCE",
     "ACTION_DUPLICATE_ABSORBED",
+    "ACTION_FEEDBACK_RECEIVED",
     "ACTION_GENERATION_STARTED",
+    "ACTION_NOTIFICATION_ATTEMPT",
+    "ACTION_NOTIFICATION_DELIVERED",
+    "ACTION_NOTIFICATION_DUPLICATE_SUPPRESSED",
+    "ACTION_NOTIFICATION_FAILED",
+    "ACTION_NOTIFICATION_SKIPPED",
+    "ACTOR_ANALYST",
     "ACTOR_DECISION",
     "ACTOR_INGEST",
+    "ACTOR_N8N",
     "ACTOR_SCORING",
+    "ACTOR_SYSTEM",
     "ENTITY_ALERT",
     "ENTITY_DEDUPE_GROUP",
+    "ENTITY_FEEDBACK",
+    "ENTITY_NOTIFICATION",
     "AuditEntry",
     "audit_entries_for_assessment",
     "audit_entries_for_decision",
+    "audit_entries_for_feedback",
+    "audit_entries_for_notification",
 ]

@@ -54,6 +54,28 @@ class Settings(BaseSettings):
         alias="N8N_CALLBACK_TOKEN",
     )
 
+    # ------------------------------------------------------------------
+    # n8n SOAR webhook integration (Phase 2B)
+    # ------------------------------------------------------------------
+    # Outbound webhook from the triage service to n8n (WF1 router).
+    # Empty URL = disabled (fail-open, no notification attempted). When set,
+    # the service POSTs the structured alert payload with timeout/retry and
+    # audits the result — n8n failure never corrupts the alert (ARCH §16).
+    n8n_webhook_url: str = Field(default="", alias="N8N_WEBHOOK_URL")
+    # Shared authentication token for service ↔ n8n. If N8N_WEBHOOK_TOKEN is
+    # empty but N8N_CALLBACK_TOKEN is configured, the callback token is used
+    # as the shared secret (single-token deployment). Empty = no auth header
+    # sent (n8n workflow should still validate when token is configured).
+    n8n_webhook_token: SecretStr = Field(
+        default_factory=lambda: SecretStr(""),
+        alias="N8N_WEBHOOK_TOKEN",
+    )
+    n8n_timeout_seconds: float = Field(default=3.0, alias="N8N_TIMEOUT_SECONDS", ge=0.5, le=30.0)
+    n8n_max_retries: int = Field(default=3, alias="N8N_MAX_RETRIES", ge=1, le=10)
+    n8n_retry_backoff_seconds: float = Field(
+        default=0.5, alias="N8N_RETRY_BACKOFF_SECONDS", ge=0.0, le=10.0
+    )
+
     # Threat-intelligence enrichment (Phase 2A). Both providers are optional
     # and **disabled by default**: an empty key (and, for MISP, an empty URL)
     # means the provider is never called (disable-by-empty, ARCHITECTURE.md §14).
@@ -73,6 +95,26 @@ class Settings(BaseSettings):
     def cors_origins(self) -> list[str]:
         """Parse the comma-separated CORS origins into a clean list."""
         return [origin.strip() for origin in self.triage_cors_origins.split(",") if origin.strip()]
+
+    @property
+    def n8n_enabled(self) -> bool:
+        """Whether outbound n8n notification is enabled (URL non-empty)."""
+        return bool(self.n8n_webhook_url.strip())
+
+    @property
+    def effective_n8n_token(self) -> str:
+        """Resolve the shared token used for service ↔ n8n authentication.
+
+        Preference: explicit N8N_WEBHOOK_TOKEN, else N8N_CALLBACK_TOKEN (shared
+        token deployment). Empty string means no auth header is sent.
+        """
+        webhook = self.n8n_webhook_token.get_secret_value().strip()
+        if webhook:
+            return webhook
+        callback = self.n8n_callback_token.get_secret_value().strip()
+        if callback and not callback.lower().startswith(_PLACEHOLDER_PREFIX):
+            return callback
+        return webhook
 
     @field_validator("soc_log_level")
     @classmethod
@@ -94,6 +136,7 @@ class Settings(BaseSettings):
         secret_fields = {
             "triage_ingest_api_key": self.triage_ingest_api_key.get_secret_value(),
             "n8n_callback_token": self.n8n_callback_token.get_secret_value(),
+            "n8n_webhook_token": self.n8n_webhook_token.get_secret_value(),
             "virustotal_api_key": self.virustotal_api_key.get_secret_value(),
             "misp_api_key": self.misp_api_key.get_secret_value(),
         }

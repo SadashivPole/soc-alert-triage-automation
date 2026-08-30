@@ -2,7 +2,9 @@
 
 Accepts Wazuh-shaped alert JSON, validates the schema, normalizes to the
 canonical format, extracts IOCs and runs the enrichment chain (Phase 1E),
-then deduplicates (Phase 1C) and returns the canonical alert of record.
+then deduplicates (Phase 1C), scores (Phase 1F), decides (Phase 1F) and
+notifies n8n (Phase 2B).
+
 This module is routing/orchestration only — deduplication lives in
 :mod:`soc_triage.ingest.deduplication` and extraction/enrichment in
 :mod:`soc_triage.enrichment` (ARCHITECTURE.md §12: domain packages never
@@ -21,6 +23,10 @@ Response contract (ARCHITECTURE.md §6, §16):
   re-delivery is idempotent. Nothing is discarded: the duplicate delivery is
   counted (``dedupe.duplicate_deliveries``) and logged.
 
+Phase 2B: after scoring, the alert is notified to n8n via a structured
+payload (no full_log, no secrets). n8n failure never corrupts or loses the
+alert (fail-open, ARCHITECTURE.md §16).
+
 Based on ARCHITECTURE.md §6 and SECURITY.md §3.
 """
 
@@ -37,7 +43,7 @@ from pydantic import ValidationError
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import sessionmaker
 
-from ..audit import audit_entries_for_assessment
+from ..audit import audit_entries_for_assessment, audit_entries_for_notification
 from ..core.errors import error_response
 from ..core.logging import get_logger
 from ..db.errors import StorageError
@@ -49,13 +55,20 @@ from ..ingest.normalizer import normalize_wazuh_alert
 from ..ingest.schemas import WazuhAlert
 from ..models.assessment import Decision, RiskAssessment
 from ..models.canonical import CanonicalAlert
-from ..models.repositories import AlertRepository, AuditRepository
+from ..models.repositories import (
+    AlertRepository,
+    AuditRepository,
+    NotificationRepository,
+)
+from ..notifications import build_n8n_payload
 from .dependencies import (
     DeciderDependency,
     DeduplicatorDependency,
     EnrichmentChainDependency,
+    N8NClientDependency,
     ScorerDependency,
     SessionFactoryDependency,
+    SettingsDependency,
 )
 
 logger = get_logger("soc_triage.ingest")
@@ -89,9 +102,11 @@ async def ingest_alert(
     scorer: ScorerDependency,
     decider: DeciderDependency,
     session_factory: SessionFactoryDependency,
+    settings: SettingsDependency,
+    n8n_client: N8NClientDependency,
     _: None = RequireApiKey,
 ) -> JSONResponse:
-    """Ingest, validate, extract IOCs, deduplicate, score, and decide an alert.
+    """Ingest, validate, extract IOCs, deduplicate, score, decide and notify n8n.
 
     Returns:
         202 with the canonical alert (new or recurring within the window),
@@ -154,9 +169,6 @@ async def ingest_alert(
     received_at = _utc_now()
     try:
         canonical = normalize_wazuh_alert(wazuh_alert, received_at=received_at)
-        # Extraction is pure and cheap; running it before the deduplication
-        # write means the alert *of record* carries its indicators (they are
-        # persisted with the canonical payload, ARCHITECTURE.md §5.2).
         iocs = extract_iocs(canonical)
         enrichment = enrichment_chain.enrich(
             iocs,
@@ -174,8 +186,6 @@ async def ingest_alert(
         )
         outcome = deduplicator.process(wazuh_alert, canonical, received_at)
     except InvalidDedupeInputError as exc:
-        # Invalid identity inputs (e.g. blank rule/agent id): surface as a
-        # validation error instead of guessing an identity.
         logger.info(
             "alert_identity_validation_failed",
             component="ingest",
@@ -188,10 +198,6 @@ async def ingest_alert(
             details={"reason": str(exc)},
         )
     except StorageError:
-        # The persistence layer failed (already rolled back, already logged
-        # with context by the deduplicator). Per ARCHITECTURE.md §16, ingest
-        # answers a *retryable* 503 — the Wazuh integrator buffers and
-        # retries. No database internals are ever included in the response.
         logger.warning(
             "ingest_storage_unavailable",
             component="ingest",
@@ -205,17 +211,9 @@ async def ingest_alert(
         )
 
     is_duplicate = outcome.status is DedupeStatus.EXACT_DUPLICATE
-    # The alert *of record* owns the indicators: for an exact duplicate the
-    # response echoes the original's IOCs, never a second extraction of the
-    # same delivery (idempotency, ARCHITECTURE.md §16).
     recorded_iocs = outcome.canonical_alert.iocs
 
     # --- Score & decide (Phase 1F) ---
-    # Scoring/decisioning are deterministic and offline. For an exact
-    # duplicate the preserved original alert already carries its persisted
-    # assessment (from the first delivery), so we echo it unchanged rather
-    # than re-scoring (idempotency). Otherwise we score, decide, and persist
-    # the assessment back onto the alert of record, then audit both.
     if is_duplicate:
         assessed = outcome.canonical_alert
     else:
@@ -239,6 +237,7 @@ async def ingest_alert(
             decision=decision.action.value,
             degraded=risk.degraded,
         )
+
     logger.info(
         "iocs_extracted",
         component="enrichment",
@@ -262,6 +261,40 @@ async def ingest_alert(
         duplicate_deliveries=outcome.dedupe.duplicate_deliveries,
     )
 
+    # --- n8n notification (Phase 2B) — fail-open, never blocks ingest ---
+    notification_result = None
+    if not is_duplicate:
+        try:
+            # Build investigation base URL from settings when possible (host/port)
+            # 0.0.0.0 is replaced with localhost for link generation
+            host = settings.triage_api_host
+            if host == "0.0.0.0":
+                host = "localhost"
+            base_url = f"http://{host}:{settings.triage_api_port}"
+            notification_result = _notify_n8n(
+                session_factory=session_factory,
+                n8n_client=n8n_client,
+                alert=assessed,
+                dedupe_status=outcome.status.value,
+                received_at=received_at,
+                investigation_base_url=base_url,
+            )
+        except Exception as exc:  # defensive: notification must never crash ingest
+            logger.error(
+                "n8n_notification_unexpected_error",
+                component="notifications",
+                alert_id=str(outcome.alert_id),
+                error_type=type(exc).__name__,
+            )
+            notification_result = None
+    else:
+        logger.info(
+            "n8n_notification_skipped_duplicate",
+            component="notifications",
+            alert_id=str(outcome.alert_id),
+            reason="exact_duplicate",
+        )
+
     return JSONResponse(
         status_code=(status.HTTP_200_OK if is_duplicate else status.HTTP_202_ACCEPTED),
         content={
@@ -276,8 +309,137 @@ async def ingest_alert(
             "risk": assessed.risk.model_dump(mode="json") if assessed.risk else None,
             "decision": assessed.decision.model_dump(mode="json") if assessed.decision else None,
             "normalized": assessed.model_dump(mode="json"),
+            "notification": (
+                {
+                    "attempted": notification_result.attempted,
+                    "delivered": notification_result.delivered,
+                    "skipped": notification_result.skipped,
+                    "status_code": notification_result.status_code,
+                    "attempts": notification_result.attempts,
+                }
+                if notification_result
+                else None
+            ),
         },
     )
+
+
+def _notify_n8n(
+    *,
+    session_factory: sessionmaker,
+    n8n_client: Any,
+    alert: CanonicalAlert,
+    dedupe_status: str,
+    received_at: datetime,
+    investigation_base_url: str | None = None,
+) -> Any:
+    """Notify n8n with duplicate prevention, persistence and audit (fail-open).
+
+    Returns the :class:`NotificationResult` or None if notification is disabled.
+    Never raises — failures are logged and audited, but the alert itself is
+    already durable.
+    """
+    from ..notifications.client import NotificationResult
+
+    # Duplicate prevention: if this alert_id already delivered, skip
+    try:
+        with session_scope(session_factory) as session:
+            notif_repo = NotificationRepository(session)
+            if notif_repo.has_delivered(alert.alert_id):
+                logger.info(
+                    "n8n_notification_duplicate_suppressed",
+                    component="notifications",
+                    alert_id=str(alert.alert_id),
+                )
+                # Audit duplicate suppression
+                audit_repo = AuditRepository(session)
+
+                result = NotificationResult(
+                    alert_id=str(alert.alert_id),
+                    attempted=False,
+                    delivered=False,
+                    skipped=True,
+                    status_code=None,
+                    error_type=None,
+                    attempts=0,
+                    duration_ms=0,
+                    webhook_host=None,
+                    payload_hash="duplicate",
+                )
+                audit_repo.append(
+                    audit_entries_for_notification(
+                        alert.alert_id,
+                        status="skipped",
+                        payload_hash="duplicate",
+                        duplicate_suppressed=True,
+                    ),
+                    occurred_at=received_at,
+                )
+                return result
+    except Exception as exc:
+        # If duplicate check fails, proceed to attempt notification anyway
+        # (fail-open for the check itself)
+        logger.warning(
+            "n8n_duplicate_check_failed",
+            component="notifications",
+            alert_id=str(alert.alert_id),
+            error_type=type(exc).__name__,
+        )
+
+    # Build payload (pure, no I/O) — investigation base from settings if available
+    try:
+        payload = build_n8n_payload(
+            alert,
+            dedupe_status=dedupe_status,
+            investigation_base_url=investigation_base_url,
+        )
+    except Exception as exc:
+        logger.warning(
+            "n8n_payload_build_failed",
+            component="notifications",
+            alert_id=str(alert.alert_id),
+            error_type=type(exc).__name__,
+        )
+        return None
+
+    # Send (with retry, timeout — client handles fail-open)
+    result = n8n_client.send(payload)
+
+    # Persist attempt + audit (best-effort, never crash ingest)
+    try:
+        with session_scope(session_factory) as session:
+            NotificationRepository(session).record(result, occurred_at=received_at)
+            AuditRepository(session).append(
+                audit_entries_for_notification(
+                    alert.alert_id,
+                    status="delivered"
+                    if result.delivered
+                    else ("skipped" if result.skipped else "failed"),
+                    http_status=result.status_code,
+                    error_type=result.error_type,
+                    attempts=result.attempts,
+                    payload_hash=result.payload_hash,
+                    webhook_host=result.webhook_host,
+                    duration_ms=result.duration_ms,
+                ),
+                occurred_at=received_at,
+            )
+    except SQLAlchemyError as exc:
+        logger.error(
+            "n8n_notification_persistence_failed",
+            component="notifications",
+            alert_id=str(alert.alert_id),
+            error_type=type(exc).__name__,
+        )
+    except Exception as exc:
+        logger.error(
+            "n8n_notification_audit_failed",
+            component="notifications",
+            alert_id=str(alert.alert_id),
+            error_type=type(exc).__name__,
+        )
+
+    return result
 
 
 def _persist_assessment(
@@ -289,15 +451,7 @@ def _persist_assessment(
     decision: Decision,
     occurred_at: datetime,
 ) -> None:
-    """Persist a scored alert's assessment + audit entries (best-effort).
-
-    The alert row already exists (the deduplicator committed it); this writes
-    the risk assessment and decision back onto its canonical payload and
-    appends the ``alert.scored`` / ``alert.decided`` audit entries in one
-    atomic unit of work. A storage failure here is logged and the assessment
-    is still returned in the response — the alert itself is already durable,
-    and re-scoring can recover the assessment (fail-open, ARCHITECTURE §16).
-    """
+    """Persist a scored alert's assessment + audit entries (best-effort)."""
     try:
         with session_scope(session_factory) as session:
             AlertRepository(session).update_normalized_payload(alert_id, canonical)

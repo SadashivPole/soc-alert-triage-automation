@@ -1,4 +1,4 @@
-"""SQLAlchemy ORM models for persistent storage (Phase 1D).
+"""SQLAlchemy ORM models for persistent storage (Phase 1D + 2B).
 
 Schema design (SQLite for the MVP; the same DDL runs on PostgreSQL later —
 ARCHITECTURE.md §19):
@@ -20,6 +20,12 @@ ARCHITECTURE.md §19):
 * ``audit_log`` — append-only audit trail (ARCHITECTURE.md §15): actor,
   action, entity, before/after JSON, timestamp. Repositories only ever INSERT
   here.
+* ``notification_attempts`` — outbound n8n webhook attempts (Phase 2B):
+  alert_id, status, http code, error type, retry count, payload hash,
+  webhook host (never full URL/token). Used for duplicate notification
+  prevention and audit.
+* ``analyst_feedback`` — analyst acknowledgement/feedback via n8n callback
+  (Phase 2B): alert_id, verdict, notes, actor, timestamp.
 
 Timestamps are stored as UTC (normalized on write/read by the repositories).
 """
@@ -143,10 +149,65 @@ class AuditEvent(Base):
     after: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
 
 
+class NotificationAttempt(Base):
+    """Outbound n8n notification attempt (Phase 2B).
+
+    One row per attempt (including retries aggregated as one logical attempt
+    with ``retry_count``). The full payload is **never** stored — only a hash
+    and safe metadata (host, status). This prevents secret leakage and
+    avoids storing large blobs (SECURITY.md §5).
+    """
+
+    __tablename__ = "notification_attempts"
+
+    id: Mapped[int] = mapped_column(
+        BigInteger().with_variant(Integer, "sqlite"), primary_key=True, autoincrement=True
+    )
+    alert_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("alerts.alert_id"), nullable=False, index=True
+    )
+    attempted_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, index=True
+    )
+    status: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    http_status: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    error_type: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    retry_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    payload_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    webhook_host: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    duration_ms: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+
+class AnalystFeedback(Base):
+    """Analyst acknowledgement / feedback via n8n callback (Phase 2B).
+
+    Stores the analyst verdict for an alert. Verdicts are audited and can
+    feed future tuning (ARCHITECTURE.md §10). No destructive actions are
+    stored here — only human decisions.
+    """
+
+    __tablename__ = "analyst_feedback"
+
+    id: Mapped[int] = mapped_column(
+        BigInteger().with_variant(Integer, "sqlite"), primary_key=True, autoincrement=True
+    )
+    alert_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("alerts.alert_id"), nullable=False, index=True
+    )
+    received_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, index=True
+    )
+    actor: Mapped[str] = mapped_column(String(128), nullable=False)
+    verdict: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    notes: Mapped[str | None] = mapped_column(String(2000), nullable=True)
+
+
 __all__ = [
     "Alert",
     "AlertDedupeGroup",
     "AlertEvent",
+    "AnalystFeedback",
     "AuditEvent",
     "Base",
+    "NotificationAttempt",
 ]
