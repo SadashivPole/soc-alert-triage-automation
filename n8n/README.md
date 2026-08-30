@@ -51,9 +51,12 @@ n8n/
 
 #### Docker Compose (Phase 2C lab)
 
-`docker compose up` runs `scripts/n8n-import-workflows.sh` inside the n8n
-container before `n8n start`. The helper deterministically imports and activates
-WF1, WF2, WF3 and WF5 from `n8n/workflows/`.
+The Phase 2C sandbox did **not** execute the Docker/n8n/Mailpit runtime. This
+section describes the configured startup behavior and is statically validated.
+
+The compose service is configured to run `scripts/n8n-import-workflows.sh`
+inside the n8n container before `n8n start`. The helper deterministically
+imports and activates WF1, WF2, WF3 and WF5 from `n8n/workflows/`.
 
 - Workflow JSONs are mounted read-only at `/workflows`.
 - The JSONs contain stable ids, so re-running startup updates the existing
