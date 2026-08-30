@@ -76,9 +76,7 @@ def upgrade() -> None:
         batch_op.create_index(
             batch_op.f("ix_analyst_feedback_received_at"), ["received_at"], unique=False
         )
-        batch_op.create_index(
-            batch_op.f("ix_analyst_feedback_verdict"), ["verdict"], unique=False
-        )
+        batch_op.create_index(batch_op.f("ix_analyst_feedback_verdict"), ["verdict"], unique=False)
 
 
 def downgrade() -> None:
