@@ -276,7 +276,7 @@ class BaseHTTPThreatIntelProvider(ABC):
         """
 
     def _lookup_one(self, ioc: IOC) -> LookupRecord:
-        base = dict(
+        base: dict[str, Any] = dict(
             provider=self.name,
             indicator_type=ioc.type.value,
             timestamp=self._now().isoformat(),

@@ -23,8 +23,16 @@ from sqlalchemy.orm import Session
 
 from ..audit import AuditEntry
 from ..ingest.deduplication import EventRecord, GroupState
+from ..notifications.client import NotificationResult
 from .canonical import CanonicalAlert
-from .orm import Alert, AlertDedupeGroup, AlertEvent, AuditEvent
+from .orm import (
+    Alert,
+    AlertDedupeGroup,
+    AlertEvent,
+    AnalystFeedback,
+    AuditEvent,
+    NotificationAttempt,
+)
 
 
 def as_utc(value: datetime) -> datetime:
@@ -245,9 +253,110 @@ class AuditRepository:
         return list(self._session.scalars(statement))
 
 
+class NotificationRepository:
+    """Persistence for n8n notification attempts (Phase 2B).
+
+    One row per logical attempt (retries aggregated). Used for duplicate
+    prevention and audit. The full payload is never stored — only a hash.
+    """
+
+    def __init__(self, session: Session) -> None:
+        self._session = session
+
+    def record(self, result: NotificationResult, *, occurred_at: datetime) -> None:
+        """Persist a notification result."""
+        status = "delivered" if result.delivered else ("skipped" if result.skipped else "failed")
+        # For attempted but not delivered, keep "failed" unless skipped
+        if result.attempted and not result.delivered and not result.skipped:
+            status = "failed"
+        elif not result.attempted and result.skipped:
+            status = "skipped"
+
+        self._session.add(
+            NotificationAttempt(
+                alert_id=uuid.UUID(result.alert_id),
+                attempted_at=as_utc(occurred_at),
+                status=status,
+                http_status=result.status_code,
+                error_type=result.error_type,
+                retry_count=result.attempts,
+                payload_hash=result.payload_hash,
+                webhook_host=result.webhook_host,
+                duration_ms=result.duration_ms,
+            )
+        )
+
+    def has_delivered(self, alert_id: uuid.UUID) -> bool:
+        """Whether a successful delivery already exists for alert_id."""
+        stmt = (
+            select(NotificationAttempt.id)
+            .where(NotificationAttempt.alert_id == alert_id)
+            .where(NotificationAttempt.status == "delivered")
+            .limit(1)
+        )
+        return self._session.execute(stmt).first() is not None
+
+    def attempts_for(self, alert_id: uuid.UUID) -> list[NotificationAttempt]:
+        """All attempts for an alert (for tests/observability)."""
+        stmt = (
+            select(NotificationAttempt)
+            .where(NotificationAttempt.alert_id == alert_id)
+            .order_by(NotificationAttempt.attempted_at)
+        )
+        return list(self._session.scalars(stmt))
+
+    def all(self, *, limit: int | None = None) -> list[NotificationAttempt]:
+        stmt = select(NotificationAttempt).order_by(NotificationAttempt.attempted_at)
+        if limit is not None:
+            stmt = stmt.limit(limit)
+        return list(self._session.scalars(stmt))
+
+
+class FeedbackRepository:
+    """Persistence for analyst feedback (Phase 2B)."""
+
+    def __init__(self, session: Session) -> None:
+        self._session = session
+
+    def add(
+        self,
+        *,
+        alert_id: uuid.UUID,
+        actor: str,
+        verdict: str,
+        notes: str | None,
+        received_at: datetime,
+    ) -> AnalystFeedback:
+        row = AnalystFeedback(
+            alert_id=alert_id,
+            received_at=as_utc(received_at),
+            actor=actor,
+            verdict=verdict,
+            notes=notes,
+        )
+        self._session.add(row)
+        return row
+
+    def for_alert(self, alert_id: uuid.UUID) -> list[AnalystFeedback]:
+        stmt = (
+            select(AnalystFeedback)
+            .where(AnalystFeedback.alert_id == alert_id)
+            .order_by(AnalystFeedback.received_at)
+        )
+        return list(self._session.scalars(stmt))
+
+    def all(self, *, limit: int | None = None) -> list[AnalystFeedback]:
+        stmt = select(AnalystFeedback).order_by(AnalystFeedback.received_at)
+        if limit is not None:
+            stmt = stmt.limit(limit)
+        return list(self._session.scalars(stmt))
+
+
 __all__ = [
     "AlertRepository",
     "AuditRepository",
     "DedupeStateRepository",
+    "FeedbackRepository",
+    "NotificationRepository",
     "as_utc",
 ]

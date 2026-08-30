@@ -39,7 +39,8 @@ include = ["soc_triage*"]
 minversion = "8.0"
 addopts = "-ra"
 testpaths = ["tests"]
-pythonpath = ["src"]
+pythonpath = ["src", "."]
+import_mode = "importlib"
 
 [tool.ruff]
 line-length = 100

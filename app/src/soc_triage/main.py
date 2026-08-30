@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 
 from fastapi import FastAPI
 from sqlalchemy.exc import SQLAlchemyError
@@ -128,9 +128,34 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             decision_policy=decision_policy.policy_version,
         )
 
+        # --- n8n SOAR webhook integration (Phase 2B) ---
+        # Outbound client: disabled by default (empty URL). When enabled, it
+        # POSTs structured payloads with timeout/retry and fail-open semantics.
+        # The client is stateless; duplicate prevention and audit live in the
+        # notification repository (ARCHITECTURE.md §10, §11).
+        from .notifications import N8NWebhookClient
+
+        n8n_client = N8NWebhookClient(
+            webhook_url=app_settings.n8n_webhook_url,
+            token=app_settings.effective_n8n_token,
+            timeout_seconds=app_settings.n8n_timeout_seconds,
+            max_retries=app_settings.n8n_max_retries,
+            retry_backoff_seconds=app_settings.n8n_retry_backoff_seconds,
+        )
+        _app.state.n8n_client = n8n_client
+        logger.info(
+            "n8n_ready",
+            component="main",
+            enabled=n8n_client.enabled,
+            timeout_seconds=app_settings.n8n_timeout_seconds,
+            max_retries=app_settings.n8n_max_retries,
+        )
+
         try:
             yield
         finally:
+            with suppress(Exception):
+                n8n_client.close()
             engine.dispose()
             logger.info("application_stopped", component="main")
 

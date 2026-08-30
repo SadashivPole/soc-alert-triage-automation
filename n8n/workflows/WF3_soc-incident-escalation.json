@@ -1,0 +1,283 @@
+{
+  "name": "WF3_soc-incident-escalation",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "soc-incident-escalation",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "wf3-webhook-escalation",
+      "name": "Webhook - Escalation",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [460, 300],
+      "webhookId": "soc-incident-escalation-webhook-id",
+      "notes": "High-severity escalation entry. Token from env credential reference. SLA timers + feedback status check via GET /feedback/status (read-only)."
+    },
+    {
+      "parameters": {
+        "functionCode": "// Real token validation (Phase 2B fix)\n// Token from env credential, exact match only, reject missing/wrong, never log\nconst headers = $input.first().json.headers || $json.headers || {};\nconst body = $input.first().json.body || $json.body || $json;\n\nconst expected = ($env.N8N_WEBHOOK_TOKEN || $env.N8N_CALLBACK_TOKEN || '').trim();\nif (!expected) {\n  throw new Error('Server misconfigured: shared token not set in n8n env');\n}\nconst authHeader = (headers['authorization'] || '').trim();\nconst bearer = authHeader.toLowerCase().startsWith('bearer ') ? authHeader.slice(7).trim() : '';\nconst supplied = (headers['x-n8n-token'] || headers['x-callback-token'] || bearer || '').trim();\nif (!supplied) {\n  throw new Error('Missing authentication token - X-N8N-Token required');\n}\nif (supplied !== expected) {\n  throw new Error('Invalid authentication token');\n}\n\n// No full_log defense\nconst payloadStr = JSON.stringify(body).toLowerCase();\nif (payloadStr.includes('full_log')) {\n  throw new Error('Security violation: payload must not contain full_log');\n}\n\nconst payload = body.payload ? body.payload : body;\nreturn { json: payload };"
+      },
+      "id": "wf3-validate",
+      "name": "Validate Token",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [680, 300],
+      "notes": "Real shared-secret validation against $env secret. Reject missing/wrong, accept exact. Never log token. No destructive, no autonomous."
+    },
+    {
+      "parameters": {
+        "functionCode": "// Format high-severity notification with SLA context\nconst alert = $input.first().json;\nconst severity = (alert.severity || 'critical').toUpperCase();\nconst triageBase = $env.TRIAGE_API_BASE_URL || 'http://triage-api:8000';\nconst feedbackUrl = (alert.investigation_links && alert.investigation_links.feedback_url) || `${triageBase}/api/v1/alerts/${alert.alert_id}/feedback`;\nconst statusUrl = `${triageBase}/api/v1/alerts/${alert.alert_id}/feedback/status`;\n\nconst subject = `[SOC][${severity}][ESCALATION] Alert ${alert.alert_id} requires immediate review`;\nconst bodyText = `\n*** HIGH SEVERITY ESCALATION ***\nAlert ID: ${alert.alert_id}\nSeverity: ${severity}\nScore: ${alert.score}\nDecision: ${(alert.decision && alert.decision.severity) || 'SEV1'}\nRule: ${alert.rule}\nIOCs: ${JSON.stringify(alert.iocs || {})}\n\nInvestigation:\n- SIEM: ${(alert.investigation_links && alert.investigation_links.siem_search_url) || 'n/a'}\n- Timeline: ${(alert.investigation_links && alert.investigation_links.timeline_url) || 'n/a'}\n- Feedback: ${feedbackUrl}\n- Status (GET): ${statusUrl}\n\nSLA: 15m ack required. If not acknowledged, auto-escalates to L2.\n\nNote: contain_requested creates an approval-required request; no containment action is executed. Human approval required, no autonomous containment.\n`;\n\nreturn {\n  json: {\n    ...alert,\n    _escalation: {\n      subject,\n      bodyText,\n      feedbackUrl,\n      statusUrl,\n      escalated_at: new Date().toISOString(),\n      sla_minutes: 15\n    }\n  }\n};"
+      },
+      "id": "wf3-format",
+      "name": "Format Escalation",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [900, 300],
+      "notes": "Formats high-severity escalation. Includes GET status URL for SLA check. No full_log. contain_requested creates an approval-required request; no containment action is executed - human approval only."
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{ $env.SOC_FROM_EMAIL || 'soc@example.com' }}",
+        "toEmail": "={{ $env.SOC_L2_EMAIL || $env.SOC_L1_EMAIL || 'soc-l2@example.com' }}",
+        "subject": "={{ $json._escalation.subject }}",
+        "text": "={{ $json._escalation.bodyText }}",
+        "options": {}
+      },
+      "id": "wf3-email-l2",
+      "name": "Email - L2 Escalation",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2,
+      "position": [1120, 200],
+      "notes": "Immediate L2 notification for high/critical. Fail-open."
+    },
+    {
+      "parameters": {
+        "amount": 15,
+        "unit": "minutes"
+      },
+      "id": "wf3-wait-sla",
+      "name": "Wait - 15m SLA",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1,
+      "position": [1120, 400],
+      "notes": "SLA wait 15m for acknowledgement. After wait, check feedback status via GET /feedback/status (read-only). If acknowledged -> no L2 re-escalation. If not -> escalate. Endpoint failure -> fail-safe escalation to L2 (safe documented behavior)."
+    },
+    {
+      "parameters": {
+        "url": "={{ $json._escalation.statusUrl }}",
+        "sendQuery": false,
+        "sendBody": false,
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-N8N-Token",
+              "value": "={{ $env.N8N_CALLBACK_TOKEN }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 5000,
+          "retryOnFail": true,
+          "maxRetries": 2,
+          "alwaysOutputData": true,
+          "continueOnFail": true
+        }
+      },
+      "id": "wf3-check-ack",
+      "name": "HTTP - Check Ack Status (GET)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1340, 400],
+      "notes": "CRITICAL FIX Phase 2B: Read-only GET /api/v1/alerts/{id}/feedback/status to check acknowledgement. NOT POST /feedback (previous misuse). Returns acknowledged bool, has_feedback, latest_verdict, feedback_count, acknowledged_at. Token from env credential $env.N8N_CALLBACK_TOKEN. If endpoint fails, fail-safe to escalation (safe behavior)."
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.acknowledged }}",
+              "value2": true
+            }
+          ]
+        },
+        "options": {
+          "fallbackOutput": "extra",
+          "allMatching": false
+        }
+      },
+      "id": "wf3-switch-ack",
+      "name": "Switch - Acknowledged?",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 2,
+      "position": [1560, 400],
+      "notes": "If acknowledged=true (has_feedback with any verdict) -> no L2 escalation. If not acknowledged or endpoint failed (fallback) -> escalate to L2. Fail-safe: endpoint failure results in L2 escalation (documented safe behavior)."
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{ $env.SOC_FROM_EMAIL || 'soc@example.com' }}",
+        "toEmail": "={{ $env.SOC_L2_EMAIL || 'soc-l2@example.com' }}",
+        "subject": "={{ $json._escalation ? $json._escalation.subject + ' [SLA BREACH - L2]' : '[SOC][SLA BREACH] L2 escalation required' }}",
+        "text": "={{ $json._escalation ? $json._escalation.bodyText + '\\n\\n*** SLA BREACH: Not acknowledged within 15m - L2 escalation ***' : 'SLA breach - feedback status check failed or not acknowledged, escalating to L2 (fail-safe). Alert: ' + ($json.alert_id || 'unknown') }}",
+        "options": {}
+      },
+      "id": "wf3-email-l2-sla",
+      "name": "Email - L2 SLA Breach",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2,
+      "position": [1780, 300],
+      "notes": "L2 escalation on SLA breach or status endpoint failure (fail-safe). No autonomous containment. contain_requested creates an approval-required request; no containment action is executed."
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseData": "={{ { \"status\": \"escalated\", \"alert_id\": $json.alert_id || $json._escalation, \"escalated_at\": $json._escalation ? $json._escalation.escalated_at : new Date().toISOString(), \"acknowledged\": $json.acknowledged || false } }}",
+        "options": {}
+      },
+      "id": "wf3-respond",
+      "name": "Respond - Escalated",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [2000, 300]
+    }
+  ],
+  "connections": {
+    "Webhook - Escalation": {
+      "main": [
+        [
+          {
+            "node": "Validate Token",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Token": {
+      "main": [
+        [
+          {
+            "node": "Format Escalation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Escalation": {
+      "main": [
+        [
+          {
+            "node": "Email - L2 Escalation",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Wait - 15m SLA",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait - 15m SLA": {
+      "main": [
+        [
+          {
+            "node": "HTTP - Check Ack Status (GET)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP - Check Ack Status (GET)": {
+      "main": [
+        [
+          {
+            "node": "Switch - Acknowledged?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Switch - Acknowledged?": {
+      "main": [
+        [
+          {
+            "node": "Respond - Escalated",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Email - L2 SLA Breach",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Email - L2 SLA Breach",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Email - L2 SLA Breach": {
+      "main": [
+        [
+          {
+            "node": "Respond - Escalated",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Email - L2 Escalation": {
+      "main": [
+        []
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "wf3-escalation-v2b-fixed",
+  "id": "wf3-soc-incident-escalation",
+  "meta": {
+    "instanceId": "soc-lab",
+    "description": "Phase 2B high-severity escalation FIXED: real token validation ($env secret exact match), SLA 15m wait, then GET /api/v1/alerts/{id}/feedback/status (read-only) to check acknowledged bool, has_feedback, latest_verdict, count, acknowledged_at. If acknowledged -> no L2 escalation, if not acknowledged -> L2 escalation, if endpoint fails -> fail-safe L2 escalation (safe documented). No secrets, no full_log, no destructive, no autonomous containment, contain_requested creates an approval-required request; no containment action is executed."
+  },
+  "pinData": {},
+  "tags": [
+    {
+      "name": "soc",
+      "createdAt": "2026-08-30"
+    },
+    {
+      "name": "phase-2b",
+      "createdAt": "2026-08-30"
+    },
+    {
+      "name": "security-fix",
+      "createdAt": "2026-08-30"
+    },
+    {
+      "name": "sla-fix",
+      "createdAt": "2026-08-30"
+    }
+  ]
+}

@@ -12,6 +12,7 @@ from ..core.config import Settings
 from ..decisions import DecisionEngine
 from ..enrichment import EnrichmentChain
 from ..ingest.deduplication import Deduplicator
+from ..notifications import N8NWebhookClient
 from ..scoring import RiskScorer
 
 
@@ -64,6 +65,12 @@ def get_decider(request: Request) -> DecisionEngine:
     return decider
 
 
+def get_n8n_client(request: Request) -> N8NWebhookClient:
+    """Return the n8n webhook client bound to the running application."""
+    client: N8NWebhookClient = request.app.state.n8n_client
+    return client
+
+
 SettingsDependency = Annotated[Settings, Depends(get_app_settings)]
 DeduplicatorDependency = Annotated[Deduplicator, Depends(get_deduplicator)]
 EnrichmentChainDependency = Annotated[EnrichmentChain, Depends(get_enrichment_chain)]
@@ -71,6 +78,7 @@ DbEngineDependency = Annotated[Engine, Depends(get_db_engine)]
 SessionFactoryDependency = Annotated[sessionmaker, Depends(get_session_factory)]
 ScorerDependency = Annotated[RiskScorer, Depends(get_scorer)]
 DeciderDependency = Annotated[DecisionEngine, Depends(get_decider)]
+N8NClientDependency = Annotated[N8NWebhookClient, Depends(get_n8n_client)]
 
 
 __all__ = [
@@ -78,6 +86,7 @@ __all__ = [
     "DeciderDependency",
     "DeduplicatorDependency",
     "EnrichmentChainDependency",
+    "N8NClientDependency",
     "ScorerDependency",
     "SessionFactoryDependency",
     "SettingsDependency",
@@ -86,6 +95,7 @@ __all__ = [
     "get_decider",
     "get_deduplicator",
     "get_enrichment_chain",
+    "get_n8n_client",
     "get_scorer",
     "get_session_factory",
 ]

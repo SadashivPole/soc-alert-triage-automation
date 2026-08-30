@@ -526,9 +526,14 @@ def test_api_persists_audit_records_for_ingest(db_url: str) -> None:
 
     # New engine over the same file: the rows are durable. Phase 1F appends
     # `alert.scored` + `alert.decided` after each new alert's `alert.created`
-    # (exact duplicates are echoed, never re-scored).
+    # (exact duplicates are echoed, never re-scored). Phase 2B appends
+    # notification audit entries when n8n is disabled (attempt+skipped) for
+    # each new alert.
     audit = _audit_rows(create_app_engine(db_url))
-    assert [e.action for e in audit] == [
+    actions = [e.action for e in audit]
+    # Core sequence without notification actions (for backward compatibility)
+    core_actions = [a for a in actions if not a.startswith("notification.")]
+    assert core_actions == [
         "dedupe.generation_started",
         "alert.created",
         "alert.scored",
@@ -538,6 +543,10 @@ def test_api_persists_audit_records_for_ingest(db_url: str) -> None:
         "alert.scored",
         "alert.decided",
     ]
+    # Phase 2B: notification attempts are audited even when disabled (fail-open)
+    # 2 new alerts → 2 attempts + 2 skipped
+    assert actions.count("notification.attempt") == 2
+    assert actions.count("notification.skipped") == 2
 
 
 # ---------------------------------------------------------------------------
