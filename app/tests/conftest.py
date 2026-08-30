@@ -1,8 +1,15 @@
-"""Shared pytest fixtures for the Phase 1A test suite."""
+"""Shared pytest fixtures for the test suite.
+
+Phase 1D: every test gets an isolated SQLite database (per-test temp file).
+The application factory runs its normal startup path — engine creation plus
+Alembic migrations — against that file, so integration tests exercise the
+same bootstrap the service uses.
+"""
 
 from __future__ import annotations
 
 from collections.abc import Iterator
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -15,13 +22,20 @@ TEST_CALLBACK_TOKEN = "test-callback-token-not-a-real-secret"
 
 
 @pytest.fixture
-def settings() -> Settings:
+def db_url(tmp_path: Path) -> str:
+    """A fresh, isolated SQLite database URL per test."""
+    return f"sqlite:///{tmp_path / 'soc_triage_test.db'}"
+
+
+@pytest.fixture
+def settings(db_url: str) -> Settings:
     """Return a non-placeholder test configuration."""
     return Settings(
         soc_env="test",
         soc_log_level="INFO",
         soc_instance_name="soc-test",
         triage_cors_origins="http://localhost:8080",
+        triage_db_url=db_url,
         triage_ingest_api_key=TEST_INGEST_KEY,
         n8n_callback_token=TEST_CALLBACK_TOKEN,
     )

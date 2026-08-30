@@ -1,4 +1,4 @@
-"""Alert deduplication and idempotency (Phase 1C).
+"""Alert deduplication and idempotency (Phase 1C; persistence in Phase 1D).
 
 Deterministic, unit-testable deduplication of incoming alerts. This module is
 pure domain logic: it never imports FastAPI (ARCHITECTURE.md §12) and performs
@@ -14,8 +14,8 @@ Definitions (ARCHITECTURE.md §6, §16):
       never silently collapse divergent content.
     * Without an event id, the identity is a versioned SHA-256 content hash
       (``wazuh-h1:{digest}``) over the full validated payload, excluding
-      volatile fields (``rule.firedtimes`` — a per-delivery counter that changes
-      between re-fires of the same underlying event).
+      volatile fields (``rule.firedtimes`` — a per-delivery counter that
+      changes between re-fires of the same underlying event).
 * **Deduplication group** — ``rule.id + agent.id``. Repeats of *distinct*
   events from the same rule on the same agent are recurrences of one alert.
 * **Deduplication window** — a configurable sliding window (default 15 min,
@@ -42,8 +42,14 @@ The three distinguishable outcomes:
 State retention is bounded by the window: event records are pruned once no
 delivery for them arrived within the window, so an exact re-delivery older
 than the window is treated as fresh evidence (a new occurrence), never as a
-silent duplicate. In-memory storage is intentional for Phase 1C — the
-deduplication *contract* is what later persistence layers must reproduce.
+silent duplicate.
+
+**Shared state machine.** :func:`decide_delivery` is the single, pure
+implementation of the transitions above. Both storage backends build on it —
+the in-memory :class:`InMemoryDeduplicator` (Phase 1C) and the persistence-
+backed :class:`soc_triage.ingest.persistent_deduplication.PersistentDeduplicator`
+(Phase 1D) — so the idempotency contract is reproduced exactly by the
+database and restored after a restart.
 """
 
 from __future__ import annotations
@@ -227,6 +233,26 @@ class DedupeOutcome(BaseModel):
     canonical_alert: CanonicalAlert
 
 
+class DeliveryDecision(BaseModel):
+    """Pure result of classifying one delivery (see :func:`decide_delivery`).
+
+    Carries the resulting group and event record plus enough *before*
+    snapshots for audit entries and for callers that want to observe what
+    changed. ``group_before``/``record_before`` are ``None`` for a brand-new
+    group or a first-seen event respectively.
+    """
+
+    model_config = {"frozen": True}
+
+    status: DedupeStatus
+    group: GroupState
+    record: EventRecord
+    group_before: GroupState | None = None
+    record_before: EventRecord | None = None
+    content_diverged: bool = False
+    generation_started: bool = False
+
+
 class Deduplicator(Protocol):
     """Deduplication contract implemented by storage backends."""
 
@@ -248,8 +274,139 @@ class Deduplicator(Protocol):
         ...
 
 
+def dedupe_info(group: GroupState, identity: str) -> CanonicalDedupe:
+    """Build the canonical dedupe snapshot for the current group state."""
+    return CanonicalDedupe(
+        group_key=group.group_key,
+        occurrences=group.occurrences,
+        first_seen=_required(group.first_seen, group.group_key),
+        last_seen=_required(group.last_seen, group.group_key),
+        event_identity=identity,
+        generation=group.generation,
+        duplicate_deliveries=group.duplicate_deliveries,
+    )
+
+
+def _prune_expired(group: GroupState, now: datetime, window: timedelta) -> None:
+    """Drop event records whose idempotency horizon (the window) passed."""
+    expired = [
+        identity
+        for identity, record in group.events.items()
+        if now - record.last_delivered_at > window
+    ]
+    for identity in expired:
+        del group.events[identity]
+
+
+def _new_event_record(
+    canonical: CanonicalAlert,
+    identity: str,
+    fingerprint: str,
+    dedupe: CanonicalDedupe,
+    received: datetime,
+) -> EventRecord:
+    preserved = canonical.model_copy(update={"dedupe": dedupe})
+    return EventRecord(
+        event_identity=identity,
+        alert_id=canonical.alert_id,
+        payload_fingerprint=fingerprint,
+        canonical_alert=preserved,
+        first_delivered_at=received,
+        last_delivered_at=received,
+    )
+
+
+def decide_delivery(
+    group: GroupState | None,
+    *,
+    group_key: str,
+    identity: str,
+    fingerprint: str,
+    received: datetime,
+    window: timedelta,
+    canonical: CanonicalAlert,
+) -> DeliveryDecision:
+    """Pure deduplication state machine for one delivery.
+
+    ``group`` is the group's current state (``None`` if untracked); on return
+    the decision's ``group`` is the authoritative new state. No I/O, no
+    logging, no clocks — fully deterministic. Both storage backends share this
+    function so the Phase 1C contract (idempotency, non-extending duplicates,
+    window-bounded retention) holds identically in memory and in the database.
+    """
+    if group is None:
+        new_group = GroupState(group_key=group_key)
+        new_group.generation = 1
+        new_group.occurrences = 1
+        new_group.first_seen = received
+        new_group.last_seen = received
+        dedupe = dedupe_info(new_group, identity)
+        record = _new_event_record(canonical, identity, fingerprint, dedupe, received)
+        new_group.events[identity] = record
+        return DeliveryDecision(
+            status=DedupeStatus.NEW_GENERATION,
+            group=new_group,
+            record=record,
+            generation_started=True,
+        )
+
+    _prune_expired(group, received, window)
+
+    existing = group.events.get(identity)
+    if existing is not None:
+        # Absorb a re-delivery of a known event. Recurrence state
+        # (occurrences/last_seen) deliberately does not change: duplicate
+        # delivery must never extend the window or inflate recurrence. The
+        # delivery is still counted — evidence is preserved.
+        group_before = group.model_copy(deep=True)
+        record_before = existing.model_copy(deep=True)
+        existing.delivery_count += 1
+        content_diverged = existing.payload_fingerprint != fingerprint
+        if content_diverged:
+            existing.content_variants += 1
+            existing.payload_fingerprint = fingerprint
+        existing.last_delivered_at = received
+        group.duplicate_deliveries += 1
+        return DeliveryDecision(
+            status=DedupeStatus.EXACT_DUPLICATE,
+            group=group,
+            record=existing,
+            group_before=group_before,
+            record_before=record_before,
+            content_diverged=content_diverged,
+        )
+
+    group_before = group.model_copy(deep=True)
+    if received - _required(group.last_seen, group.group_key) > window:
+        # Distinct event after the window: start a new generation.
+        group.generation += 1
+        group.occurrences = 1
+        group.first_seen = received
+        group.last_seen = received
+        group.duplicate_deliveries = 0
+        status = DedupeStatus.NEW_GENERATION
+        generation_started = True
+    else:
+        # Distinct event within the window: a recurrence.
+        group.occurrences += 1
+        group.last_seen = received
+        status = DedupeStatus.REPEATED
+        generation_started = False
+
+    dedupe = dedupe_info(group, identity)
+    record = _new_event_record(canonical, identity, fingerprint, dedupe, received)
+    group.events[identity] = record
+    return DeliveryDecision(
+        status=status,
+        group=group,
+        record=record,
+        group_before=group_before,
+        generation_started=generation_started,
+    )
+
+
 class InMemoryDeduplicator:
-    """Thread-safe in-memory deduplicator for Phase 1C.
+    """Thread-safe in-memory deduplicator (Phase 1C).
 
     All state transitions happen under a lock, so concurrent or repeated
     deliveries of the same event serialize deterministically: exactly one
@@ -299,26 +456,45 @@ class InMemoryDeduplicator:
         received = _require_aware(received_at, "received_at")
 
         with self._lock:
-            outcome = self._process_locked(
-                canonical=canonical,
-                identity=identity,
+            decision = decide_delivery(
+                self._groups.get(group_key),
                 group_key=group_key,
+                identity=identity,
                 fingerprint=fingerprint,
                 received=received,
+                window=self._window,
+                canonical=canonical,
             )
+            self._groups[decision.group.group_key] = decision.group
 
-        if outcome.status is DedupeStatus.EXACT_DUPLICATE:
+        if decision.status is DedupeStatus.EXACT_DUPLICATE:
             # Absorbed, not discarded: the delivery is counted and logged so
             # duplicate floods are observable without alert noise.
             logger.info(
                 "duplicate_delivery_absorbed",
                 component="dedupe",
-                dedupe_group=outcome.group_key,
-                alert_id=str(outcome.alert_id),
-                occurrences=outcome.dedupe.occurrences,
-                duplicate_deliveries=outcome.dedupe.duplicate_deliveries,
+                dedupe_group=decision.group.group_key,
+                alert_id=str(decision.record.alert_id),
+                occurrences=decision.group.occurrences,
+                duplicate_deliveries=decision.group.duplicate_deliveries,
             )
-        return outcome
+        if decision.content_diverged:
+            logger.warning(
+                "duplicate_identity_content_divergence",
+                component="dedupe",
+                dedupe_group=decision.group.group_key,
+                alert_id=str(decision.record.alert_id),
+                variants=decision.record.content_variants,
+            )
+
+        return DedupeOutcome(
+            status=decision.status,
+            alert_id=decision.record.alert_id,
+            group_key=decision.group.group_key,
+            event_identity=identity,
+            dedupe=dedupe_info(decision.group, identity),
+            canonical_alert=decision.record.canonical_alert,
+        )
 
     def group_state(self, group_key: str) -> GroupState | None:
         """Return a deep copy of a group's state, or ``None`` if untracked."""
@@ -330,139 +506,6 @@ class InMemoryDeduplicator:
         """Return the number of tracked groups."""
         with self._lock:
             return len(self._groups)
-
-    # ------------------------------------------------------------------
-    # Internals (caller holds the lock)
-    # ------------------------------------------------------------------
-
-    def _prune_expired(self, group: GroupState, now: datetime) -> None:
-        """Drop event records whose idempotency horizon (the window) passed."""
-        expired = [
-            identity
-            for identity, record in group.events.items()
-            if now - record.last_delivered_at > self._window
-        ]
-        for identity in expired:
-            del group.events[identity]
-
-    def _new_event_record(
-        self,
-        canonical: CanonicalAlert,
-        identity: str,
-        fingerprint: str,
-        dedupe: CanonicalDedupe,
-        received: datetime,
-    ) -> EventRecord:
-        preserved = canonical.model_copy(update={"dedupe": dedupe})
-        return EventRecord(
-            event_identity=identity,
-            alert_id=canonical.alert_id,
-            payload_fingerprint=fingerprint,
-            canonical_alert=preserved,
-            first_delivered_at=received,
-            last_delivered_at=received,
-        )
-
-    def _process_locked(
-        self,
-        *,
-        canonical: CanonicalAlert,
-        identity: str,
-        group_key: str,
-        fingerprint: str,
-        received: datetime,
-    ) -> DedupeOutcome:
-        group = self._groups.get(group_key)
-
-        if group is not None:
-            self._prune_expired(group, received)
-
-            record = group.events.get(identity)
-            if record is not None:
-                return self._absorb_exact_duplicate(group, record, fingerprint, received)
-
-            if received - _required(group.last_seen, group.group_key) > self._window:
-                # Distinct event after the window: start a new generation.
-                group.generation += 1
-                group.occurrences = 1
-                group.first_seen = received
-                group.last_seen = received
-                group.duplicate_deliveries = 0
-                status = DedupeStatus.NEW_GENERATION
-            else:
-                # Distinct event within the window: a recurrence.
-                group.occurrences += 1
-                group.last_seen = received
-                status = DedupeStatus.REPEATED
-        else:
-            group = GroupState(group_key=group_key)
-            self._groups[group_key] = group
-            group.generation = 1
-            group.occurrences = 1
-            group.first_seen = received
-            group.last_seen = received
-            status = DedupeStatus.NEW_GENERATION
-
-        dedupe = self._dedupe_info(group, identity)
-        group.events[identity] = self._new_event_record(
-            canonical, identity, fingerprint, dedupe, received
-        )
-        return DedupeOutcome(
-            status=status,
-            alert_id=canonical.alert_id,
-            group_key=group.group_key,
-            event_identity=identity,
-            dedupe=dedupe,
-            canonical_alert=group.events[identity].canonical_alert,
-        )
-
-    def _absorb_exact_duplicate(
-        self,
-        group: GroupState,
-        record: EventRecord,
-        fingerprint: str,
-        received: datetime,
-    ) -> DedupeOutcome:
-        """Idempotently absorb a re-delivery of a known event.
-
-        Recurrence state (``occurrences``/``last_seen``) deliberately does not
-        change: duplicate delivery must never extend the window or inflate
-        recurrence. The delivery is still counted — evidence is preserved.
-        """
-        record.delivery_count += 1
-        if record.payload_fingerprint != fingerprint:
-            record.content_variants += 1
-            logger.warning(
-                "duplicate_identity_content_divergence",
-                component="dedupe",
-                dedupe_group=group.group_key,
-                alert_id=str(record.alert_id),
-                variants=record.content_variants,
-            )
-            record.payload_fingerprint = fingerprint
-        record.last_delivered_at = received
-        group.duplicate_deliveries += 1
-
-        return DedupeOutcome(
-            status=DedupeStatus.EXACT_DUPLICATE,
-            alert_id=record.alert_id,
-            group_key=group.group_key,
-            event_identity=record.event_identity,
-            dedupe=self._dedupe_info(group, record.event_identity),
-            canonical_alert=record.canonical_alert,
-        )
-
-    def _dedupe_info(self, group: GroupState, identity: str) -> CanonicalDedupe:
-        """Build the canonical dedupe snapshot for the current group state."""
-        return CanonicalDedupe(
-            group_key=group.group_key,
-            occurrences=group.occurrences,
-            first_seen=_required(group.first_seen, group.group_key),
-            last_seen=_required(group.last_seen, group.group_key),
-            event_identity=identity,
-            generation=group.generation,
-            duplicate_deliveries=group.duplicate_deliveries,
-        )
 
 
 def _required(value: datetime | None, group_key: str) -> datetime:
@@ -476,10 +519,14 @@ __all__ = [
     "DedupeOutcome",
     "DedupeStatus",
     "Deduplicator",
+    "DeliveryDecision",
+    "EventRecord",
     "GroupState",
     "InMemoryDeduplicator",
     "InvalidDedupeInputError",
     "compute_event_identity",
     "compute_group_key",
     "compute_payload_fingerprint",
+    "decide_delivery",
+    "dedupe_info",
 ]
