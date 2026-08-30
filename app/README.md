@@ -3,7 +3,10 @@
 The core service: ingest → normalize → dedupe → enrich → score → decide → persist →
 notify n8n. Full design: [ARCHITECTURE.md §12](../ARCHITECTURE.md#12-python-service-triage-api-architecture).
 
-**Status: scaffolded — implementation begins in Phase 1** ([DEVELOPMENT_PLAN.md](../DEVELOPMENT_PLAN.md)).
+**Status: Phase 1A — FastAPI foundation implemented** ([DEVELOPMENT_PLAN.md](../DEVELOPMENT_PLAN.md)).
+This includes the application factory, `GET /health` and `GET /ready`,
+typed environment configuration, structured JSON logging, and the shared error
+envelope. Ingest/normalize/scoring/enrichment/notifications are later Phase 1 work.
 
 ```
 app/
@@ -23,5 +26,30 @@ app/
     ├── integration/     # FastAPI TestClient + temp SQLite
     └── fixtures/        # links/copies of docs/sample-alerts payloads
 ```
+
+## Run & test (Phase 1A)
+
+```bash
+cd app
+python -m venv .venv && source .venv/bin/activate
+pip install -e ".[dev]"
+
+# run the API (reads .env.example / real env vars; defaults are development-safe)
+uvicorn soc_triage.main:app --host 0.0.0.0 --port 8000
+
+# check endpoints
+curl http://localhost:8000/health
+curl http://localhost:8000/ready
+
+# test + lint + type hints
+pytest
+ruff check .
+ruff format --check .
+mypy src
+```
+
+Production/test environments must replace `change-me-*` secrets (see
+[.env.example](../.env.example)); the app fails fast on placeholders outside
+`SOC_ENV=development`.
 
 Layering rules and dependency direction are enforced in review — see ARCHITECTURE.md §12.
