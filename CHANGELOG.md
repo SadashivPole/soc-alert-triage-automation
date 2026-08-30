@@ -6,6 +6,57 @@ semantic (`v0.1.0` targeted at the end of Phase 1).
 
 ## [Unreleased]
 
+### Added — Phase 1D: Persistent Storage & Audit
+
+- **SQLAlchemy ORM models** (`models/orm.py`): `alerts` (one row per distinct
+  source event, full canonical payload + denormalized query fields),
+  `alert_dedupe_groups` (recurrence/generation state: `occurrences`,
+  `generation`, `first_seen`/`last_seen`, `duplicate_deliveries`),
+  `alert_events` (per-event-identity idempotency records, window-bounded),
+  and the append-only `audit_log` (actor, action, entity, before/after JSON).
+- **SQLite support for the MVP** (`db/engine.py`): engine + session factory
+  from `TRIAGE_DB_URL` (env-configurable), defensive pragmas (foreign keys,
+  WAL, busy timeout), parent-directory auto-creation; the same SQLAlchemy
+  URL shape runs on the later PostgreSQL profile with identical migrations.
+- **Alembic** (`app/alembic/`, `alembic.ini`): initial migration
+  `9ec2a1b4b3bf` (verified reproducible: `upgrade head` → `downgrade base` →
+  `upgrade head`, and `alembic check` reports no ORM drift). The application
+  applies migrations automatically at startup; manual `alembic upgrade head`
+  works via `TRIAGE_DB_URL`.
+- **Persistence-backed deduplication** (`ingest/persistent_deduplication.py`):
+  implements the same `Deduplicator` contract over the database. The pure
+  `decide_delivery` state machine is now shared by both backends, so the
+  Phase 1C contract holds exactly in the database: exact duplicates return
+  the original `alert_id` and the preserved original canonical alert;
+  duplicate flooding never extends the deduplication window; occurrence
+  counts and generation information are persisted per group; state is
+  **restored correctly after a restart** (idempotency and recurrence
+  continue across process death).
+- **Audit persistence** (`audit.py` + `AuditRepository`): meaningful state
+  changes are audited in the same transaction as the state change itself —
+  `dedupe.generation_started`, `alert.created`, `alert.duplicate_absorbed`,
+  `alert.content_divergence` — with small before/after JSON snapshots
+  (counts, ids, timestamps; never raw payloads or secrets). The audit table
+  is append-only by construction (no update/delete path exists).
+- **Transactional correctness** (`db/session.py`): one unit of work per
+  delivery (alert + event + group state + audit rows commit or roll back
+  together); a simulated mid-transaction failure is covered by a test
+  asserting no partial state survives.
+- **Safe error handling**: storage failures log the exception *type* only
+  and surface as `StorageError` → retryable `503` via the shared error
+  envelope — no database paths, driver text, or internals ever reach the
+  client. `/health` now pings the database (503 when unavailable) and
+  `/ready` verifies config + database + applied migrations.
+- **Layering preserved**: DB/session mechanics live in `db/`; only
+  `models/repositories.py` touches ORM objects; domain packages still never
+  import FastAPI.
+- Tests: `tests/integration/test_persistence.py` (16 new tests: new/exact
+  duplicate/repeated persistence, occurrence counts, generation changes,
+  window pruning, restart recovery, audit records + no-raw-data/no-secret
+  assertions, rollback atomicity, safe 503 on DB loss, health/ready, and a
+  64-delivery concurrency test on the persistent path). All 102 pre-existing
+  Phase 1A/1B/1C tests pass unchanged against the persistent backend.
+
 ### Added — Phase 1C: Alert Deduplication & Idempotency
 
 - Deterministic **event identity**: `wazuh:{event_id}:{rule_id}:{agent_id}` when a Wazuh

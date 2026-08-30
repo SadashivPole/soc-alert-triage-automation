@@ -29,6 +29,7 @@ from pydantic import ValidationError
 
 from ..core.errors import error_response
 from ..core.logging import get_logger
+from ..db.errors import StorageError
 from ..ingest.auth import RequireApiKey
 from ..ingest.deduplication import DedupeStatus, InvalidDedupeInputError
 from ..ingest.normalizer import normalize_wazuh_alert
@@ -140,6 +141,22 @@ async def ingest_alert(
             "validation_error",
             "alert identity validation failed",
             details={"reason": str(exc)},
+        )
+    except StorageError:
+        # The persistence layer failed (already rolled back, already logged
+        # with context by the deduplicator). Per ARCHITECTURE.md §16, ingest
+        # answers a *retryable* 503 — the Wazuh integrator buffers and
+        # retries. No database internals are ever included in the response.
+        logger.warning(
+            "ingest_storage_unavailable",
+            component="ingest",
+            rule_id=wazuh_alert.rule.id,
+            agent_id=wazuh_alert.agent.id,
+        )
+        return error_response(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "service_unavailable",
+            "ingest temporarily unavailable; retry",
         )
 
     is_duplicate = outcome.status is DedupeStatus.EXACT_DUPLICATE

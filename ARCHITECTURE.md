@@ -262,9 +262,13 @@ deterministic/unit-testable.
   preserved original alert; a re-delivery with divergent content under a known identity
   increments `content_variants` and logs a warning. Beyond the window an old event is
   treated as fresh evidence (a new occurrence), never swallowed.
-- State is in-memory for Phase 1C behind a `Deduplicator` protocol; a persistence-backed
-  implementation must reproduce this contract (thread-safe, exactly-once per identity
-  within the window, monotonic occurrence counters).
+- State is persisted (Phase 1D, SQLite via `PersistentDeduplicator` + the
+  `alert_dedupe_groups` / `alert_events` tables) behind a `Deduplicator`
+  protocol and is restored on restart; the in-memory `InMemoryDeduplicator`
+  remains available for tests. Both backends share the pure `decide_delivery`
+  state machine, so the persistence-backed implementation reproduces this
+  contract exactly (thread-safe, exactly-once per identity within the window,
+  monotonic occurrence counters).
 
 **Dead letters:** payloads that fail validation 3× land in `dead_letters` with the parse
 error — nothing is silently dropped.
@@ -401,18 +405,22 @@ the repo's workflow files contain only credential *references*.
 
 ```
 app/src/soc_triage/
-├── main.py                 # app factory, lifespan (db init, config load), health
+├── main.py                 # app factory, lifespan (db init + migrations, config load), health
 ├── api/                    # routers: alerts (ingest/get/list), incidents, feedback,
 │                           #        stats, health, internal (n8n errors)
 ├── core/                   # config (pydantic-settings, env-driven), logging (structlog),
 │                           # security (api-key auth, rate limiting), errors, ids
-├── models/                 # SQLAlchemy ORM + Pydantic schemas (canonical alert, etc.)
-├── ingest/                 # wazuh normalizer, dedupe, request guards
+├── db/                     # engine/session bootstrap, unit-of-work transactions,
+│                           # storage errors (never leaks internals)
+├── models/                 # SQLAlchemy ORM (alerts, alert_dedupe_groups, alert_events,
+│                           #                audit_log) + repositories + Pydantic canonical
+├── ingest/                 # wazuh normalizer, dedupe (in-memory + persistent), guards
 ├── enrichment/             # ioc_extractor, vt_client, misp_client, allowlist, cache
 ├── scoring/                # engine.py (pure), factors.py, config loader, summaries
 ├── decisions/              # policy table, router, runbook registry
 ├── notifications/          # n8n webhook client (outbound only)
-└── audit.py                # append-only audit_log writer
+├── audit.py                # append-only audit_log policy + entries
+└── (app/alembic)           # Alembic migrations (SQLite now, identical on PostgreSQL)
 ```
 
 **Layering rules (enforced in review):**
