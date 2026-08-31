@@ -242,6 +242,7 @@ Full detail with acceptance criteria: [DEVELOPMENT_PLAN.md](DEVELOPMENT_PLAN.md)
 | [SECURITY.md](SECURITY.md) | Security policy, secrets rules, threat model, data policy, vulnerability reporting |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Workflow, style guides, PR checklist, sample-data rules |
 | [docs/sample-alerts/README.md](docs/sample-alerts/README.md) | Synthetic alert scenarios & expected triage behavior |
+| [docs/recommendations/README.md](docs/recommendations/README.md) | Skill-derived improvement catalogue: 21 recommendations mapped into the scoring engine, decision engine, IOC provenance, analyst runbooks & human-approval model (evidence / factor / reason / analyst action / test per item) |
 
 ## Contributing & License
 

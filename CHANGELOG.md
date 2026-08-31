@@ -6,6 +6,34 @@ semantic (`v0.1.0` targeted at the end of Phase 1).
 
 ## [Unreleased]
 
+### Added — Skill-derived recommendations catalogue (methodology only)
+
+- **`docs/recommendations/`** — a catalogue of 21 improvement recommendations distilled
+  from four reference cybersecurity skills (`triaging-security-incident`,
+  `implementing-alert-fatigue-reduction`, `analyzing-indicators-of-compromise`,
+  `building-incident-response-playbook`), used as **methodological references only**.
+  Every recommendation identifies the five required elements — **evidence, factor
+  affected, reason, expected analyst action, test required** — and maps into one of the
+  five existing components: scoring engine, decision engine, IOC provenance, analyst
+  runbooks, or human-approval model. Human-readable rendering in
+  `docs/recommendations/README.md`; machine-readable source of truth in
+  `docs/recommendations/recommendations.yaml`.
+- **Guardrails honored and mechanically enforced** by the new
+  `app/tests/unit/test_recommendations_catalog.py` contract test: the existing
+  `scoring.v1` policy is **not** replaced (engine version, factor set, and golden-score
+  semantics pinned; future factors must be declared as new-version-only); **no
+  reference thresholds are copied** (future thresholds must be derived from our own
+  corpus); **no offensive actions**; **no autonomous containment** (any response-like
+  recommendation carries `requires_approval: true` with an approval-gated analyst
+  action); deterministic, explainable scoring is preserved (scoring-touching
+  recommendations change detail text or add advisory context only).
+- **Analyst runbooks** — `docs/runbooks/_template.md` (standardized structure:
+  metadata, RACI, detection & triage, investigation steps, approval-gated containment
+  proposals, escalation criteria, closure & feedback, communication) and the exemplar
+  `docs/runbooks/ssh-brute-force.md` for sample scenarios 01 + 02. The runbook contract
+  test verifies every non-template runbook keeps the required sections and phrases
+  every response step as an approval-gated proposal (ADR-8, REC-PLAYBOOK-03).
+
 ### Fixed — Phase 2D: n8n email notification chain
 
 - **Send Email nodes were missing their SMTP credential binding.** All four

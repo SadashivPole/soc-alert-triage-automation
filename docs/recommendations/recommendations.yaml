@@ -1,0 +1,377 @@
+# Skill-derived improvement recommendations (methodological references only).
+#
+# Source skills (methodology only — thresholds/numbers are NOT copied):
+#   1. skills/triaging-security-incident             (NIST SP 800-61r3 / SANS PICERL)
+#   2. skills/implementing-alert-fatigue-reduction
+#   3. skills/analyzing-indicators-of-compromise
+#   4. skills/building-incident-response-playbook
+#
+# Contract (enforced by app/tests/unit/test_recommendations_catalog.py):
+#   * Every recommendation MUST identify: evidence, factor_affected, reason,
+#     analyst_action, test_required.
+#   * `component` maps into one of the five existing platform components:
+#     scoring-engine | decision-engine | ioc-provenance | analyst-runbooks |
+#     human-approval-model.
+#   * Guardrails: `offensive` and `autonomous_containment` MUST be false;
+#     any recommendation touching response-like wording MUST carry
+#     requires_approval: true and an approval-gated analyst action.
+#   * The existing scoring.v1 policy is NEVER replaced: no recommendation may
+#     invent a scoring factor, and app/config/scoring.yaml keeps
+#     engine_version: scoring.v1.
+#
+# This file is non-secret, versioned documentation input — it drives no
+# runtime behavior. Tuning policy still happens in app/config/*.yaml via
+# reviewed PRs (ARCHITECTURE.md §14).
+
+recommendations:
+  # =========================================================================
+  # Skill 1 — triaging-security-incident
+  # =========================================================================
+  - id: REC-TRIAGE-01
+    skill: triaging-security-incident
+    title: "NIST SP 800-61r3 incident classification on every alert"
+    component: decision-engine
+    also: []
+    priority: medium
+    phase: "3"
+    status: proposed
+    requires_approval: false
+    offensive: false
+    autonomous_containment: false
+    evidence: "rule.groups (e.g. authentication_failed), rule.mitre.tactic, and the assigned risk tier on the canonical alert"
+    factor_affected: "alert.classification (proposed canonical field, consumed by decision.runbook selection and digests; carries no score weight)"
+    reason: "The reference skill classifies the incident type before prioritizing. A stable NIST-aligned taxonomy (unauthorized access / denial of service / malicious code / improper usage / reconnaissance / web application attack) lets the decision engine pick the right runbook and lets digest statistics group incidents consistently instead of by rule id alone."
+    analyst_action: "On the triage verdict (WF5 form), confirm or correct the suggested classification; the correction is stored and audited like any verdict."
+    test_required: "Unit: classification derived deterministically from sample-alert groups/tactics is pinned by a golden table. Integration: a verdict correction updates alert.classification and writes an audit row."
+  - id: REC-TRIAGE-02
+    skill: triaging-security-incident
+    title: "Impact-matrix context inside the asset_criticality justification"
+    component: scoring-engine
+    also: []
+    priority: medium
+    phase: "3"
+    status: proposed
+    requires_approval: false
+    offensive: false
+    autonomous_containment: false
+    evidence: "asset.tier plus rule.mitre.tactic on the canonical alert (e.g. Credential Access against a tier-1 asset)"
+    factor_affected: "scoring.asset_criticality (detail text only — points, bands, and scoring.v1 weights are untouched)"
+    reason: "The reference skill computes severity as a function of asset criticality, threat type, and data sensitivity. Our factor already awards points by tier, but the justification only prints the tier label; adding the threat-type context makes the score explanation match the analyst's mental impact matrix without changing any number."
+    analyst_action: "Read the enriched detail; if the asset tier is wrong, correct it in the asset inventory (Phase 4) so future alerts score against the right band."
+    test_required: "Unit: factor detail includes tactic/group context when present and is byte-identical to today's golden text when absent. Golden-file scores for all six sample alerts must be unchanged (scoring.v1 contract)."
+  - id: REC-TRIAGE-03
+    skill: triaging-security-incident
+    title: "Rule fidelity (historical TP rate) surfaced as analyst context, never a weight"
+    component: decision-engine
+    also: [notifications-feedback]
+    priority: high
+    phase: "3"
+    status: proposed
+    requires_approval: false
+    offensive: false
+    autonomous_containment: false
+    evidence: "feedback.verdict counts per rule.id (+ agent.id) from the existing feedback table"
+    factor_affected: "decision.reasons and the n8n notification payload (new read-only fidelity context field); deliberately NOT a scoring.v1 factor"
+    reason: "The reference skill treats alert fidelity as a first-class triage input. Adding it as a score weight would change every golden score, violating the scoring.v1 contract; surfacing it as context lets the analyst weight it subjectively and feeds the tuning digest (REC-FATIGUE-02)."
+    analyst_action: "Treat high-score alerts from historically false-positive rules with appropriate skepticism; check the fidelity line before escalating."
+    test_required: "Integration: a rule with 3+ false-positive verdicts shows fidelity context in the API response and notification payload. Golden scores must remain byte-identical."
+  - id: REC-TRIAGE-04
+    skill: triaging-security-incident
+    title: "Detection-lag (dwell-time gap) annotation on the canonical alert"
+    component: decision-engine
+    also: [ingest-dedupe]
+    priority: low
+    phase: "4"
+    status: proposed
+    requires_approval: false
+    offensive: false
+    autonomous_containment: false
+    evidence: "received_at minus the source event's own timestamp (Wazuh top-level timestamp, preserved by the tolerant schema)"
+    factor_affected: "canonical alert annotation detection_lag_seconds, surfaced in decision.reasons and the digest; no score weight"
+    reason: "The reference skill highlights the gap between event time and detection time. A large lag signals log-source health problems or silent suppression and matters for MTTA/MTTR reporting; it should never silently inflate a score."
+    analyst_action: "When lag exceeds the locally defined threshold, check the log source / integrator path health before triaging the alert."
+    test_required: "Unit: lag computed deterministically from fixed timestamps (zero when the event timestamp is absent). Integration: payload includes lag only when the source timestamp exists."
+  - id: REC-TRIAGE-05
+    skill: triaging-security-incident
+    title: "Historical correlation context (same host / user / source, rolling window)"
+    component: decision-engine
+    also: [observability]
+    priority: medium
+    phase: "3"
+    status: proposed
+    requires_approval: false
+    offensive: false
+    autonomous_containment: false
+    evidence: "Prior alerts in the alert store matching agent.id, data.srcuser, or a shared IOC value within the last 30 days"
+    factor_affected: "decision.reasons and the console alert detail (correlation list); no scoring.v1 weight"
+    reason: "The reference skill correlates history before escalating: an incident rarely arrives alone, and a repeat host/user changes the story. The correlation is advisory so analysts keep judgment, not an automatic escalation trigger."
+    analyst_action: "Check the correlation panel before submitting a verdict; escalate as one incident when related activity is confirmed."
+    test_required: "Integration: seeding related alerts yields the expected correlation list; determinism test on a fixed dataset. No score change: golden tests unchanged."
+  - id: REC-TRIAGE-06
+    skill: triaging-security-incident
+    title: "Structured triage record rendered in notifications"
+    component: analyst-runbooks
+    also: [notifications-feedback]
+    priority: low
+    phase: "3"
+    status: proposed
+    requires_approval: false
+    offensive: false
+    autonomous_containment: false
+    evidence: "The existing N8NAlertPayload fields (alert_id, rule, agent, score, decision, IOCs, enrichment) already cover most of the reference skill's triage record shape"
+    factor_affected: "notifications payload (display-only addition of classification, affected scope, and recommended-action lines)"
+    reason: "The reference skill documents a structured triage record so the ticket body is complete and consistent. Our WF2/WF3 formatters already render most fields; adding classification and recommended actions (from the runbook) closes the gap without any engine change."
+    analyst_action: "Use the rendered record as the ticket body; append or correct affected assets/users."
+    test_required: "Unit: payload builder emits the new display fields. Static n8n test (pattern of test_n8n_email_chain.py): formatters render classification and recommended-action lines."
+
+  # =========================================================================
+  # Skill 2 — implementing-alert-fatigue-reduction
+  # =========================================================================
+  - id: REC-FATIGUE-01
+    skill: implementing-alert-fatigue-reduction
+    title: "Per-rule disposition metrics (TP / FP / SNR) in the daily digest"
+    component: analyst-runbooks
+    also: [observability, notifications-feedback]
+    priority: high
+    phase: "3"
+    status: proposed
+    requires_approval: false
+    offensive: false
+    autonomous_containment: false
+    evidence: "feedback verdicts grouped by rule.id (true positive / false positive / escalate), with counts over a rolling window"
+    factor_affected: "WF6 daily digest and the Phase 3.9 stats endpoints (reporting only; no scoring factor)"
+    reason: "The reference skill's first step is measuring before changing: per-rule volume, FP rate, and signal-to-noise make tuning decisions reviewable. The digest already plans volumes and FP rate; adding TP rate and SNR per rule is a pure reporting extension."
+    analyst_action: "Review the top-noisiest-rules table monthly; nominate rules for a tuning review (REC-FATIGUE-02) based on evidence, never on volume alone."
+    test_required: "Integration: seeded verdicts produce the expected per-rule TP/FP/SNR numbers via the stats endpoint; unit tests for the aggregation function."
+  - id: REC-FATIGUE-02
+    skill: implementing-alert-fatigue-reduction
+    title: "Evidence-backed tuning suggestions — humans apply every change"
+    component: human-approval-model
+    also: [notifications-feedback, testing-ci]
+    priority: high
+    phase: "3"
+    status: proposed
+    requires_approval: true
+    offensive: false
+    autonomous_containment: false
+    evidence: "3+ false-positive verdicts on a rule+agent pair (existing mechanism), now extended with per-rule evidence: sample alert ids, FP rate, and the common benign pattern"
+    factor_affected: "digest tuning_suggestions and the allowlist config (app/config/allowlists.yaml is the only place exclusions land — human-edited via PR)"
+    reason: "The reference skill tunes high-volume false-positive rules with documented exclusions and approval. The platform already refuses to auto-edit Wazuh rules; this recommendation makes the suggestion record complete enough for a human to approve with confidence, and keeps the allowlist as the sole machine-consumed exclusion surface."
+    analyst_action: "L2 / detection owner reviews the suggestion, verifies the sample evidence, and applies an allowlist or rule change via reviewed PR with an expected-FP-reduction note."
+    test_required: "Unit: the suggestion record always includes evidence ids, FP rate, and expected impact. Integration: a suggestion appears in the digest only after the 3-FP threshold is met, and nothing auto-edits any rule file."
+  - id: REC-FATIGUE-03
+    skill: implementing-alert-fatigue-reduction
+    title: "Entity-based consolidation as a read-only correlation view"
+    component: scoring-engine
+    also: [ingest-dedupe]
+    priority: low
+    phase: "4"
+    status: proposed
+    requires_approval: false
+    offensive: false
+    autonomous_containment: false
+    evidence: "Existing dedupe groups (rule.id + agent.id) plus a shared src IP / user across different rules within a window"
+    factor_affected: "scoring.recurrence_velocity — view only; the dedupe group key and all scoring.v1 inputs stay byte-identical"
+    reason: "The reference skill consolidates related alerts into one investigation unit so a campaign does not produce parallel queues. Changing the dedupe group key would alter recurrence inputs and therefore scores, so the consolidation is delivered as a read-only correlation view in the console/API; the analyst decides whether it is one incident."
+    analyst_action: "Open the correlation view; escalate the related alerts as a single incident when they belong to one campaign."
+    test_required: "Unit: correlation grouping function is pure and deterministic. Integration: enabling the view changes zero scores and zero dedupe groups (explicit assertion against golden files)."
+  - id: REC-FATIGUE-04
+    skill: implementing-alert-fatigue-reduction
+    title: "Feedback-verified suppression patterns via the existing allowlist path"
+    component: decision-engine
+    also: [notifications-feedback]
+    priority: medium
+    phase: "3"
+    status: proposed
+    requires_approval: true
+    offensive: false
+    autonomous_containment: false
+    evidence: "Repeated false-positive verdicts tied to a concrete allowlistable source (scanner IP, backup job, CDN range) already represented in IOC enrichment"
+    factor_affected: "decision.allowlisted_action (suppress) — the existing allowlisted path, extended only by adding verified patterns to app/config/allowlists.yaml"
+    reason: "The reference skill tier-1 routes known-FP patterns to automatic suppression. The platform already suppresses allowlisted sources regardless of score; this recommendation only widens the allowlist input with feedback-verified patterns, always human-approved, with the existing audit entry retained."
+    analyst_action: "Approve or decline each proposed suppression pattern in the quarterly allowlist review; verify the audit trail of suppressed alerts shows no true positives lost."
+    test_required: "Integration: an allowlisted alert is suppressed regardless of score (existing test) and writes the audit row; new test that a pattern only suppresses after human approval lands it in the allowlist file."
+
+  # =========================================================================
+  # Skill 3 — analyzing-indicators-of-compromise
+  # =========================================================================
+  - id: REC-IOC-01
+    skill: analyzing-indicators-of-compromise
+    title: "Optional multi-source enrichment (AbuseIPDB / MalwareBazaar) behind the provider contract"
+    component: ioc-provenance
+    also: []
+    priority: medium
+    phase: "2"
+    status: proposed
+    requires_approval: false
+    offensive: false
+    autonomous_containment: false
+    evidence: "IOC.enrichment today holds vt and misp payloads only; the provider protocol (name / enabled / enrich) and LookupRecord provenance already support more sources"
+    factor_affected: "ioc.enrichment (new provider payloads keyed by provider name; enrichment_status aggregation and scoring.v1 semantics unchanged)"
+    reason: "The reference skill warns against over-relying on a single source for high-stakes decisions. Free-tier AbuseIPDB (IP reputation) and MalwareBazaar (hash family/tags) slot into the existing fail-open, rate-limited, sanitized-provenance machinery with zero scoring changes; an exhausted quota or outage still only marks the alert enrichment partial."
+    analyst_action: "Compare verdicts across sources; conflicting signals (e.g. VT malicious vs AbuseIPDB clean) warrant manual review before escalation."
+    test_required: "Unit: sanitization, token-bucket rate limiting, and lookup-status mapping for each new provider (mirror the existing VT/MISP tests). Integration: provider outage marks enrichment partial and the alert still scores."
+  - id: REC-IOC-02
+    skill: analyzing-indicators-of-compromise
+    title: "Shared-infrastructure awareness (CDN / cloud ranges) as analyst context"
+    component: ioc-provenance
+    also: []
+    priority: medium
+    phase: "4"
+    status: proposed
+    requires_approval: true
+    offensive: false
+    autonomous_containment: false
+    evidence: "A VT/AbuseIPDB verdict on an IPv4 belonging to a known CDN or cloud provider range (Cloudflare, CloudFront, major clouds) colliding with the allowlist policy"
+    factor_affected: "ioc.enrichment (informational shared-infrastructure tag on the indicator) and decision.reasons; no score change"
+    reason: "The reference skill's key pitfall is blocking shared infrastructure and disrupting legitimate tenants. Tagging CDN/cloud ranges as context means a reputation hit on a shared IP is seen with its caveats, and any deny-list or allowlist decision stays a human, approved, audited action."
+    analyst_action: "When a shared-infrastructure-tagged IP drives a high score, verify the actual tenant/service before escalating; any allowlist addition requires approval via reviewed PR."
+    test_required: "Unit: CDN/cloud range detection is a pure function with pinned fixtures. Integration: the tagged indicator surfaces the tag in the payload and scoring is unchanged."
+  - id: REC-IOC-03
+    skill: analyzing-indicators-of-compromise
+    title: "IOC age / expiry surfaced from stored lookup timestamps"
+    component: ioc-provenance
+    also: []
+    priority: low
+    phase: "3"
+    status: proposed
+    requires_approval: false
+    offensive: false
+    autonomous_containment: false
+    evidence: "LookupRecord.timestamp already stored per provider on every IOC.enrichment payload"
+    factor_affected: "ioc.enrichment provenance (analyst-facing age field computed from the stored timestamp; cache TTLs unchanged, no score weight)"
+    reason: "The reference skill warns that indicators without expiry policies accumulate and generate stale verdicts as infrastructure is repurposed. Our cache already expires entries; making the age visible lets analysts discount stale verdicts by judgment instead of by a blindly copied TTL number."
+    analyst_action: "Treat verdicts older than the locally defined window as lower-confidence context; request a re-enrichment when recency matters."
+    test_required: "Unit: age computed deterministically from fixed timestamps. Integration: payload shows enrichment age per indicator; existing cache TTL tests unchanged."
+  - id: REC-IOC-04
+    skill: analyzing-indicators-of-compromise
+    title: "Defanged rendering everywhere analysts copy indicators"
+    component: analyst-runbooks
+    also: [notifications-feedback]
+    priority: low
+    phase: "3"
+    status: proposed
+    requires_approval: false
+    offensive: false
+    autonomous_containment: false
+    evidence: "The extractor already normalizes defanged input (hxxp://, evil[.]example[.]com) and strips URL userinfo; WF2 formatters already group IOCs by type"
+    factor_affected: "notifications payload rendering and runbook documents (display only; stored IOC values unchanged)"
+    reason: "The reference skill requires defanging in documentation so pasting an indicator never triggers scanners or accidental clicks. Rendering-level defanging extends the extractor's existing normalization to every analyst-facing surface."
+    analyst_action: "Copy indicators directly from notifications/runbooks/console (already safe); never hand-paste raw log lines."
+    test_required: "Unit/static: renderer output contains no live scheme or un-defanged domain patterns outside allow-listed link fields (pattern of the existing n8n static tests)."
+  - id: REC-IOC-05
+    skill: analyzing-indicators-of-compromise
+    title: "Campaign attribution surfaced from MISP event tags"
+    component: ioc-provenance
+    also: [notifications-feedback]
+    priority: medium
+    phase: "3"
+    status: proposed
+    requires_approval: false
+    offensive: false
+    autonomous_containment: false
+    evidence: "misp.matched_event_ids and tags (e.g. tlp:amber, apt, threat-actor) already stored in IOC.enrichment"
+    factor_affected: "ioc.enrichment detail and decision.reasons (the scoring detail already mentions MISP tags; make them analyst-visible in payload and console)"
+    reason: "The reference skill contextualizes IOCs with campaign attribution before disposition. MISP tags are context, not a v1 weight: surfacing them in the notification and console lets the analyst apply the campaign section of the runbook without any score change."
+    analyst_action: "When campaign tags are present, follow the runbook's campaign-attribution section and escalate per the playbook's criteria."
+    test_required: "Unit: tag sanitization keeps only allow-listed tags (existing test). Integration: payload IOC summary surfaces tags; golden scores unchanged."
+  - id: REC-IOC-06
+    skill: analyzing-indicators-of-compromise
+    title: "Confidence/disposition framework — thresholds derived from our own corpus, never copied"
+    component: scoring-engine
+    also: [testing-ci]
+    priority: medium
+    phase: "5"
+    status: proposed
+    requires_approval: true
+    offensive: false
+    autonomous_containment: false
+    evidence: "VT detection counts, MISP matches, and (future) multi-source verdicts in IOC.enrichment, correlated with analyst verdicts from the feedback table"
+    factor_affected: "scoring.threat_intel — a future factor in a NEW policy version (scoring.v2+); scoring.v1 and its goldens stay the default until humans approve the migration"
+    reason: "The reference skill offers a block/monitor/whitelist confidence framework, but its numeric bands are not ours to copy. The methodology — tiered disposition informed by multiple sources — is worth adopting as a future factor in a new policy version (scoring.v2+), leaving scoring.v1 untouched, with thresholds derived from our own labelled corpus via the Phase 5.4 evaluation harness and approved by analysts."
+    analyst_action: "Participate in the threshold review: approve derived bands only with evidence of false-positive/true-negative impact on the sample corpus."
+    test_required: "Golden-file and evaluation-harness tests: candidate thresholds are scored against the labelled corpus before any migration; a migration test asserts v1 behavior stays byte-identical until v2 ships."
+
+  # =========================================================================
+  # Skill 4 — building-incident-response-playbook
+  # =========================================================================
+  - id: REC-PLAYBOOK-01
+    skill: building-incident-response-playbook
+    title: "Standardized runbook template (metadata, RACI, procedures, communication)"
+    component: analyst-runbooks
+    also: []
+    priority: high
+    phase: "now"
+    status: delivered
+    requires_approval: false
+    offensive: false
+    autonomous_containment: false
+    evidence: "docs/runbooks/ was scaffolded with a planned template; notifications already link decision.runbook to docs/runbooks/<scenario>.md"
+    factor_affected: "analyst runbooks — new docs/runbooks/_template.md plus per-scenario runbooks (Phase 3.6), consistent with the reference skill's playbook structure"
+    reason: "The reference skill shows that a consistent playbook structure (metadata, RACI, detection, procedures, escalation, communication) keeps procedures maintainable and auditable. Delivering the template now (with one exemplar runbook) anchors every later runbook and makes the runbook contract testable."
+    analyst_action: "L2 maintains runbooks from the template; analysts follow the linked runbook during triage and submit corrections via PR."
+    test_required: "Doc contract test: every non-template runbook parses the required sections and phrases any response step as an approval-gated proposal."
+  - id: REC-PLAYBOOK-02
+    skill: building-incident-response-playbook
+    title: "Per-runbook decision trees and escalation criteria"
+    component: analyst-runbooks
+    also: []
+    priority: medium
+    phase: "3"
+    status: proposed
+    requires_approval: false
+    offensive: false
+    autonomous_containment: false
+    evidence: "The decision engine already maps tiers to actions (monitor / queue_l1 / open_incident) with 15/30-minute ack SLAs; runbooks will embed the matching binary decision points"
+    factor_affected: "analyst runbooks (decision-tree section) and decision.reasons (runbook already linked per tier)"
+    reason: "The reference skill uses binary decision points to reduce hesitation and documents escalation triggers beyond SLAs (e.g. confirmed exfiltration → L2/IR lead). Encoding the existing tier decisions as runbook trees keeps analysts and automation consistent."
+    analyst_action: "Follow the tree; escalate per the documented criteria — escalation is always analyst-initiated, never automatic beyond the existing SLA re-notify."
+    test_required: "Doc contract test: runbook decision trees reference only existing actions/tiers; integration: escalation-criteria list surfaced in the payload for the analyst."
+  - id: REC-PLAYBOOK-03
+    skill: building-incident-response-playbook
+    title: "Containment = proposal only, human-approved, audited (no autonomous actions)"
+    component: human-approval-model
+    also: []
+    priority: high
+    phase: "4"
+    status: proposed
+    requires_approval: true
+    offensive: false
+    autonomous_containment: false
+    evidence: "ADR-8 and Phase 4.5 already define Wazuh active-response as a proposal requiring explicit analyst approval with audit rows"
+    factor_affected: "human-approval-model — the WF5 contain verdict → approval workflow → audited action; scoring and decision engines unchanged"
+    reason: "The reference skill's containment procedures (endpoint isolation, account disable, sinkhole) are instructive only. Our charter forbids autonomous containment: every runbook containment step is phrased as a proposal, executes only after explicit analyst approval, and writes audit rows either way."
+    analyst_action: "Approve or decline each containment proposal with a documented rationale; the audit log records who decided what, when."
+    test_required: "Integration: the approval endpoint rejects unauthenticated or unauthorized requests; no test or code path may execute a containment action without approval (negative-path tests included)."
+  - id: REC-PLAYBOOK-04
+    skill: building-incident-response-playbook
+    title: "Documented automation boundary (what runs automatically vs. what needs humans)"
+    component: human-approval-model
+    also: [testing-ci]
+    priority: medium
+    phase: "3"
+    status: proposed
+    requires_approval: true
+    offensive: false
+    autonomous_containment: false
+    evidence: "The existing separation: enrichment, scoring, routing, and notification are automated; verdicts, containment, and rule changes are human; WF1–WF6 define the orchestration surface"
+    factor_affected: "Workflow documentation (n8n README) and runbooks — an explicit automation-boundary table; no engine change"
+    reason: "The reference skill maps each playbook step to a SOAR action and defines the automation boundary. Making our existing boundary explicit per workflow prevents future scope creep toward autonomous response and is auditable in review."
+    analyst_action: "Understand which steps are never automated; raise a proposal if a step seems to cross the boundary."
+    test_required: "Static test: n8n workflow JSONs contain no containment-capable nodes (no remote-exec/SSH/PowerShell nodes), extending the existing workflow static tests."
+  - id: REC-PLAYBOOK-05
+    skill: building-incident-response-playbook
+    title: "Playbook testing and maintenance cadence"
+    component: analyst-runbooks
+    also: [testing-ci]
+    priority: low
+    phase: "3"
+    status: proposed
+    requires_approval: false
+    offensive: false
+    autonomous_containment: false
+    evidence: "The sample-alert corpus doubles as CI fixtures; the Phase 5.4 evaluation harness will replay history; runbook links are already carried in every notification"
+    factor_affected: "analyst runbooks maintenance workflow and CI (runbook link resolution check); no scoring factor"
+    reason: "The reference skill validates playbooks through exercises and scheduled review. The cheapest continuous exercise available here is CI replaying the sample corpus and verifying every runbook link resolves; quarterly human review remains the maintenance gate."
+    analyst_action: "Quarterly runbook review (owner, contact list, commands); annual tabletop using the sample scenarios."
+    test_required: "CI contract: runbook links in decisions resolve to existing files (new doc test); existing corpus replay stays green."
