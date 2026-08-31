@@ -124,6 +124,7 @@ class InvestigationLinks(BaseModel):
     alert_api: str
     alert_console: str | None = None
     runbook: str | None = None
+    feedback_url: str | None = None
     ioc_links: dict[str, str] = Field(default_factory=dict)
 
 
@@ -353,10 +354,19 @@ def build_n8n_payload(
         # If runbook is a relative path like docs/runbooks/..., make it absolute for n8n
         runbook_link = f"{base}/{runbook_link.lstrip('/')}"
 
+    # Feedback link used by n8n notification emails (WF2/WF3). Provided by the
+    # API rather than reconstructed in workflow JS so the address is always the
+    # allow-listed triage endpoint (Phase 2D email-chain fix).
+    if base:
+        feedback_url = f"{base}/api/v1/alerts/{alert.alert_id}/feedback"
+    else:
+        feedback_url = f"/api/v1/alerts/{alert.alert_id}/feedback"
+
     investigation_links = InvestigationLinks(
         alert_api=alert_api,
         alert_console=alert_console,
         runbook=runbook_link,
+        feedback_url=feedback_url,
         ioc_links={},
     )
 

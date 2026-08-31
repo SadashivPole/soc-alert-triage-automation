@@ -6,6 +6,45 @@ semantic (`v0.1.0` targeted at the end of Phase 1).
 
 ## [Unreleased]
 
+### Fixed — Phase 2D: n8n email notification chain
+
+- **Send Email nodes were missing their SMTP credential binding.** All four
+  `n8n-nodes-base.emailSend` nodes (WF2 L1 alert, WF3 L2 escalation, WF3 SLA
+  breach, WF5 containment approval) now bind an SMTP credential named
+  `SMTP Lab Mailpit`. n8n refuses to execute a Send Email node that has no
+  credential selected, so the notification chain failed silently before this
+  fix even though the webhook/format path succeeded.
+- **Lab SMTP credential is provisioned automatically.** `n8n/credentials/
+  smtp_lab_mailpit.json` defines a single `smtp` credential targeting the local
+  Mailpit sink (`mailpit:1025`, no TLS, no auth). `scripts/
+  n8n-import-workflows.sh` now runs `n8n import:credentials` **before**
+  importing workflows, rendering connection details from the `SMTP_HOST` /
+  `SMTP_PORT` / `SMTP_SECURE` / `SMTP_USER` / `SMTP_PASS` environment
+  variables. No connection detail or password is hardcoded in the checked-in
+  files (n8n encrypts the imported credential at rest). The
+  `n8n/credentials/` directory is mounted read-only into the compose service.
+- **Notification emails render the structured payload as readable text.** The
+  WF2/WF3 formatter Function nodes previously interpolated objects directly
+  (`${alert.rule}` → `[object Object]`), dumped the raw IOC list via
+  `JSON.stringify(alert.iocs)`, and referenced investigation links
+  (`siem_search_url`, `timeline_url`) that the triage-api payload never sends
+  (those lines always rendered `n/a`). The formatters now read
+  `rule.description`/`rule.id`/`rule.level`, group IOCs by type
+  (ipv4/domain/url/md5/sha1/sha256/email), show enrichment status, and link the
+  allow-listed `alert_api`, `runbook`, and `feedback_url` fields.
+- **Payload supplies `feedback_url`.** `InvestigationLinks` gains an optional
+  `feedback_url` (the `POST /api/v1/alerts/{id}/feedback` endpoint) populated by
+  `build_n8n_payload`, so workflow emails link to a stable, allow-listed
+  address instead of reconstructing the URL in JavaScript.
+- **Tests:** new `tests/unit/test_n8n_email_chain.py` (7 tests) statically
+  verifies that every email node binds the expected SMTP credential, the lab
+  credential points at Mailpit with no real secret, the import helper
+  provisions credentials before workflows, compose mounts the credential
+  directory and supplies SMTP env, every email node resolves from/to from env,
+  the formatters contain no `[object Object]`/`JSON.stringify(iocs)` patterns,
+  and the payload exposes `feedback_url`. All **488** tests pass; ruff, mypy
+  and `check_secrets.sh` are clean.
+
 ### Added — Phase 2A: Threat Intelligence Provider Integration
 
 - **Shared provider machinery** (`enrichment/threat_intel.py`): a

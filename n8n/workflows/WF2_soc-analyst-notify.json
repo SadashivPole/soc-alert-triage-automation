@@ -12,7 +12,10 @@
       "name": "Webhook - L1 Notify",
       "type": "n8n-nodes-base.webhook",
       "typeVersion": 1,
-      "position": [460, 300],
+      "position": [
+        460,
+        300
+      ],
       "webhookId": "soc-analyst-notify-webhook-id",
       "notes": "Called by WF1 router or directly by triage-api for low/medium alerts. Token from env credential reference, never hardcoded, never logged."
     },
@@ -24,18 +27,24 @@
       "name": "Validate Token",
       "type": "n8n-nodes-base.function",
       "typeVersion": 1,
-      "position": [680, 300],
+      "position": [
+        680,
+        300
+      ],
       "notes": "Real shared-secret validation against $env secret. Reject missing/wrong, accept exact. Never log token. Security: no full_log, no secrets, no destructive, no autonomous containment, fail-open."
     },
     {
       "parameters": {
-        "functionCode": "// Format L1 notification (no full_log, summary only)\nconst alert = $input.first().json;\nconst severity = (alert.severity || 'unknown').toUpperCase();\nconst score = alert.score ?? 'n/a';\nconst decision = alert.decision || {};\nconst rule = alert.rule || 'unknown';\nconst iocs = alert.iocs || {};\nconst links = alert.investigation_links || {};\nconst feedbackUrl = links.feedback_url || `${$env.TRIAGE_API_BASE_URL || 'http://triage-api:8000'}/api/v1/alerts/${alert.alert_id}/feedback`;\n\nconst subject = `[SOC][${severity}] Alert ${alert.alert_id} - ${decision.severity || rule}`;\n\nconst bodyText = `\nSOC Alert - L1 Review\n--------------------\nAlert ID: ${alert.alert_id}\nSeverity: ${severity}\nScore: ${score}\nDecision: ${decision.severity || 'unknown'} / ${decision.action || ''}\nRule: ${rule}\nRecurrence: ${alert.recurrence || 'unknown'}\n\nIOCs:\n- IPs: ${(iocs.ips || []).join(', ') || 'none'}\n- Domains: ${(iocs.domains || []).join(', ') || 'none'}\n- Hashes: ${(iocs.hashes || []).join(', ') || 'none'}\n- Users: ${(iocs.users || []).join(', ') || 'none'}\n\nEnrichment: ${JSON.stringify(alert.enrichment || {}).slice(0, 500)}\n\nInvestigation:\n- SIEM: ${links.siem_search_url || 'n/a'}\n- Timeline: ${links.timeline_url || 'n/a'}\n- Feedback: ${feedbackUrl}\n\nNote: contain_requested creates an approval-required request; no containment action is executed. Human approval required.\nNo autonomous response.\n`;\n\nreturn {\n  json: {\n    alert_id: alert.alert_id,\n    severity: alert.severity,\n    subject,\n    bodyText,\n    feedbackUrl,\n    _notify: {\n      formatted_at: new Date().toISOString()\n    }\n  }\n};"
+        "functionCode": "// Format L1 notification (Phase 2D fix)\n// Render human-readable email text from the structured payload.\n// - rule/iocs are OBJECTS in the payload: never interpolate objects directly\n//   (renders [object Object]) and never JSON.stringify raw structures.\n// - investigation links come from alert.investigation_links (the payload's\n//   allow-listed set); feedback_url is provided by triage-api.\n// Summary only: no full_log, no secrets. No autonomous response.\nconst alert = $input.first().json;\nconst severity = (alert.severity || 'unknown').toUpperCase();\nconst score = alert.score ?? 'n/a';\nconst decision = alert.decision || {};\nconst rule = alert.rule || {};\nconst links = alert.investigation_links || {};\nconst recurrence = alert.recurrence || {};\nconst enrichment = alert.enrichment || {};\nconst triageBase = $env.TRIAGE_API_BASE_URL || 'http://triage-api:8000';\n\n// IOC list: payload sends iocs as an array of { type, value, enrichment }.\n// Group values per type (ipv4/domain/url/md5/sha1/sha256/email) for readability.\nconst iocList = Array.isArray(alert.iocs) ? alert.iocs : [];\nconst groups = {};\nfor (const ioc of iocList) {\n  if (!ioc || !ioc.type) continue;\n  const t = ioc.type;\n  if (!groups[t]) groups[t] = [];\n  if (ioc.value && !groups[t].includes(ioc.value)) groups[t].push(ioc.value);\n}\nconst joinOr = (vals) => (vals && vals.length ? vals.join(', ') : 'none');\nconst ruleDesc = rule.description || rule.id || 'unknown';\nconst decisionLabel = [decision.severity, decision.action].filter(Boolean).join(' / ') || 'unknown';\nconst feedbackUrl = links.feedback_url\n  || `${triageBase}/api/v1/alerts/${alert.alert_id}/feedback`;\nconst occur = recurrence.occurrences != null ? recurrence.occurrences : 1;\nconst enrichmentStatus = enrichment.status || 'skipped';\n\nconst subject = `[SOC][${severity}] Alert ${alert.alert_id} - ${decisionLabel}`;\n\nconst bodyText = `\nSOC Alert - L1 Review\n--------------------\nAlert ID: ${alert.alert_id}\nSeverity: ${severity}\nScore: ${score}\nDecision: ${decisionLabel}\nRule: ${ruleDesc} (id ${rule.id || 'n/a'}, level ${rule.level != null ? rule.level : 'n/a'})\nAgent: ${(alert.agent && (alert.agent.name || alert.agent.id)) || 'unknown'}\nRecurrence: ${occur} occurrence(s), dedupe ${recurrence.dedupe_status || 'n/a'}\n\nIOCs (${iocList.length} total):\n- IPs:      ${joinOr(groups.ipv4)}\n- Domains:  ${joinOr(groups.domain)}\n- URLs:     ${joinOr(groups.url)}\n- MD5:      ${joinOr(groups.md5)}\n- SHA1:     ${joinOr(groups.sha1)}\n- SHA256:   ${joinOr(groups.sha256)}\n- Emails:   ${joinOr(groups.email)}\n\nEnrichment: ${enrichmentStatus} (${enrichment.ioc_count || 0} indicators)\n\nInvestigation:\n- Alert API: ${links.alert_api || 'n/a'}\n- Runbook:   ${links.runbook || 'n/a'}\n- Feedback:  ${feedbackUrl}\n\nNote: contain_requested creates an approval-required request; no containment\naction is executed. Human approval required. No autonomous response.\n`;\n\nreturn {\n  json: {\n    alert_id: alert.alert_id,\n    severity: alert.severity,\n    subject,\n    bodyText,\n    feedbackUrl,\n    toEmail: ($env.SOC_L1_EMAIL || 'soc-l1@example.com'),\n    _notify: {\n      formatted_at: new Date().toISOString(),\n    },\n  },\n};"
       },
       "id": "wf2-format",
       "name": "Format Notification",
       "type": "n8n-nodes-base.function",
       "typeVersion": 1,
-      "position": [900, 300],
+      "position": [
+        900,
+        300
+      ],
       "notes": "Summary-only notification, no full_log, no raw logs. contain_requested creates an approval-required request; no containment action is executed."
     },
     {
@@ -50,8 +59,17 @@
       "name": "Email - L1 Alert",
       "type": "n8n-nodes-base.emailSend",
       "typeVersion": 2,
-      "position": [1120, 200],
-      "notes": "L1 notification. Fail-open: triage-api already audited attempt/result. No secrets in payload."
+      "position": [
+        1120,
+        200
+      ],
+      "notes": "L1 notification. Fail-open: triage-api already audited attempt/result. No secrets in payload.",
+      "credentials": {
+        "smtp": {
+          "id": "smtp-lab-mailpit",
+          "name": "SMTP Lab Mailpit"
+        }
+      }
     },
     {
       "parameters": {
@@ -63,7 +81,10 @@
       "name": "Slack - L1 Alert",
       "type": "n8n-nodes-base.slack",
       "typeVersion": 1,
-      "position": [1120, 400],
+      "position": [
+        1120,
+        400
+      ],
       "notes": "Optional Slack notification for L1. Fail-open if misconfigured. No destructive actions."
     },
     {
@@ -76,7 +97,10 @@
       "name": "Respond - Notified",
       "type": "n8n-nodes-base.respondToWebhook",
       "typeVersion": 1,
-      "position": [1340, 300]
+      "position": [
+        1340,
+        300
+      ]
     }
   ],
   "connections": {

@@ -184,7 +184,13 @@
         1560,
         200
       ],
-      "notes": "Approval-required containment request. No containment action executed. Human approval only. No autonomous."
+      "notes": "Approval-required containment request. No containment action executed. Human approval only. No autonomous.",
+      "credentials": {
+        "smtp": {
+          "id": "smtp-lab-mailpit",
+          "name": "SMTP Lab Mailpit"
+        }
+      }
     },
     {
       "parameters": {

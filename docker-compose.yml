@@ -79,6 +79,9 @@ services:
       - n8n-data:/home/node/.n8n
       # Mount existing workflow JSONs (source of truth per n8n/README.md)
       - ./n8n/workflows:/workflows:ro
+      # Lab SMTP credential default (Mailpit, no auth). The import helper
+      # renders the actual credential from SMTP_* env at startup (Phase 2D).
+      - ./n8n/credentials:/credentials:ro
       # Lab-only import helper executed before n8n starts.
       - ./scripts/n8n-import-workflows.sh:/usr/local/bin/n8n-import-workflows.sh:ro
     networks:

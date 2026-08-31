@@ -2,16 +2,18 @@
 
 **AI-Assisted, defensive SOC automation for L1/L2 alert triage — built with Python, n8n, Wazuh, and Docker.**
 
-![Status](https://img.shields.io/badge/status-Phase%202C%20complete-green)
+![Status](https://img.shields.io/badge/status-Phase%202D%20complete-green)
 ![Python](https://img.shields.io/badge/python-3.11%2B-blue)
 ![Docker](https://img.shields.io/badge/docker-compose-blue)
 ![n8n](https://img.shields.io/badge/n8n-workflows-orange)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
-> **Project status (honest):** **Phase 2C is complete** — the minimum Docker lab
+> **Project status (honest):** **Phase 2D is complete** — the minimum Docker lab
 > (triage-api + n8n + mailpit) builds and runs, and the alert pipeline (ingest →
-> normalize → dedupe → enrich → score → decide → notify) is implemented and tested
-> (see the [Development Roadmap](#development-roadmap)).
+> normalize → dedupe → enrich → score → decide → notify) is implemented and tested.
+> Phase 2D fixes the n8n email notification chain: every Send Email node is bound to
+> a provisioned lab SMTP credential (Mailpit), and notification emails render the
+> structured payload as readable text (see the [Development Roadmap](#development-roadmap)).
 > This is a **portfolio / homelab-grade project**. It is *not* deployed in any production
 > SOC, makes **no production claims**, and ships only defensive capabilities.
 
