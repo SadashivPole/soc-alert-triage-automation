@@ -14,6 +14,11 @@ secrets/
 credentials/
 credentials.json
 *.token
+# Exception: the n8n lab SMTP "credential" contains no secret — it points at the
+# local Mailpit sink (mailpit:1025, no auth) and is statically validated by
+# app/tests/unit/test_n8n_email_chain.py. Real credentials must never be added.
+!n8n/credentials/
+!n8n/credentials/smtp_lab_mailpit.json
 
 # --- Python -----------------------------------------------------------------
 __pycache__/

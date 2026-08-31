@@ -35,7 +35,7 @@
     },
     {
       "parameters": {
-        "functionCode": "// Format high-severity notification with SLA context\nconst alert = $input.first().json;\nconst severity = (alert.severity || 'critical').toUpperCase();\nconst triageBase = $env.TRIAGE_API_BASE_URL || 'http://triage-api:8000';\nconst feedbackUrl = (alert.investigation_links && alert.investigation_links.feedback_url) || `${triageBase}/api/v1/alerts/${alert.alert_id}/feedback`;\nconst statusUrl = `${triageBase}/api/v1/alerts/${alert.alert_id}/feedback/status`;\n\nconst subject = `[SOC][${severity}][ESCALATION] Alert ${alert.alert_id} requires immediate review`;\nconst bodyText = `\n*** HIGH SEVERITY ESCALATION ***\nAlert ID: ${alert.alert_id}\nSeverity: ${severity}\nScore: ${alert.score}\nDecision: ${(alert.decision && alert.decision.severity) || 'SEV1'}\nRule: ${alert.rule}\nIOCs: ${JSON.stringify(alert.iocs || {})}\n\nInvestigation:\n- SIEM: ${(alert.investigation_links && alert.investigation_links.siem_search_url) || 'n/a'}\n- Timeline: ${(alert.investigation_links && alert.investigation_links.timeline_url) || 'n/a'}\n- Feedback: ${feedbackUrl}\n- Status (GET): ${statusUrl}\n\nSLA: 15m ack required. If not acknowledged, auto-escalates to L2.\n\nNote: contain_requested creates an approval-required request; no containment action is executed. Human approval required, no autonomous containment.\n`;\n\nreturn {\n  json: {\n    ...alert,\n    _escalation: {\n      subject,\n      bodyText,\n      feedbackUrl,\n      statusUrl,\n      escalated_at: new Date().toISOString(),\n      sla_minutes: 15\n    }\n  }\n};"
+        "functionCode": "// Format high-severity notification with SLA context (Phase 2D fix)\n// - rule is an OBJECT -> use rule.description/id, never direct interpolation\n// - iocs is an array of {type, value} -> group per type, never JSON.stringify\n// - investigation links use the payload's allow-listed investigation_links;\n//   feedback_url is provided by triage-api.\nconst alert = $input.first().json;\nconst severity = (alert.severity || 'critical').toUpperCase();\nconst rule = alert.rule || {};\nconst links = alert.investigation_links || {};\nconst enrichment = alert.enrichment || {};\nconst triageBase = $env.TRIAGE_API_BASE_URL || 'http://triage-api:8000';\n\nconst feedbackUrl = links.feedback_url\n  || `${triageBase}/api/v1/alerts/${alert.alert_id}/feedback`;\nconst statusUrl = `${triageBase}/api/v1/alerts/${alert.alert_id}/feedback/status`;\n\nconst iocList = Array.isArray(alert.iocs) ? alert.iocs : [];\nconst groups = {};\nfor (const ioc of iocList) {\n  if (!ioc || !ioc.type) continue;\n  if (!groups[ioc.type]) groups[ioc.type] = [];\n  if (ioc.value && !groups[ioc.type].includes(ioc.value)) groups[ioc.type].push(ioc.value);\n}\nconst joinOr = (vals) => (vals && vals.length ? vals.join(', ') : 'none');\nconst ruleDesc = rule.description || rule.id || 'unknown';\nconst decision = alert.decision || {};\nconst decisionLabel = [decision.severity, decision.action].filter(Boolean).join(' / ') || 'SEV1';\n\nconst subject = `[SOC][${severity}][ESCALATION] Alert ${alert.alert_id} requires immediate review`;\nconst bodyText = `\n*** HIGH SEVERITY ESCALATION ***\nAlert ID: ${alert.alert_id}\nSeverity: ${severity}\nScore: ${alert.score}\nDecision: ${decisionLabel}\nRule: ${ruleDesc} (id ${rule.id || 'n/a'}, level ${rule.level != null ? rule.level : 'n/a'})\nAgent: ${(alert.agent && (alert.agent.name || alert.agent.id)) || 'unknown'}\n\nIOCs (${iocList.length} total):\n- IPs:      ${joinOr(groups.ipv4)}\n- Domains:  ${joinOr(groups.domain)}\n- URLs:     ${joinOr(groups.url)}\n- Hashes:   ${[].concat(groups.md5 || [], groups.sha1 || [], groups.sha256 || []).join(', ') || 'none'}\n- Emails:   ${joinOr(groups.email)}\n\nEnrichment: ${enrichment.status || 'skipped'} (${enrichment.ioc_count || 0} indicators)\n\nInvestigation:\n- Alert API: ${links.alert_api || 'n/a'}\n- Runbook:   ${links.runbook || 'n/a'}\n- Feedback:  ${feedbackUrl}\n- Status (GET): ${statusUrl}\n\nSLA: 15m ack required. If not acknowledged, auto-escalates to L2.\n\nNote: contain_requested creates an approval-required request; no containment\naction is executed. Human approval required, no autonomous containment.\n`;\n\nreturn {\n  json: {\n    ...alert,\n    _escalation: {\n      subject,\n      bodyText,\n      feedbackUrl,\n      statusUrl,\n      toEmailL2: ($env.SOC_L2_EMAIL || $env.SOC_L1_EMAIL || 'soc-l2@example.com'),\n      escalated_at: new Date().toISOString(),\n      sla_minutes: 15,\n    },\n  },\n};"
       },
       "id": "wf3-format",
       "name": "Format Escalation",
@@ -63,7 +63,13 @@
         1120,
         200
       ],
-      "notes": "Immediate L2 notification for high/critical. Fail-open."
+      "notes": "Immediate L2 notification for high/critical. Fail-open.",
+      "credentials": {
+        "smtp": {
+          "id": "smtp-lab-mailpit",
+          "name": "SMTP Lab Mailpit"
+        }
+      }
     },
     {
       "parameters": {
@@ -157,7 +163,13 @@
         1780,
         300
       ],
-      "notes": "L2 escalation on SLA breach or status endpoint failure (fail-safe). No autonomous containment. contain_requested creates an approval-required request; no containment action is executed."
+      "notes": "L2 escalation on SLA breach or status endpoint failure (fail-safe). No autonomous containment. contain_requested creates an approval-required request; no containment action is executed.",
+      "credentials": {
+        "smtp": {
+          "id": "smtp-lab-mailpit",
+          "name": "SMTP Lab Mailpit"
+        }
+      }
     },
     {
       "parameters": {

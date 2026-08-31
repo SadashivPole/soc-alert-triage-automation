@@ -56,8 +56,18 @@ section describes the configured startup behavior and is statically validated.
 
 The compose service is configured to run `scripts/n8n-import-workflows.sh`
 inside the n8n container before `n8n start`. The helper deterministically
-imports and activates WF1, WF2, WF3 and WF5 from `n8n/workflows/`.
+provisions the lab SMTP credential, then imports and activates WF1, WF2, WF3 and
+WF5 from `n8n/workflows/`.
 
+- **SMTP credential (Phase 2D):** every Send Email (`emailSend`) node in
+  WF2/WF3/WF5 is bound to an n8n SMTP credential named **`SMTP Lab Mailpit`**
+  (`n8n/credentials/smtp_lab_mailpit.json`). n8n refuses to execute an email node
+  with no credential bound, so the helper imports the credential first
+  (`n8n import:credentials`), rendering the connection details from the
+  `SMTP_HOST`/`SMTP_PORT`/`SMTP_SECURE`/`SMTP_USER`/`SMTP_PASS` environment
+  variables (lab defaults target Mailpit on `mailpit:1025` with no auth). No
+  connection detail or password is hardcoded in the checked-in files; n8n
+  encrypts the imported credential at rest.
 - Workflow JSONs are mounted read-only at `/workflows`.
 - The JSONs contain stable ids, so re-running startup updates the existing
   records rather than creating duplicates.
@@ -70,8 +80,11 @@ imports and activates WF1, WF2, WF3 and WF5 from `n8n/workflows/`.
 
 1. In n8n UI, go to Workflows → Import from File → select JSON from `n8n/workflows/`
 2. Configure credentials:
-   - SMTP: create SMTP credential (lab: Mailpit host mailpit:1025, no auth), name it `smtp_lab_credential_ref` or update workflow credential reference
-   - No secrets in JSON — only references
+   - SMTP: create an SMTP credential (lab: Mailpit host `mailpit`, port `1025`,
+     no TLS, no auth) and name it exactly **`SMTP Lab Mailpit`** — that is the
+     name bound to every Send Email node. Under Docker Compose this credential is
+     provisioned automatically by the import helper (see above).
+   - No secrets in JSON — only credential references
 3. Set env vars in n8n container:
    - `N8N_CALLBACK_TOKEN`, `N8N_WEBHOOK_TOKEN` (shared token)
    - `N8N_WEBHOOK_BASE_URL` (e.g. http://n8n:5678)
