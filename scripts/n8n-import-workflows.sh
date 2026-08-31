@@ -31,7 +31,11 @@ SMTP_SECURE="${SMTP_SECURE:-false}"
 SMTP_USER="${SMTP_USER:-${SMTP_USERNAME:-}}"
 SMTP_PASS="${SMTP_PASS:-${SMTP_PASSWORD:-}}"
 
-RENDERED_CRED="$(mktemp /tmp/smtp-cred.XXXXXX.json)"
+# BusyBox mktemp (Alpine-based n8nio/n8n:1.85.0) rejects templates whose
+# trailing XXXXXX is followed by a suffix (e.g. "/tmp/smtp-cred.XXXXXX.json"
+# -> "mktemp: Invalid argument"). Use the plain trailing-XXXXXX form; n8n
+# reads the rendered JSON regardless of the filename suffix.
+RENDERED_CRED="$(mktemp /tmp/smtp-cred.XXXXXX)"
 trap 'rm -f "$RENDERED_CRED"' EXIT
 
 cat > "$RENDERED_CRED" <<EOF

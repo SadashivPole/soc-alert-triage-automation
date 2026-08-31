@@ -117,6 +117,25 @@ def test_import_helper_provisions_credential_before_workflows() -> None:
     assert SMTP_CREDENTIAL_NAME in script
 
 
+def test_import_helper_uses_busybox_compatible_mktemp() -> None:
+    """n8nio/n8n:1.85.0 (BusyBox mktemp) rejects templates with a suffix after XXXXXX."""
+    script = IMPORT_SCRIPT.read_text(encoding="utf-8")
+    match = re.search(r'RENDERED_CRED="\$\(mktemp\s+(\S+)\)"', script)
+    assert match, "import helper must create its temp credential file with mktemp"
+    template = match.group(1)
+    # BusyBox mktemp fails ("Invalid argument") when the template has a literal
+    # suffix after the XXXXXX run, e.g. /tmp/smtp-cred.XXXXXX.json.
+    assert re.fullmatch(r"\S*X{6}", template), (
+        f"mktemp template {template!r} must end with exactly six X's: "
+        "Alpine/BusyBox mktemp (n8n 1.85.0) rejects a suffix after XXXXXX "
+        "with 'Invalid argument'"
+    )
+    # Cleanup must still remove the same rendered credential file.
+    assert re.search(r"trap\s+'rm -f \"\$RENDERED_CRED\"'\s+EXIT", script), (
+        "trap must still remove the rendered credential file"
+    )
+
+
 def test_compose_mounts_credentials_and_supplies_smtp_env() -> None:
     """Compose must make the credential dir and SMTP env available to n8n."""
     compose = yaml.safe_load(COMPOSE_FILE.read_text(encoding="utf-8"))
