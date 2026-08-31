@@ -131,9 +131,18 @@ def test_compose_runs_import_before_n8n_start() -> None:
     compose = yaml.safe_load(COMPOSE_FILE.read_text(encoding="utf-8"))
     n8n = compose["services"]["n8n"]
 
-    command = n8n["command"] if isinstance(n8n["command"], str) else " ".join(n8n["command"])
+    entrypoint = n8n.get("entrypoint")
+    assert entrypoint == ["/bin/sh", "-c"], (
+        "n8n image entrypoint is the n8n CLI; override with a shell wrapper"
+    )
+    command = (
+        n8n["command"]
+        if isinstance(n8n["command"], str)
+        else " ".join(str(p) for p in n8n["command"])
+    )
     assert "n8n-import-workflows.sh" in command
     assert "n8n start" in command
+    assert not (isinstance(n8n["command"], list) and n8n["command"] and n8n["command"][0] == "sh")
 
     volumes = [str(volume) for volume in n8n["volumes"]]
     assert any("n8n-import-workflows.sh" in volume for volume in volumes), (
