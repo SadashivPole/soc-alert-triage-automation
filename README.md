@@ -2,15 +2,16 @@
 
 **AI-Assisted, defensive SOC automation for L1/L2 alert triage — built with Python, n8n, Wazuh, and Docker.**
 
-![Status](https://img.shields.io/badge/status-foundation%20%2F%20planning-blue)
+![Status](https://img.shields.io/badge/status-Phase%202C%20complete-green)
 ![Python](https://img.shields.io/badge/python-3.11%2B-blue)
 ![Docker](https://img.shields.io/badge/docker-compose-blue)
 ![n8n](https://img.shields.io/badge/n8n-workflows-orange)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
-> **Project status (honest):** This repository is currently at the **foundation stage** —
-> architecture, development plan, security policy, and directory scaffolding exist;
-> runnable services land in Phase 1 (see the [Development Roadmap](#development-roadmap)).
+> **Project status (honest):** **Phase 2C is complete** — the minimum Docker lab
+> (triage-api + n8n + mailpit) builds and runs, and the alert pipeline (ingest →
+> normalize → dedupe → enrich → score → decide → notify) is implemented and tested
+> (see the [Development Roadmap](#development-roadmap)).
 > This is a **portfolio / homelab-grade project**. It is *not* deployed in any production
 > SOC, makes **no production claims**, and ships only defensive capabilities.
 
@@ -194,24 +195,27 @@ Summary — full policy in [SECURITY.md](SECURITY.md):
 
 ## Installation Prerequisites
 
-*Nothing is runnable yet (foundation stage). When Phase 1 lands, you will need:*
+The Docker stack is runnable (Phase 2C complete). You will need:
 
-| Requirement | Version (planned) | Purpose |
+| Requirement | Version | Purpose |
 | --- | --- | --- |
 | Docker Engine + Docker Compose | 24+ / v2 | Run the multi-service lab |
 | Git | any | Clone this repository |
 | Python | 3.11+ (via Docker; locally only for development) | Triage API development & tests |
 | A free VirusTotal account | public API key | IOC enrichment (optional) |
-| ~4 GB RAM free | — | Wazuh manager + n8n + API stack |
+| ~4 GB RAM free | — | n8n + triage-api + mailpit stack |
 
-Planned quick-start (active once Phase 1 is merged):
+Quick start:
 
 ```bash
 git clone https://github.com/SadashivPole/soc-alert-triage-automation.git
 cd soc-alert-triage-automation
-cp .env.example .env          # fill in placeholders (generate API keys)
-docker compose up -d          # triage-api + n8n + mailpit
-./scripts/send_test_alert.py docs/sample-alerts/01_wazuh_ssh_brute_force.json
+git checkout main
+cp .env.example .env
+# Set TRIAGE_INGEST_API_KEY=your-key in .env
+docker compose build
+docker compose up -d
+# Test: POST /api/v1/alerts/ingest with X-API-Key header
 ```
 
 ## Development Roadmap
@@ -220,9 +224,9 @@ Full detail with acceptance criteria: [DEVELOPMENT_PLAN.md](DEVELOPMENT_PLAN.md)
 
 | Phase | Focus | Key deliverables | Status |
 | --- | --- | --- | --- |
-| **0 — Foundation** | Docs & scaffolding | ARCHITECTURE, DEVELOPMENT_PLAN, SECURITY, CONTRIBUTING, README, .env.example, tree | ✅ this commit |
-| **1 — MVP pipeline** | Core triage loop | FastAPI skeleton, ingest+normalize+dedupe, SQLite models, scoring v1, docker compose (API+n8n+Mailpit), simulator, unit tests | ⬜ next |
-| **2 — Enrichment** | Threat intel | VirusTotal client (cache + rate limit), MISP profile, scoring v2 (intel signals), n8n notifications | ⬜ |
+| **0 — Foundation** | Docs & scaffolding | ARCHITECTURE, DEVELOPMENT_PLAN, SECURITY, CONTRIBUTING, README, .env.example, tree | ✅ complete |
+| **1 — MVP pipeline** | Core triage loop | FastAPI skeleton, ingest+normalize+dedupe, SQLite models, scoring v1, docker compose (API+n8n+Mailpit), simulator, unit tests | ✅ complete |
+| **2 — Enrichment** | Threat intel | VirusTotal client (cache + rate limit), MISP profile, scoring v2 (intel signals), n8n notifications | ✅ complete (2A–2C) |
 | **3 — Incidents & UX** | Analyst workflow | Incident records, SLA escalation workflow, feedback endpoint, runbooks, SOC console dashboard | ⬜ |
 | **4 — Real Wazuh** | Full integration | Wazuh manager profile, integrator script, custom ruleset, asset inventory, human-approved response runbooks | ⬜ |
 | **5 — Optional AI** | LLM assist & tuning | Clearly-labeled LLM triage summaries (deterministic fallback), feedback-driven weight tuning, MITRE mapping | ⬜ |
