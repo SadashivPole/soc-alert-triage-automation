@@ -1,0 +1,5 @@
+# Shell scripts must stay LF-only in the working tree on every platform.
+# Windows checkouts otherwise rewrite them to CRLF (core.autocrlf), and the
+# BusyBox /bin/sh in n8nio/n8n:1.85.0 then fails to parse the mounted
+# startup script ("not found"/syntax failures).
+*.sh text eol=lf

@@ -136,6 +136,31 @@ def test_import_helper_uses_busybox_compatible_mktemp() -> None:
     )
 
 
+def test_import_helper_has_no_crlf_line_endings() -> None:
+    """BusyBox /bin/sh in n8nio/n8n:1.85.0 cannot parse CRLF line endings.
+
+    The script is mounted into the container from a Windows checkout, so a
+    CRLF-converted file would fail before the mktemp line ever runs. The
+    checked-in blob (and the worktree, per .gitattributes) must be LF-only.
+    """
+    assert IMPORT_SCRIPT.is_file()
+    raw = IMPORT_SCRIPT.read_bytes()
+    crlf_count = raw.count(b"\r\n")
+    assert b"\r\n" not in raw, (
+        f"{IMPORT_SCRIPT.name} contains CRLF line endings ({crlf_count} occurrences); "
+        "BusyBox /bin/sh in n8nio/n8n:1.85.0 fails to parse it"
+    )
+    assert raw.count(b"\n") > 0, "script must use LF line endings"
+    assert b"\r" not in raw, "stray carriage-return bytes must not be present"
+
+    # .gitattributes must keep *.sh LF on Windows checkouts (core.autocrlf)
+    # so the mounted script never regresses to CRLF on Windows.
+    attributes = (REPO_ROOT / ".gitattributes").read_text(encoding="utf-8")
+    assert re.search(r"(?m)^\*\.sh\s+text\s+eol=lf\s*$", attributes), (
+        ".gitattributes must declare `*.sh text eol=lf` to keep shell scripts LF-only"
+    )
+
+
 def test_compose_mounts_credentials_and_supplies_smtp_env() -> None:
     """Compose must make the credential dir and SMTP env available to n8n."""
     compose = yaml.safe_load(COMPOSE_FILE.read_text(encoding="utf-8"))
