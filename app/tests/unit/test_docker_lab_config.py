@@ -93,6 +93,50 @@ def test_triage_api_has_no_hard_dependency_on_n8n_or_mailpit() -> None:
     )
 
 
+def test_compose_has_no_obsolete_version_field() -> None:
+    """Compose v2 ignores top-level version; keep the file warning-free."""
+    compose_text = COMPOSE_FILE.read_text(encoding="utf-8")
+    compose = yaml.safe_load(compose_text)
+    assert "version" not in compose
+    assert not compose_text.lstrip().startswith("version:")
+
+
+def test_mailpit_healthcheck_uses_documented_readyz() -> None:
+    """Mailpit /api/v1/status is 404; /readyz is the documented readiness probe."""
+    compose = yaml.safe_load(COMPOSE_FILE.read_text(encoding="utf-8"))
+    healthcheck = compose["services"]["mailpit"]["healthcheck"]["test"]
+    joined = " ".join(str(part) for part in healthcheck)
+    assert "/readyz" in joined
+    assert "/api/v1/status" not in joined
+    assert "localhost" in joined or "127.0.0.1" in joined
+
+
+def test_n8n_encryption_key_is_not_hardcoded() -> None:
+    """Encryption key must come from .env; changing it on an existing volume mismatches."""
+    compose_text = COMPOSE_FILE.read_text(encoding="utf-8")
+    compose = yaml.safe_load(compose_text)
+    key = compose["services"]["n8n"]["environment"]["N8N_ENCRYPTION_KEY"]
+    assert "N8N_ENCRYPTION_KEY" in str(key)
+    assert "lab-encryption-key-do-not-use-in-prod" not in compose_text
+    assert "${N8N_ENCRYPTION_KEY:-" not in compose_text
+
+
+def test_n8n_startup_does_not_pass_sh_as_cli_command() -> None:
+    """n8nio/n8n:1.85.0 treats command args as n8n CLI verbs; do not pass sh there."""
+    compose = yaml.safe_load(COMPOSE_FILE.read_text(encoding="utf-8"))
+    n8n = compose["services"]["n8n"]
+    command = n8n["command"]
+    entrypoint = n8n.get("entrypoint")
+    assert entrypoint == ["/bin/sh", "-c"]
+    if isinstance(command, list):
+        assert command[0] != "sh"
+        joined = " ".join(str(part) for part in command)
+    else:
+        joined = str(command)
+    assert "n8n-import-workflows.sh" in joined
+    assert "n8n start" in joined
+
+
 def test_health_source_does_not_hide_route_with_api_v1_prefix() -> None:
     """Guard against the route itself drifting under /api/v1.
 

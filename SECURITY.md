@@ -40,6 +40,10 @@ explicit analyst approval, fully audit-logged.
    every PR (Phase 1+).
 6. n8n credentials are stored in n8n's encrypted store (`N8N_ENCRYPTION_KEY`); exported
    workflow JSON may contain only credential *references* — reviewers verify this.
+   Generate the key once into `.env` and keep it stable. Changing
+   `N8N_ENCRYPTION_KEY` while reusing the existing `n8n-data` volume causes a
+   mismatch crash. Do not hardcode the key in compose; do not automatically
+   delete persistent n8n data from the application.
 7. If a secret is ever committed: rotate it immediately, then clean history. Treat every
    pushed secret as compromised.
 
