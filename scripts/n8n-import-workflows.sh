@@ -16,6 +16,14 @@
 # SMTP_USER/SMTP_PASS/SMTP_SECURE) so no connection details or secrets live in
 # the checked-in JSON; the checked-in n8n/credentials/smtp_lab_mailpit.json is
 # the documented default. n8n encrypts the imported data at rest.
+#
+# Credential format (verified against n8n 1.85.0): `n8n import:credentials`
+# requires the input file to be a top-level JSON **array** of credential
+# objects — an object envelope around the array is rejected with "File does not
+# seem to contain credentials. Make sure the credentials are contained in an
+# array." The `id` ("smtp-lab-mailpit") must match the id bound to every
+# emailSend node in WF2/WF3/WF5; 1.85.0 upserts credentials by id, so re-running
+# this helper updates the existing credential instead of failing.
 set -eu
 
 WORKFLOW_DIR="${N8N_WORKFLOW_DIR:-/workflows}"
@@ -39,25 +47,25 @@ RENDERED_CRED="$(mktemp /tmp/smtp-cred.XXXXXX)"
 trap 'rm -f "$RENDERED_CRED"' EXIT
 
 cat > "$RENDERED_CRED" <<EOF
-{
-  "credentials": [
-    {
-      "name": "SMTP Lab Mailpit",
-      "type": "smtp",
-      "data": {
-        "host": "$SMTP_HOST",
-        "port": $SMTP_PORT,
-        "secure": $SMTP_SECURE,
-        "user": "$SMTP_USER",
-        "password": "$SMTP_PASS"
-      }
+[
+  {
+    "id": "smtp-lab-mailpit",
+    "name": "SMTP Lab Mailpit",
+    "type": "smtp",
+    "data": {
+      "host": "$SMTP_HOST",
+      "port": $SMTP_PORT,
+      "secure": $SMTP_SECURE,
+      "user": "$SMTP_USER",
+      "password": "$SMTP_PASS"
     }
-  ]
-}
+  }
+]
 EOF
 
-# Import the credential. Re-runs (restart with persistent volume) fail because a
-# credential with this name already exists — that's expected and harmless.
+# Import the credential. n8n 1.85.0 upserts credentials by id, so re-runs
+# (restart with persistent volume) update the existing credential instead of
+# failing or duplicating it.
 if n8n import:credentials --input="$RENDERED_CRED"; then
   echo "==> SMTP credential imported"
 else

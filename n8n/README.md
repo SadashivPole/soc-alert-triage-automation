@@ -70,8 +70,11 @@ and activates WF1, WF2, WF3 and WF5 from `n8n/workflows/`.
 
 - **SMTP credential (Phase 2D):** every Send Email (`emailSend`) node in
   WF2/WF3/WF5 is bound to an n8n SMTP credential named **`SMTP Lab Mailpit`**
-  (`n8n/credentials/smtp_lab_mailpit.json`). n8n refuses to execute an email node
-  with no credential bound, so the helper imports the credential first
+  (`n8n/credentials/smtp_lab_mailpit.json`). The file is a **top-level JSON
+  array** — the format `n8n import:credentials` requires on n8n 1.85.0 — and
+  carries the credential `id` `smtp-lab-mailpit`, which matches the id bound
+  to every emailSend node. n8n refuses to execute an email node with no
+  credential bound, so the helper imports the credential first
   (`n8n import:credentials`), rendering the connection details from the
   `SMTP_HOST`/`SMTP_PORT`/`SMTP_SECURE`/`SMTP_USER`/`SMTP_PASS` environment
   variables (lab defaults target Mailpit on `mailpit:1025` with no auth). No

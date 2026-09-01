@@ -33,6 +33,9 @@ IMPORT_SCRIPT = REPO_ROOT / "scripts" / "n8n-import-workflows.sh"
 COMPOSE_FILE = REPO_ROOT / "docker-compose.yml"
 
 SMTP_CREDENTIAL_NAME = "SMTP Lab Mailpit"
+#: Credential id bound to every emailSend node (WF2/WF3/WF5) and used as the
+#: import-time upsert key by `n8n import:credentials` (n8n 1.85.0).
+SMTP_CREDENTIAL_ID = "smtp-lab-mailpit"
 EMAIL_NODE_TYPE = "n8n-nodes-base.emailSend"
 FUNCTION_NODE_TYPE = "n8n-nodes-base.function"
 
@@ -83,12 +86,22 @@ def test_every_email_node_has_smtp_credential_bound() -> None:
 
 
 def test_lab_smtp_credential_file_points_at_mailpit() -> None:
-    """The provisioned credential targets the local Mailpit sink, no real auth."""
+    """The provisioned credential targets the local Mailpit sink, no real auth.
+
+    The file must be a **top-level JSON array** — `n8n import:credentials`
+    (verified against n8n 1.85.0) rejects an object wrapper with "File does not
+    seem to contain credentials. Make sure the credentials are contained in an
+    array." The credential id must match the id every emailSend node binds.
+    """
     assert CREDENTIAL_FILE.is_file(), f"missing lab credential: {CREDENTIAL_FILE}"
     data = json.loads(CREDENTIAL_FILE.read_text(encoding="utf-8"))
-    creds = data.get("credentials")
-    assert isinstance(creds, list) and len(creds) == 1
-    cred = creds[0]
+    assert isinstance(data, list) and len(data) == 1, (
+        "credential file must be a top-level JSON array (n8n import:credentials format)"
+    )
+    cred = data[0]
+    assert cred.get("id") == SMTP_CREDENTIAL_ID, (
+        f"credential id must be {SMTP_CREDENTIAL_ID!r} (the id bound by every emailSend node)"
+    )
     assert cred["name"] == SMTP_CREDENTIAL_NAME
     assert cred["type"] == "smtp"
     conn = cred["data"]
