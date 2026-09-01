@@ -214,7 +214,9 @@ git clone https://github.com/SadashivPole/soc-alert-triage-automation.git
 cd soc-alert-triage-automation
 git checkout main
 cp .env.example .env
-# Set TRIAGE_INGEST_API_KEY=your-key in .env
+# Set TRIAGE_INGEST_API_KEY and generate a stable N8N_ENCRYPTION_KEY
+# (openssl rand -hex 24). Keep that key; changing it on an existing
+# n8n-data volume causes an encryption-key mismatch.
 docker compose build
 docker compose up -d
 # Test: POST /api/v1/alerts/ingest with X-API-Key header

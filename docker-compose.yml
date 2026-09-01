@@ -1,11 +1,7 @@
 # Phase 2C — SOAR Lab Configuration
-# Docker configuration is statically validated; Docker/n8n/Mailpit container
-# runtime was NOT executed in this sandbox.
 # Services: triage-api + n8n + mailpit
 # No TheHive, no autonomous containment, no new providers.
 # Based on ARCHITECTURE.md §13, SECURITY.md §4.
-
-version: "3.9"
 
 services:
   triage-api:
@@ -59,7 +55,11 @@ services:
       TRIAGE_API_BASE_URL: ${TRIAGE_API_BASE_URL:-http://triage-api:8000}
       # Compatibility alias retained for deployments that reference TRIAGE_API_URL.
       TRIAGE_API_URL: ${TRIAGE_API_BASE_URL:-http://triage-api:8000}
-      N8N_ENCRYPTION_KEY: ${N8N_ENCRYPTION_KEY:-lab-encryption-key-do-not-use-in-prod}
+      # Required and stable. Do not hardcode a key here. Generate once into
+      # `.env` and keep it. Changing N8N_ENCRYPTION_KEY while reusing the
+      # existing n8n-data volume causes "Mismatching encryption keys".
+      # Fresh volumes initialize cleanly; this stack never deletes n8n-data.
+      N8N_ENCRYPTION_KEY: ${N8N_ENCRYPTION_KEY:?Set N8N_ENCRYPTION_KEY in .env and keep it stable}
       # Optional SMTP to Mailpit for notifications. Values match the $env.*
       # references used by the checked-in workflows.
       SMTP_HOST: mailpit
@@ -87,20 +87,19 @@ services:
     networks:
       - soc-core
       - soc-edge
-    # Import WF1/WF2/WF3/WF5 before the n8n server starts. The JSONs have
-    # stable ids so re-running a fresh compose startup updates the existing
-    # records instead of creating duplicates.
+    # n8nio/n8n:1.85.0 ENTRYPOINT is the n8n CLI (via tini). Passing `sh` as
+    # `command` makes n8n treat `sh` as an n8n subcommand ("command sh not
+    # found"). Override the entrypoint with a real shell wrapper instead.
+    entrypoint: ["/bin/sh", "-c"]
     command:
-      - sh
-      - -c
-      - "sh /usr/local/bin/n8n-import-workflows.sh && n8n start"
+      - "/usr/local/bin/n8n-import-workflows.sh && exec n8n start"
     # Healthcheck using n8n's internal endpoint if available; fallback to port open
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:5678/healthz || exit 1"]
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:5678/healthz || curl -sf http://127.0.0.1:5678/healthz || exit 1"]
       interval: 15s
       timeout: 5s
-      retries: 3
-      start_period: 10s
+      retries: 8
+      start_period: 40s
 
   mailpit:
     image: axllent/mailpit:v1.20
@@ -121,7 +120,8 @@ services:
     networks:
       - soc-core
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:8025/api/v1/status || exit 1"]
+      # Documented Mailpit readiness endpoint (GET /api/v1/status is 404).
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8025/readyz || exit 1"]
       interval: 10s
       timeout: 3s
       retries: 3
