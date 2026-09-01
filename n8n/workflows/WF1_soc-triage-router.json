@@ -5,7 +5,7 @@
       "parameters": {
         "httpMethod": "POST",
         "path": "soc-alert-scored",
-        "responseMode": "responseNode",
+        "responseMode": "onReceived",
         "options": {
           "rawBody": false
         }
@@ -37,18 +37,29 @@
     },
     {
       "parameters": {
-        "conditions": {
-          "string": [
+        "mode": "rules",
+        "dataType": "string",
+        "value1": "={{ $json.severity }}",
+        "rules": {
+          "rules": [
             {
-              "value1": "={{ $json.severity }}",
-              "operation": "isIn",
-              "value2": "high,critical"
+              "operation": "regex",
+              "value2": "^(high|critical)$",
+              "outputKey": "0",
+              "output": 0
+            },
+            {
+              "operation": "notRegex",
+              "value2": "^(high|critical)$",
+              "outputKey": "1",
+              "output": 1
             }
           ]
         },
         "options": {
           "allMatching": false
-        }
+        },
+        "fallbackOutput": -1
       },
       "id": "wf1-switch-severity",
       "name": "Switch - Severity Tier",
@@ -92,7 +103,11 @@
               "value": "application/json"
             }
           ]
-        }
+        },
+        "method": "POST",
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json) }}",
+        "sendHeaders": true
       },
       "id": "wf1-call-escalation",
       "name": "HTTP - Call Escalation WF",
@@ -136,7 +151,11 @@
               "value": "application/json"
             }
           ]
-        }
+        },
+        "method": "POST",
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json) }}",
+        "sendHeaders": true
       },
       "id": "wf1-call-l1-notify",
       "name": "HTTP - Call L1 Notify WF",
