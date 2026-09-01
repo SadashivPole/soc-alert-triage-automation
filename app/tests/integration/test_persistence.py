@@ -17,16 +17,16 @@ through the same startup path the service uses (engine + Alembic migrations):
 from __future__ import annotations
 
 import json
-import os
+import sqlite3
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
 from typing import Any
 from uuid import UUID
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import Engine, text
+from sqlalchemy import Engine, event, text
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import NullPool
 from tests.conftest import TEST_CALLBACK_TOKEN, TEST_INGEST_KEY
@@ -124,10 +124,6 @@ def _audit_rows(engine: Engine) -> list[Any]:
     factory = create_session_factory(engine)
     with session_scope(factory) as session:
         return AuditRepository(session).all()
-
-
-def _db_path(db_url: str) -> Path:
-    return Path(db_url.removeprefix("sqlite:///"))
 
 
 # ---------------------------------------------------------------------------
@@ -593,8 +589,16 @@ def test_rollback_on_failure_leaves_no_partial_state(engine: Engine) -> None:
 
 def test_db_unavailable_returns_safe_503(db_url: str) -> None:
     """When the database is gone, ingest answers a retryable 503 — and the
-    error envelope leaks no database internals (no paths, no driver text)."""
-    path = _db_path(db_url)
+    error envelope leaks no database internals (no paths, no driver text).
+
+    The outage is simulated **at the driver/connection layer**: a SQLAlchemy
+    ``connect`` event raises :class:`~sqlalchemy.exc.OperationalError` for
+    every new connection attempt, exactly as if the database had become
+    unreachable. This is deterministic on Windows and Linux — it does not
+    rely on Unix ``chmod`` permission semantics, which Windows does not
+    enforce for SQLite (``chmod(0o000)`` only sets the read-only bit and
+    still lets the current user open the file).
+    """
     app = create_app(settings=_settings(db_url))
 
     with TestClient(app) as client:
@@ -607,9 +611,21 @@ def test_db_unavailable_returns_safe_503(db_url: str) -> None:
         )
         assert client.get("/health").status_code == 200
 
-        # Simulate total database loss: drop the pool and lock the file away.
-        client.app.state.db_engine.dispose()
-        os.chmod(path, 0o000)
+        # Simulate total database loss at the driver layer: every *new*
+        # connection attempt fails with OperationalError. Dispose the pool
+        # so the next checkout must reconnect (and pool_pre_ping cannot
+        # reuse a live connection).
+        engine: Engine = client.app.state.db_engine
+
+        @event.listens_for(engine, "connect", insert=True)
+        def _reject_connections(_dbapi_connection: Any, _connection_record: Any) -> None:
+            raise OperationalError(
+                "SELECT 1",
+                {},
+                sqlite3.OperationalError("unable to open database file"),
+            )
+
+        engine.dispose()
         try:
             response = client.post("/api/v1/alerts/ingest", json=_sample_payload(), headers=_auth())
             assert response.status_code == 503
@@ -619,14 +635,14 @@ def test_db_unavailable_returns_safe_503(db_url: str) -> None:
             assert ".db" not in leaked
             assert "sqlite" not in leaked.lower()
             assert "unable to open" not in leaked.lower()
-            assert str(path) not in leaked
+            assert str(db_url) not in leaked
 
             health = client.get("/health")
             assert health.status_code == 503
             ready = client.get("/ready")
             assert ready.status_code == 503
         finally:
-            os.chmod(path, 0o644)
+            event.remove(engine, "connect", _reject_connections)
 
 
 # ---------------------------------------------------------------------------
