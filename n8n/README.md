@@ -54,15 +54,27 @@ n8n/
 The Phase 2C sandbox did **not** execute the Docker/n8n/Mailpit runtime. This
 section describes the configured startup behavior and is statically validated.
 
-The compose service is configured to run `scripts/n8n-import-workflows.sh`
-inside the n8n container before `n8n start`. The helper deterministically
-provisions the lab SMTP credential, then imports and activates WF1, WF2, WF3 and
-WF5 from `n8n/workflows/`.
+The compose service overrides the `n8nio/n8n:1.85.0` entrypoint with `/bin/sh -c`
+so the import helper can run **before** `n8n start`. Do **not** pass `sh` as an
+n8n CLI `command` argument — that image treats command tokens as n8n verbs and
+fails with `command sh not found`.
+
+`N8N_ENCRYPTION_KEY` must be set in `.env` and kept stable. It is **not**
+hardcoded in compose. Changing the key while reusing the `n8n-data` volume
+causes `Mismatching encryption keys`. This lab never deletes persistent n8n
+data automatically; operators must create a fresh volume only if they
+intentionally rotate the key.
+
+The helper deterministically provisions the lab SMTP credential, then imports
+and activates WF1, WF2, WF3 and WF5 from `n8n/workflows/`.
 
 - **SMTP credential (Phase 2D):** every Send Email (`emailSend`) node in
   WF2/WF3/WF5 is bound to an n8n SMTP credential named **`SMTP Lab Mailpit`**
-  (`n8n/credentials/smtp_lab_mailpit.json`). n8n refuses to execute an email node
-  with no credential bound, so the helper imports the credential first
+  (`n8n/credentials/smtp_lab_mailpit.json`). The file is a **top-level JSON
+  array** — the format `n8n import:credentials` requires on n8n 1.85.0 — and
+  carries the credential `id` `smtp-lab-mailpit`, which matches the id bound
+  to every emailSend node. n8n refuses to execute an email node with no
+  credential bound, so the helper imports the credential first
   (`n8n import:credentials`), rendering the connection details from the
   `SMTP_HOST`/`SMTP_PORT`/`SMTP_SECURE`/`SMTP_USER`/`SMTP_PASS` environment
   variables (lab defaults target Mailpit on `mailpit:1025` with no auth). No

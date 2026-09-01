@@ -33,6 +33,9 @@ IMPORT_SCRIPT = REPO_ROOT / "scripts" / "n8n-import-workflows.sh"
 COMPOSE_FILE = REPO_ROOT / "docker-compose.yml"
 
 SMTP_CREDENTIAL_NAME = "SMTP Lab Mailpit"
+#: Credential id bound to every emailSend node (WF2/WF3/WF5) and used as the
+#: import-time upsert key by `n8n import:credentials` (n8n 1.85.0).
+SMTP_CREDENTIAL_ID = "smtp-lab-mailpit"
 EMAIL_NODE_TYPE = "n8n-nodes-base.emailSend"
 FUNCTION_NODE_TYPE = "n8n-nodes-base.function"
 
@@ -83,12 +86,22 @@ def test_every_email_node_has_smtp_credential_bound() -> None:
 
 
 def test_lab_smtp_credential_file_points_at_mailpit() -> None:
-    """The provisioned credential targets the local Mailpit sink, no real auth."""
+    """The provisioned credential targets the local Mailpit sink, no real auth.
+
+    The file must be a **top-level JSON array** — `n8n import:credentials`
+    (verified against n8n 1.85.0) rejects an object wrapper with "File does not
+    seem to contain credentials. Make sure the credentials are contained in an
+    array." The credential id must match the id every emailSend node binds.
+    """
     assert CREDENTIAL_FILE.is_file(), f"missing lab credential: {CREDENTIAL_FILE}"
     data = json.loads(CREDENTIAL_FILE.read_text(encoding="utf-8"))
-    creds = data.get("credentials")
-    assert isinstance(creds, list) and len(creds) == 1
-    cred = creds[0]
+    assert isinstance(data, list) and len(data) == 1, (
+        "credential file must be a top-level JSON array (n8n import:credentials format)"
+    )
+    cred = data[0]
+    assert cred.get("id") == SMTP_CREDENTIAL_ID, (
+        f"credential id must be {SMTP_CREDENTIAL_ID!r} (the id bound by every emailSend node)"
+    )
     assert cred["name"] == SMTP_CREDENTIAL_NAME
     assert cred["type"] == "smtp"
     conn = cred["data"]
@@ -115,6 +128,50 @@ def test_import_helper_provisions_credential_before_workflows() -> None:
     assert "${SMTP_PORT:-1025}" in script
     # The credential name used in the JSON must match the provisioned credential.
     assert SMTP_CREDENTIAL_NAME in script
+
+
+def test_import_helper_uses_busybox_compatible_mktemp() -> None:
+    """n8nio/n8n:1.85.0 (BusyBox mktemp) rejects templates with a suffix after XXXXXX."""
+    script = IMPORT_SCRIPT.read_text(encoding="utf-8")
+    match = re.search(r'RENDERED_CRED="\$\(mktemp\s+(\S+)\)"', script)
+    assert match, "import helper must create its temp credential file with mktemp"
+    template = match.group(1)
+    # BusyBox mktemp fails ("Invalid argument") when the template has a literal
+    # suffix after the XXXXXX run, e.g. /tmp/smtp-cred.XXXXXX.json.
+    assert re.fullmatch(r"\S*X{6}", template), (
+        f"mktemp template {template!r} must end with exactly six X's: "
+        "Alpine/BusyBox mktemp (n8n 1.85.0) rejects a suffix after XXXXXX "
+        "with 'Invalid argument'"
+    )
+    # Cleanup must still remove the same rendered credential file.
+    assert re.search(r"trap\s+'rm -f \"\$RENDERED_CRED\"'\s+EXIT", script), (
+        "trap must still remove the rendered credential file"
+    )
+
+
+def test_import_helper_has_no_crlf_line_endings() -> None:
+    """BusyBox /bin/sh in n8nio/n8n:1.85.0 cannot parse CRLF line endings.
+
+    The script is mounted into the container from a Windows checkout, so a
+    CRLF-converted file would fail before the mktemp line ever runs. The
+    checked-in blob (and the worktree, per .gitattributes) must be LF-only.
+    """
+    assert IMPORT_SCRIPT.is_file()
+    raw = IMPORT_SCRIPT.read_bytes()
+    crlf_count = raw.count(b"\r\n")
+    assert b"\r\n" not in raw, (
+        f"{IMPORT_SCRIPT.name} contains CRLF line endings ({crlf_count} occurrences); "
+        "BusyBox /bin/sh in n8nio/n8n:1.85.0 fails to parse it"
+    )
+    assert raw.count(b"\n") > 0, "script must use LF line endings"
+    assert b"\r" not in raw, "stray carriage-return bytes must not be present"
+
+    # .gitattributes must keep *.sh LF on Windows checkouts (core.autocrlf)
+    # so the mounted script never regresses to CRLF on Windows.
+    attributes = (REPO_ROOT / ".gitattributes").read_text(encoding="utf-8")
+    assert re.search(r"(?m)^\*\.sh\s+text\s+eol=lf\s*$", attributes), (
+        ".gitattributes must declare `*.sh text eol=lf` to keep shell scripts LF-only"
+    )
 
 
 def test_compose_mounts_credentials_and_supplies_smtp_env() -> None:
