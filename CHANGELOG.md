@@ -6,6 +6,67 @@ semantic (`v0.1.0` targeted at the end of Phase 1).
 
 ## [Unreleased]
 
+### Added — Phase 3.2: Incident lifecycle + feedback synchronization
+
+- **Strict incident status model.** `IncidentStatus` is now
+  `open | investigating | acknowledged | resolved | false_positive |
+  escalated`, with an explicit transition table
+  (`VALID_TRANSITIONS` in `soc_triage/models/incident.py`):
+  `open → investigating/acknowledged/false_positive/escalated`;
+  `investigating → acknowledged/resolved/escalated/false_positive`;
+  `acknowledged → investigating/resolved/escalated`;
+  `escalated → investigating/acknowledged/resolved/false_positive`;
+  `resolved` and `false_positive` are terminal. No other transitions exist;
+  self-transitions are never allowed (what makes repeated identical feedback
+  idempotent).
+- **Incident update API.** `PATCH /api/v1/incidents/{incident_id}/status`
+  (shared N8N-token auth, same convention as the analyst feedback endpoint)
+  accepts `{status, notes?, actor?}`. Unknown incidents return a structured
+  `404`; illegal transitions return a structured `409` with the current
+  status and the allowed targets. Lifecycle timestamps are maintained in
+  UTC: `acknowledged_at` is set exactly when the incident reaches
+  `acknowledged`; `resolved_at` exactly when it reaches a terminal state;
+  neither is fabricated for any other state.
+- **Feedback → incident synchronization.** `POST /api/v1/alerts/{id}/feedback`
+  keeps its request/response contract exactly, but after persistence it now
+  synchronizes the linked incident **in the same transaction** (all-or-
+  nothing) via the documented conservative mapping — a verdict is *not*
+  proof that remediation is complete:
+  `true_positive → acknowledged` (only when the current state explicitly
+  allows it — never resolved); `acknowledged → acknowledged`;
+  `resolved → resolved` (state machine still requires investigation/
+  acknowledgement first, so `open` incidents are untouched);
+  `false_positive → false_positive`; `escalate → escalated`;
+  `benign → false_positive` (safest valid terminal meaning, never
+  `resolved`); `contain_requested` → **no transition** (human approval
+  required — WF5 approval email unchanged; only an
+  `incident.containment_requested` audit entry is recorded, with
+  `containment_executed: false`). When the current incident state does not
+  allow the mapped transition, the verdict is still recorded and the
+  incident is left exactly as-is.
+- **Audit vocabulary (append-only).** `incident.status_updated` (actor,
+  incident id, before/after status + lifecycle timestamps, optional notes)
+  and `incident.escalated` (emitted alongside `incident.status_updated` on
+  escalation) are added to `incident.created`;
+  `incident.containment_requested` records approval-required containment
+  requests. Snapshots stay small and secret-free (SECURITY.md §5, §7).
+- **Migration `e7f8a9b0c1d2`.** Adds nullable `incidents.acknowledged_at` /
+  `incidents.resolved_at` — restart-safe and idempotent (introspects before
+  adding, so an interrupted run is finished on restart, never replayed),
+  preserves all incident/alert/audit data, and downgrades cleanly on
+  SQLite (FK-safe batch recreate with pragma restore). No data is deleted
+  or reset.
+- **Tests:** `tests/unit/test_incident_state_machine.py` (15 tests: exact
+  transition table, terminal states, error contract, documented mapping),
+  `tests/integration/test_incident_lifecycle.py` (30 tests: valid/illegal
+  transitions, structured 404/409, timestamp semantics, audit rows, all
+  seven feedback-verdict synchronizations, TP-never-resolves,
+  contain-requested non-destruction, restart persistence, idempotency) and
+  `tests/integration/test_incident_lifecycle_migration.py` (3 tests:
+  data-preserving upgrade, restart-safe interruption recovery,
+  data-preserving downgrade). All **584** tests pass; ruff, mypy and
+  `check_secrets.sh` are clean.
+
 ### Fixed — Phase 2D: n8n email notification chain
 
 - **Send Email nodes were missing their SMTP credential binding.** All four

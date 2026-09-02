@@ -421,7 +421,15 @@ Additional routing rules:
 
 **Incidents** (Phase 3): `incidents` table with id `INC-YYYY-MM-DD-NNNN`, severity,
 linked alert/dedupe groups, timeline (audit-derived), and resolution notes. Optional
-TheHive CE export creates a mirrored case (never required).
+TheHive CE export creates a mirrored case (never required). Phase 3.2 adds the
+incident lifecycle: a strict status model (`open → investigating/acknowledged/
+false_positive/escalated → …`, terminal `resolved`/`false_positive`) enforced by
+`PATCH /api/v1/incidents/{id}/status` (structured 404/409) and by analyst feedback
+on linked alerts — a verdict is never proof of remediation, so feedback never
+auto-resolves and `contain_requested` only records an approval-required audit
+entry. Lifecycle timestamps (`acknowledged_at`, `resolved_at`) are populated only
+when the corresponding state is reached; every change is append-only audited
+(`incident.status_updated`, `incident.escalated`, `incident.containment_requested`).
 
 **Notifications** (n8n-mediated): the API never talks to SMTP/chat directly; it POSTs a
 compact `scored_alert` event to the n8n webhook (with `N8N_CALLBACK_TOKEN`). The message
