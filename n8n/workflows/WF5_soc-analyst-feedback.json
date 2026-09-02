@@ -3,40 +3,9 @@
   "nodes": [
     {
       "parameters": {
-        "httpMethod": "POST",
-        "path": "soc-analyst-feedback",
-        "responseMode": "responseNode",
-        "options": {}
-      },
-      "id": "wf5-webhook-feedback",
-      "name": "Webhook - Analyst Feedback",
-      "type": "n8n-nodes-base.webhook",
-      "typeVersion": 1,
-      "position": [
-        460,
-        300
-      ],
-      "webhookId": "soc-analyst-feedback-webhook-id",
-      "notes": "Analyst feedback via form/email. Validates token, forwards to triage-api POST /feedback. No autonomous containment - contain_requested creates an approval-required request; no containment action is executed."
-    },
-    {
-      "parameters": {
-        "functionCode": "// Real token validation for feedback (Phase 2B fix)\n// Token from env credential, exact match only, reject missing/wrong, never log\nconst headers = $input.first().json.headers || $json.headers || {};\nconst body = $input.first().json.body || $json.body || $json;\n\nconst expected = ($env.N8N_WEBHOOK_TOKEN || $env.N8N_CALLBACK_TOKEN || '').trim();\nif (!expected) {\n  throw new Error('Server misconfigured: shared token not set in n8n env');\n}\nconst authHeader = (headers['authorization'] || '').trim();\nconst bearer = authHeader.toLowerCase().startsWith('bearer ') ? authHeader.slice(7).trim() : '';\nconst supplied = (headers['x-n8n-token'] || headers['x-callback-token'] || bearer || '').trim();\nif (!supplied) {\n  throw new Error('Missing authentication token - X-N8N-Token required');\n}\nif (supplied !== expected) {\n  throw new Error('Invalid authentication token');\n}\n\n// Validate verdict allow-list (no autonomous)\nconst allowed = ['true_positive','false_positive','benign','escalate','acknowledged','resolved','contain_requested'];\nconst verdict = (body.verdict || body.payload && body.payload.verdict || '').toLowerCase();\nif (verdict && !allowed.includes(verdict)) {\n  throw new Error(`Invalid verdict: ${verdict} not in allow-list`);\n}\n\n// Ensure no full_log\nconst payloadStr = JSON.stringify(body).toLowerCase();\nif (payloadStr.includes('full_log')) {\n  throw new Error('Security violation: payload must not contain full_log');\n}\n\n// Clarify contain_requested behavior\nif (verdict === 'contain_requested') {\n  console.log('contain_requested creates an approval-required request; no containment action is executed');\n}\n\nreturn { json: body.payload ? body.payload : body };"
-      },
-      "id": "wf5-validate",
-      "name": "Validate Token & Verdict",
-      "type": "n8n-nodes-base.function",
-      "typeVersion": 1,
-      "position": [
-        680,
-        300
-      ],
-      "notes": "Real token validation against $env secret (exact match, reject missing/wrong, never log). Validates verdict allow-list. contain_requested creates an approval-required request; no containment action is executed - no host isolation/user disable/containment. No destructive, no autonomous, no secrets."
-    },
-    {
-      "parameters": {
+        "path": "soc-analyst-feedback-form",
         "formTitle": "SOC Alert Feedback",
-        "formDescription": "Submit verdict for alert. contain_requested creates an approval-required request; no containment action is executed (human approval required).",
+        "formDescription": "Step 1 of 2 - identify the alert under review.<br>contain_requested creates an approval-required request; no containment action is executed (human approval required).",
         "formFields": {
           "values": [
             {
@@ -44,6 +13,35 @@
               "fieldType": "text",
               "requiredField": true
             },
+            {
+              "fieldLabel": "Analyst Email",
+              "fieldType": "text",
+              "requiredField": false
+            }
+          ]
+        },
+        "responseMode": "responseNode",
+        "options": {
+          "buttonLabel": "Next"
+        }
+      },
+      "id": "wf5-form-trigger",
+      "name": "Form Trigger - Analyst Feedback",
+      "type": "n8n-nodes-base.formTrigger",
+      "typeVersion": 2.1,
+      "position": [
+        220,
+        80
+      ],
+      "webhookId": "soc-analyst-feedback-form-webhook-id",
+      "notes": "n8n Form Trigger (required upstream of the 'Form - Feedback' page). Production form URL: /form/soc-analyst-feedback-form. Page 1 collects alert_id + analyst_email; page 2 (Form - Feedback) collects verdict + notes. typeVersion 2.1 + responseMode=responseNode is the supported n8n 1.85.0 combination when a Respond to Webhook node ends the form (v2.2 forbids it). contain_requested creates an approval-required request; no containment action is executed."
+    },
+    {
+      "parameters": {
+        "operation": "page",
+        "defineForm": "fields",
+        "formFields": {
+          "values": [
             {
               "fieldLabel": "Verdict",
               "fieldType": "dropdown",
@@ -78,30 +76,78 @@
               "fieldLabel": "Notes",
               "fieldType": "text",
               "requiredField": false
-            },
-            {
-              "fieldLabel": "Analyst Email",
-              "fieldType": "text",
-              "requiredField": false
             }
           ]
         },
-        "options": {}
+        "options": {
+          "formTitle": "SOC Alert Feedback",
+          "formDescription": "Step 2 of 2 - submit your verdict.<br>contain_requested creates an approval-required request; no containment action is executed (human approval required).",
+          "buttonLabel": "Submit Feedback"
+        }
       },
       "id": "wf5-form",
       "name": "Form - Feedback",
       "type": "n8n-nodes-base.form",
       "typeVersion": 1,
       "position": [
-        900,
-        200
+        440,
+        80
       ],
-      "notes": "Human approval form. contain_requested creates an approval-required request; no containment action is executed. No autonomous response."
+      "notes": "Next Form Page (page 2 of 2). Valid because the Form Trigger node is upstream. Preserves the original feedback fields and the verdict allow-list dropdown (true_positive, false_positive, benign, escalate, acknowledged, resolved, contain_requested). contain_requested creates an approval-required request; no containment action is executed. No autonomous."
     },
     {
       "parameters": {
+        "functionCode": "// WF5 form-branch validation (Form Trigger fix, Phase 2E)\n// Merges page 1 (Form Trigger: Alert ID, Analyst Email) with page 2\n// (Form - Feedback: Verdict, Notes), enforces the SAME verdict allow-list\n// as the webhook branch and the triage-api, and normalizes the payload for\n// POST /api/v1/alerts/{id}/feedback.\n// contain_requested creates an approval-required request; no containment\n// action is executed (no host isolation, no user disable, no autonomous\n// containment). No secrets, no full_log, never log tokens.\nconst page1 = $('Form Trigger - Analyst Feedback').first().json;\nconst page2 = $input.first().json;\n\nconst alertId = String(page1['Alert ID'] || '').trim();\nconst analystEmail = String(page1['Analyst Email'] || '').trim();\n\nif (!alertId) {\n  throw new Error('Missing alert_id - Alert ID is required');\n}\n\n// Dropdown option label carries the human-approval suffix; strip before checks\nlet verdict = String(page2['Verdict'] || '')\n  .replace(' (approval-required, no auto containment)', '')\n  .trim()\n  .toLowerCase();\n\n// Same allow-list as the API (no autonomous verdicts)\nconst allowed = ['true_positive','false_positive','benign','escalate','acknowledged','resolved','contain_requested'];\nif (!verdict || !allowed.includes(verdict)) {\n  throw new Error(`Invalid verdict: ${verdict} not in allow-list`);\n}\n\n// Security: the payload must never carry full_log\nconst payloadStr = JSON.stringify({ page1, page2 }).toLowerCase();\nif (payloadStr.includes('full_log')) {\n  throw new Error('Security violation: payload must not contain full_log');\n}\n\n// contain_requested creates an approval-required request; no containment\n// action is executed. Human approval required.\nif (verdict === 'contain_requested') {\n  console.log('contain_requested creates an approval-required request; no containment action is executed');\n}\n\nconst notes = String(page2['Notes'] || '').trim();\n\nreturn { json: {\n  alert_id: alertId,\n  verdict: verdict,\n  notes: notes,\n  analyst_email: analystEmail,\n  actor: analystEmail || 'analyst',\n  source: 'n8n-form',\n  form_submitted_at: page2.submittedAt || '',\n} };"
+      },
+      "id": "wf5-validate-form",
+      "name": "Validate Form & Verdict",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [
+        660,
+        80
+      ],
+      "notes": "Form-branch validation: merges page 1 (alert_id, analyst_email) with page 2 (verdict, notes), enforces the verdict allow-list, rejects full_log, and normalizes the payload for the shared HTTP POST node. contain_requested creates an approval-required request; no containment action is executed. No secrets, no destructive, no autonomous."
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "soc-analyst-feedback",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "wf5-webhook-feedback",
+      "name": "Webhook - Analyst Feedback",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [
+        220,
+        520
+      ],
+      "webhookId": "soc-analyst-feedback-webhook-id",
+      "notes": "Machine-to-machine feedback entry (API clients with the shared token). Validates token, forwards to triage-api POST /feedback. NEVER wired to the Form page - n8n Form pages require a Form Trigger upstream. No autonomous containment - contain_requested creates an approval-required request; no containment action is executed."
+    },
+    {
+      "parameters": {
+        "functionCode": "// Real token validation for feedback (Phase 2B fix)\n// Token from env credential, exact match only, reject missing/wrong, never log\nconst headers = $input.first().json.headers || $json.headers || {};\nconst body = $input.first().json.body || $json.body || $json;\n\nconst expected = ($env.N8N_WEBHOOK_TOKEN || $env.N8N_CALLBACK_TOKEN || '').trim();\nif (!expected) {\n  throw new Error('Server misconfigured: shared token not set in n8n env');\n}\nconst authHeader = (headers['authorization'] || '').trim();\nconst bearer = authHeader.toLowerCase().startsWith('bearer ') ? authHeader.slice(7).trim() : '';\nconst supplied = (headers['x-n8n-token'] || headers['x-callback-token'] || bearer || '').trim();\nif (!supplied) {\n  throw new Error('Missing authentication token - X-N8N-Token required');\n}\nif (supplied !== expected) {\n  throw new Error('Invalid authentication token');\n}\n\n// Validate verdict allow-list (no autonomous)\nconst allowed = ['true_positive','false_positive','benign','escalate','acknowledged','resolved','contain_requested'];\nconst verdict = (body.verdict || body.payload && body.payload.verdict || '').toLowerCase();\nif (verdict && !allowed.includes(verdict)) {\n  throw new Error(`Invalid verdict: ${verdict} not in allow-list`);\n}\n\n// Ensure no full_log\nconst payloadStr = JSON.stringify(body).toLowerCase();\nif (payloadStr.includes('full_log')) {\n  throw new Error('Security violation: payload must not contain full_log');\n}\n\n// Clarify contain_requested behavior\nif (verdict === 'contain_requested') {\n  console.log('contain_requested creates an approval-required request; no containment action is executed');\n}\n\nreturn { json: body.payload ? body.payload : body };"
+      },
+      "id": "wf5-validate",
+      "name": "Validate Token & Verdict",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [
+        440,
+        520
+      ],
+      "notes": "Real token validation against $env secret (exact match, reject missing/wrong, never log). Validates verdict allow-list. contain_requested creates an approval-required request; no containment action is executed - no host isolation/user disable/containment. No destructive, no autonomous, no secrets."
+    },
+    {
+      "parameters": {
+        "method": "POST",
         "url": "={{ $env.TRIAGE_API_BASE_URL || 'http://triage-api:8000' }}/api/v1/alerts/{{ $json.alert_id }}/feedback",
         "sendBody": true,
+        "sendHeaders": true,
+        "contentType": "json",
         "bodyParameters": {
           "parameters": [
             {
@@ -118,11 +164,6 @@
             }
           ]
         },
-        "options": {
-          "timeout": 5000,
-          "retryOnFail": true,
-          "maxRetries": 2
-        },
         "headerParameters": {
           "parameters": [
             {
@@ -134,6 +175,9 @@
               "value": "application/json"
             }
           ]
+        },
+        "options": {
+          "timeout": 5000
         }
       },
       "id": "wf5-post-feedback",
@@ -141,32 +185,58 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4,
       "position": [
-        1120,
+        900,
         300
       ],
-      "notes": "POST feedback to triage-api. Token from env credential $env.N8N_WEBHOOK_TOKEN || $env.N8N_CALLBACK_TOKEN. Verdict allow-list enforced. contain_requested creates an approval-required request; no containment action is executed. No autonomous containment."
+      "notes": "POST feedback to triage-api (shared by the form and webhook entries; the form submission reaches this node after 'Validate Form & Verdict'). method=POST + contentType=json are explicit: n8n httpRequest v4 defaults to GET which silently dropped the body (runtime fix). Token from env credential $env.N8N_WEBHOOK_TOKEN || $env.N8N_CALLBACK_TOKEN. Verdict allow-list enforced. contain_requested creates an approval-required request; no containment action is executed. No autonomous containment.",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1000
     },
     {
       "parameters": {
-        "conditions": {
-          "string": [
+        "rules": {
+          "values": [
             {
-              "value1": "={{ $json.verdict }}",
-              "operation": "contains",
-              "value2": "contain_requested"
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "wf5-contain-requested-rule",
+                    "leftValue": "={{ $json.verdict }}",
+                    "rightValue": "contain_requested",
+                    "operator": {
+                      "type": "string",
+                      "operation": "contains"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "approval_required"
             }
           ]
+        },
+        "options": {
+          "fallbackOutput": "extra",
+          "renameFallbackOutput": "recorded"
         }
       },
       "id": "wf5-switch-contain",
       "name": "Switch - Contain Requested?",
       "type": "n8n-nodes-base.switch",
-      "typeVersion": 2,
+      "typeVersion": 3.2,
       "position": [
-        1340,
+        1140,
         300
       ],
-      "notes": "If contain_requested, create approval-required ticket only. No containment action is executed - no host isolation, no user disable. Human approval required."
+      "notes": "Routing rule (Switch v3.2 filter format — the previous typeVersion 2 node carried IF-style parameters that Switch ignores, so no branch ever fired; runtime fix). Output 0 'approval_required': verdict contains contain_requested -> approval email ONLY. Fallback output 'recorded': every other verdict -> Respond. No containment action is executed - no host isolation, no user disable. Human approval required."
     },
     {
       "parameters": {
@@ -181,8 +251,8 @@
       "type": "n8n-nodes-base.emailSend",
       "typeVersion": 2,
       "position": [
-        1560,
-        200
+        1380,
+        160
       ],
       "notes": "Approval-required containment request. No containment action executed. Human approval only. No autonomous.",
       "credentials": {
@@ -195,20 +265,54 @@
     {
       "parameters": {
         "respondWith": "json",
-        "responseData": "={{ { \"status\": \"feedback_received\", \"alert_id\": $json.alert_id, \"verdict\": $json.verdict, \"note\": \"contain_requested creates an approval-required request; no containment action is executed\" } }}",
-        "options": {}
+        "options": {},
+        "responseBody": "={{ { \"status\": \"feedback_received\", \"alert_id\": $('HTTP - POST Feedback to API').first().json.alert_id, \"verdict\": $('HTTP - POST Feedback to API').first().json.verdict, \"note\": \"contain_requested creates an approval-required request; no containment action is executed\", \"formSubmittedText\": \"Feedback recorded for alert \" + ($('HTTP - POST Feedback to API').first().json.alert_id || 'unknown') + \" (verdict: \" + ($('HTTP - POST Feedback to API').first().json.verdict || 'n/a') + \"). If you requested containment, an approval request was created - no containment action is executed without human approval.\" } }}"
       },
       "id": "wf5-respond",
       "name": "Respond - Feedback OK",
       "type": "n8n-nodes-base.respondToWebhook",
       "typeVersion": 1,
       "position": [
-        1780,
+        1620,
         300
-      ]
+      ],
+      "notes": "Closes BOTH entries: JSON body for webhook callers, formSubmittedText key renders the n8n Form completion screen for form submissions (n8n 1.85.0 form-frontend contract). Values are read from the HTTP POST response, which is executed on every path (the emailSend output is the SMTP info object, not the alert). Uses the responseBody parameter (the old responseData name fell back to the default body). contain_requested creates an approval-required request; no containment action is executed."
     }
   ],
   "connections": {
+    "Form Trigger - Analyst Feedback": {
+      "main": [
+        [
+          {
+            "node": "Form - Feedback",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Form - Feedback": {
+      "main": [
+        [
+          {
+            "node": "Validate Form & Verdict",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Form & Verdict": {
+      "main": [
+        [
+          {
+            "node": "HTTP - POST Feedback to API",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
     "Webhook - Analyst Feedback": {
       "main": [
         [
@@ -221,22 +325,6 @@
       ]
     },
     "Validate Token & Verdict": {
-      "main": [
-        [
-          {
-            "node": "Form - Feedback",
-            "type": "main",
-            "index": 0
-          },
-          {
-            "node": "HTTP - POST Feedback to API",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Form - Feedback": {
       "main": [
         [
           {
@@ -292,11 +380,11 @@
   "settings": {
     "executionOrder": "v1"
   },
-  "versionId": "wf5-feedback-v2b-fixed",
+  "versionId": "wf5-feedback-v3-form-trigger",
   "id": "wf5-soc-analyst-feedback",
   "meta": {
     "instanceId": "soc-lab",
-    "description": "Phase 2B feedback workflow FIXED: real token validation ($env secret exact match, reject missing/wrong, never log, never hardcode), verdict allow-list, POST to /api/v1/alerts/{id}/feedback, contain_requested creates an approval-required request; no containment action is executed (no host isolation, no user disable, no autonomous containment). Human approval only. No secrets, no full_log, no destructive."
+    "description": "Phase 2E feedback workflow FIXED for n8n 1.85.0: the analyst form is a real n8n Form workflow - Form Trigger (/form/soc-analyst-feedback-form, page 1: alert_id + analyst_email) -> Form - Feedback page (page 2: verdict allow-list dropdown + notes) -> Validate Form & Verdict -> POST /api/v1/alerts/{id}/feedback with the shared token. The machine webhook entry (POST /webhook/soc-analyst-feedback) keeps the Phase 2B token gate (exact match, reject missing/wrong, never log) and is no longer wired to the Form page. contain_requested creates an approval-required request; no containment action is executed (no host isolation, no user disable, no autonomous containment). Human approval only. No secrets, no full_log, no destructive."
   },
   "pinData": {},
   "tags": [
@@ -315,6 +403,10 @@
     {
       "name": "human-approval",
       "createdAt": "2026-08-30"
+    },
+    {
+      "name": "form-trigger-fix",
+      "createdAt": "2026-09-01"
     }
   ]
 }

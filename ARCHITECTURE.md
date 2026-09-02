@@ -446,7 +446,7 @@ Workflows are exported JSON under `n8n/workflows/` (version-controlled; import p
 | WF2 | `soc-analyst-notify` | called by WF1 | render message (IOCs, score factors, runbook) → Email (SMTP) + chat webhook → hand off to WF4 |
 | WF3 | `soc-incident-create` | called by WF1 (high/critical) | create incident via API (or TheHive CE case if enabled) → attach to notification |
 | WF4 | `soc-sla-escalation` | from WF2 | Wait node (15/30 min) → if no ack (checked via API) → escalate: re-notify with L2 tag, loop max 2× |
-| WF5 | `soc-analyst-feedback` | Form trigger (`/form/triage`) | form fields (alert_id, verdict, notes) → POST `/api/v1/alerts/{id}/feedback` (token auth) → confirmation |
+| WF5 | `soc-analyst-feedback` | n8n Form trigger (`/form/soc-analyst-feedback-form`) + machine webhook `/webhook/soc-analyst-feedback` | form pages (alert_id, analyst_email, verdict allow-list, notes) → validate → POST `/api/v1/alerts/{id}/feedback` (token auth) → confirmation |
 | WF6 | `soc-daily-digest` | Cron 07:00 UTC | query API stats endpoints → email digest (volumes, top rules, FP rate, tuning suggestions) |
 
 **n8n error strategy:** a global error workflow posts to the API `/internal/n8n-errors`
