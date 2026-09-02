@@ -2,10 +2,10 @@
 
 The **only** modules that import ORM objects. They translate between the
 domain models (``GroupState`` / ``EventRecord`` / ``CanonicalAlert`` /
-``AuditEntry``) and table rows inside the caller's session — i.e. inside the
-caller's transaction (``db.session_scope``). Business logic (the
-deduplicator, the API) never sees ORM objects, which keeps database/session
-mechanics out of the domain (ARCHITECTURE.md §12).
+``AuditEntry`` / ``Incident``) and table rows inside the caller's session —
+i.e. inside the caller's transaction (``db.session_scope``). Business logic
+(the deduplicator, the API) never sees ORM objects, which keeps
+database/session mechanics out of the domain (ARCHITECTURE.md §12).
 
 Timestamp convention: all datetimes are normalized to UTC on write and on
 read (SQLite stores naive values; treating them as UTC keeps window math
@@ -24,13 +24,17 @@ from sqlalchemy.orm import Session
 from ..audit import AuditEntry
 from ..ingest.deduplication import EventRecord, GroupState
 from ..notifications.client import NotificationResult
+from .assessment import DecisionSeverity
 from .canonical import CanonicalAlert
+from .incident import Incident as IncidentDomain
+from .incident import IncidentStatus
 from .orm import (
     Alert,
     AlertDedupeGroup,
     AlertEvent,
     AnalystFeedback,
     AuditEvent,
+    Incident,
     NotificationAttempt,
 )
 
@@ -220,6 +224,157 @@ class DedupeStateRepository:
         )
 
 
+class IncidentRepository:
+    """Persistence for first-class incidents (Phase 3.1).
+
+    Called inside the caller's transaction (the same unit of work that persists
+    the alert assessment), so incident creation, alert linking and audit rows
+    commit or roll back together.
+
+    Incident ids are ``INC-YYYY-MM-DD-NNNN``: sequential per UTC date, derived
+    from the existing rows for that date (never random), which is safe under
+    the normal single-instance SQLite lab usage this project targets
+    (ARCHITECTURE.md §10).
+    """
+
+    def __init__(self, session: Session) -> None:
+        self._session = session
+
+    # ------------------------------------------------------------------
+    # Reads
+    # ------------------------------------------------------------------
+
+    def open_for_group(self, group_key: str) -> IncidentDomain | None:
+        """The oldest open incident of a dedupe group, if any.
+
+        Recurring/deduplicated alerts of the same rule+agent group attach to
+        this incident instead of creating a second open incident.
+        """
+        row = self._session.execute(
+            select(Incident)
+            .where(Incident.dedupe_group_key == group_key)
+            .where(Incident.status == IncidentStatus.OPEN.value)
+            .order_by(Incident.created_at, Incident.incident_id)
+            .limit(1)
+        ).scalar_one_or_none()
+        return self._to_domain(row) if row is not None else None
+
+    def for_alert(self, alert_id: uuid.UUID) -> IncidentDomain | None:
+        """The incident an alert is attached to (via its ``incident_id``)."""
+        row = self._session.execute(
+            select(Incident)
+            .join(Alert, Alert.incident_id == Incident.incident_id)
+            .where(Alert.alert_id == alert_id)
+        ).scalar_one_or_none()
+        return self._to_domain(row) if row is not None else None
+
+    def get(self, incident_id: str) -> IncidentDomain | None:
+        """Return one incident by its human-readable id, if any."""
+        row = self._session.get(Incident, incident_id)
+        return self._to_domain(row) if row is not None else None
+
+    def all(self, *, limit: int | None = None) -> list[IncidentDomain]:
+        """All incidents (for tests/observability), oldest first."""
+        statement = select(Incident).order_by(Incident.created_at, Incident.incident_id)
+        if limit is not None:
+            statement = statement.limit(limit)
+        return [self._to_domain(row) for row in self._session.scalars(statement)]
+
+    def count(self) -> int:
+        """Number of persisted incidents."""
+        return self._session.execute(select(func.count(Incident.incident_id))).scalar_one()
+
+    # ------------------------------------------------------------------
+    # Writes (inside the caller's transaction)
+    # ------------------------------------------------------------------
+
+    def create(
+        self,
+        *,
+        alert_id: uuid.UUID,
+        severity: DecisionSeverity,
+        dedupe_group_key: str,
+        occurred_at: datetime,
+    ) -> IncidentDomain:
+        """Create a new open incident and link it to its primary alert.
+
+        Raises:
+            LookupError: if the alert row is missing (callers only create for
+                alerts they just persisted).
+        """
+        alert_row = self._session.get(Alert, alert_id)
+        if alert_row is None:
+            raise LookupError(f"alert {alert_id} not found")
+        incident_id = self._next_id(occurred_at)
+        row = Incident(
+            incident_id=incident_id,
+            status=IncidentStatus.OPEN.value,
+            severity=severity.value,
+            primary_alert_id=alert_id,
+            dedupe_group_key=dedupe_group_key,
+            created_at=as_utc(occurred_at),
+            updated_at=as_utc(occurred_at),
+        )
+        self._session.add(row)
+        # Flush the new incident before touching the alert: the alert link and
+        # ``primary_alert_id`` form a circular FK pair (alerts.incident_id ↔
+        # incidents.primary_alert_id), so the incident row must exist before
+        # the alert UPDATE is emitted (all inside the caller's transaction).
+        self._session.flush()
+        alert_row.incident_id = incident_id
+        return self._to_domain(row)
+
+    def attach(self, *, alert_id: uuid.UUID, incident_id: str) -> None:
+        """Attach an alert to an existing incident (no new row).
+
+        Used for recurring/deduplicated alerts that belong to an open incident
+        of the same dedupe group. Raises :class:`LookupError` when either the
+        alert or the incident does not exist.
+        """
+        if self.get(incident_id) is None:
+            raise LookupError(f"incident {incident_id!r} not found")
+        self._link_alert(alert_id, incident_id)
+
+    # ------------------------------------------------------------------
+    # Internals
+    # ------------------------------------------------------------------
+
+    def _link_alert(self, alert_id: uuid.UUID, incident_id: str) -> None:
+        alert_row = self._session.get(Alert, alert_id)
+        if alert_row is None:
+            raise LookupError(f"alert {alert_id} not found")
+        alert_row.incident_id = incident_id
+
+    def _next_id(self, occurred_at: datetime) -> str:
+        """Next ``INC-YYYY-MM-DD-NNNN`` id for the UTC date of ``occurred_at``.
+
+        Sequential per UTC date: the max existing id for the date prefix plus
+        one, zero-padded to four digits. Deterministic and collision-safe for
+        the single-instance SQLite lab (an INSERT serializes with the same
+        transaction; the next maximal id is only computed after this row is
+        committed).
+        """
+        day = as_utc(occurred_at).strftime("%Y-%m-%d")
+        prefix = f"INC-{day}-"
+        last = self._session.execute(
+            select(func.max(Incident.incident_id)).where(Incident.incident_id.like(f"{prefix}%"))
+        ).scalar_one_or_none()
+        sequence = int(str(last).rsplit("-", 1)[-1]) + 1 if last else 1
+        return f"{prefix}{sequence:04d}"
+
+    @staticmethod
+    def _to_domain(row: Incident) -> IncidentDomain:
+        return IncidentDomain(
+            incident_id=row.incident_id,
+            status=IncidentStatus(row.status),
+            severity=DecisionSeverity(row.severity),
+            primary_alert_id=row.primary_alert_id,
+            dedupe_group_key=row.dedupe_group_key,
+            created_at=as_utc(row.created_at),
+            updated_at=as_utc(row.updated_at),
+        )
+
+
 class AuditRepository:
     """Append-only writer for the ``audit_log`` table.
 
@@ -357,6 +512,7 @@ __all__ = [
     "AuditRepository",
     "DedupeStateRepository",
     "FeedbackRepository",
+    "IncidentRepository",
     "NotificationRepository",
     "as_utc",
 ]
