@@ -7,7 +7,14 @@ ARCHITECTURE.md §19):
   The full normalized (canonical) alert is stored in ``normalized_payload``
   so later phases (scoring, enrichment, console) see exactly what ingestion
   produced. Denormalized ``rule_*`` / ``agent_*`` columns support queries
-  without decoding the JSON.
+  without decoding the JSON. ``incident_id`` (nullable FK) attaches an alert
+  to the incident it belongs to (Phase 3.1).
+* ``incidents`` — first-class incidents (Phase 3.1), created automatically
+  when an alert decision is ``open_incident``: human-readable ``INC-YYYY-MM-DD-NNNN``
+  id (sequential per UTC date, unique), severity (SEV1/SEV2), status
+  (``open``), the primary alert it was opened from, and the dedupe group it
+  belongs to (so recurring/deduplicated alerts attach to the existing open
+  incident instead of creating duplicates).
 * ``alert_dedupe_groups`` — the **recurrence / generation state** required by
   the Phase 1C deduplication contract (ARCHITECTURE.md §6): one row per
   deduplication group (``rule.id + agent.id``) carrying ``occurrences``,
@@ -72,7 +79,46 @@ class Alert(Base):
     #: Full canonical alert (``CanonicalAlert.model_dump(mode="json")``) as
     #: returned on the event's first delivery — the idempotency payload.
     normalized_payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    #: Human-readable incident id this alert belongs to (nullable: alerts that
+    #: never triggered ``open_incident`` stay unattached). Set by
+    #: :class:`IncidentRepository` when an incident is created or attached.
+    incident_id: Mapped[str | None] = mapped_column(
+        String(32),
+        ForeignKey("incidents.incident_id", name="fk_alerts_incident_id"),
+        nullable=True,
+        index=True,
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class Incident(Base):
+    """First-class incident, opened automatically for ``open_incident`` decisions.
+
+    The human-readable ``incident_id`` (``INC-YYYY-MM-DD-NNNN``) is sequential
+    per UTC date and unique; it is the stable key the alert link and audit
+    entries reference. ``primary_alert_id`` is the alert that triggered the
+    incident; ``dedupe_group_key`` is the rule+agent recurrence group the
+    incident belongs to, so recurring/deduplicated alerts of the same group
+    attach to the existing *open* incident instead of creating duplicates
+    (Phase 3.1).
+    """
+
+    __tablename__ = "incidents"
+    __table_args__ = (Index("ix_incidents_group_status", "dedupe_group_key", "status"),)
+
+    incident_id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    #: Incident lifecycle status (Phase 3.1 only creates ``open`` rows).
+    status: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
+    #: SEV1 (critical) / SEV2 (high) as decided by the decision engine.
+    severity: Mapped[str] = mapped_column(String(8), nullable=False, index=True)
+    primary_alert_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("alerts.alert_id"), nullable=False, unique=True, index=True
+    )
+    dedupe_group_key: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, index=True
+    )
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
 class AlertDedupeGroup(Base):
@@ -209,5 +255,6 @@ __all__ = [
     "AnalystFeedback",
     "AuditEvent",
     "Base",
+    "Incident",
     "NotificationAttempt",
 ]

@@ -43,7 +43,11 @@ from pydantic import ValidationError
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import sessionmaker
 
-from ..audit import audit_entries_for_assessment, audit_entries_for_notification
+from ..audit import (
+    audit_entries_for_assessment,
+    audit_entries_for_incident,
+    audit_entries_for_notification,
+)
 from ..core.errors import error_response
 from ..core.logging import get_logger
 from ..db.errors import StorageError
@@ -53,11 +57,12 @@ from ..ingest.auth import RequireApiKey
 from ..ingest.deduplication import DedupeStatus, InvalidDedupeInputError
 from ..ingest.normalizer import normalize_wazuh_alert
 from ..ingest.schemas import WazuhAlert
-from ..models.assessment import Decision, RiskAssessment
+from ..models.assessment import Decision, DecisionAction, RiskAssessment
 from ..models.canonical import CanonicalAlert
 from ..models.repositories import (
     AlertRepository,
     AuditRepository,
+    IncidentRepository,
     NotificationRepository,
 )
 from ..notifications import build_n8n_payload
@@ -214,18 +219,23 @@ async def ingest_alert(
     recorded_iocs = outcome.canonical_alert.iocs
 
     # --- Score & decide (Phase 1F) ---
+    incident_id: str | None = None
     if is_duplicate:
         assessed = outcome.canonical_alert
+        # Exact duplicates never re-score or create incidents; echo the
+        # incident the original alert belongs to (if any).
+        incident_id = _incident_for_alert(session_factory, outcome.alert_id)
     else:
         risk = scorer.score(outcome.canonical_alert)
         decision = decider.decide(risk, alert=outcome.canonical_alert, decided_at=received_at)
         assessed = outcome.canonical_alert.model_copy(update={"risk": risk, "decision": decision})
-        _persist_assessment(
+        incident_id = _persist_assessment(
             session_factory,
             alert_id=outcome.alert_id,
             canonical=assessed,
             risk=risk,
             decision=decision,
+            dedupe_group_key=outcome.group_key,
             occurred_at=received_at,
         )
         logger.info(
@@ -308,6 +318,7 @@ async def ingest_alert(
             "enrichment_status": enrichment.status.value,
             "risk": assessed.risk.model_dump(mode="json") if assessed.risk else None,
             "decision": assessed.decision.model_dump(mode="json") if assessed.decision else None,
+            "incident_id": incident_id,
             "normalized": assessed.model_dump(mode="json"),
             "notification": (
                 {
@@ -449,15 +460,70 @@ def _persist_assessment(
     canonical: CanonicalAlert,
     risk: RiskAssessment,
     decision: Decision,
+    dedupe_group_key: str,
     occurred_at: datetime,
-) -> None:
-    """Persist a scored alert's assessment + audit entries (best-effort)."""
+) -> str | None:
+    """Persist a scored alert's assessment + audit entries (best-effort).
+
+    Phase 3.1 — incident handling: when the decision is ``open_incident`` the
+    alert is linked to an incident *in the same transaction* as the
+    assessment/audit writes:
+
+    * no open incident for the dedupe group ⇒ create one (SEV1 for critical /
+      SEV2 for high, ``status=open``, ``INC-YYYY-MM-DD-NNNN``) and append an
+      ``incident.created`` audit entry;
+    * an open incident already exists for the group (recurring/deduplicated
+      alert) ⇒ attach this alert to it, no second incident, no duplicate.
+
+    Returns the incident id, or ``None`` when no incident applies / persistence
+    failed (the transaction is rolled back atomically).
+    """
+    incident_id: str | None = None
+    incident_action: str | None = None
+    severity: str | None = None
     try:
         with session_scope(session_factory) as session:
             AlertRepository(session).update_normalized_payload(alert_id, canonical)
             AuditRepository(session).append(
                 audit_entries_for_assessment(alert_id, risk=risk, decision=decision),
                 occurred_at=occurred_at,
+            )
+            if decision.action is DecisionAction.OPEN_INCIDENT:
+                incident_repo = IncidentRepository(session)
+                existing = incident_repo.open_for_group(dedupe_group_key)
+                if existing is None:
+                    # Policy validation guarantees a severity for open_incident.
+                    if decision.severity is None:  # pragma: no cover - defensive
+                        raise ValueError("open_incident decision is missing a severity")
+                    incident = incident_repo.create(
+                        alert_id=alert_id,
+                        severity=decision.severity,
+                        dedupe_group_key=dedupe_group_key,
+                        occurred_at=occurred_at,
+                    )
+                    incident_id = incident.incident_id
+                    severity = incident.severity.value
+                    incident_action = "created"
+                    AuditRepository(session).append(
+                        audit_entries_for_incident(incident), occurred_at=occurred_at
+                    )
+                else:
+                    incident_repo.attach(alert_id=alert_id, incident_id=existing.incident_id)
+                    incident_id = existing.incident_id
+                    severity = existing.severity.value
+                    incident_action = "attached_existing"
+        # Only report the incident once the transaction committed: a rollback
+        # must never leak a not-yet-durable incident id into the response.
+        if incident_id is not None:
+            logger.info(
+                "incident_created"
+                if incident_action == "created"
+                else "incident_attached_existing",
+                component="incidents",
+                incident_id=incident_id,
+                alert_id=str(alert_id),
+                severity=severity,
+                dedupe_group_key=dedupe_group_key,
             )
     except SQLAlchemyError as exc:
         logger.error(
@@ -466,6 +532,24 @@ def _persist_assessment(
             alert_id=str(alert_id),
             error_type=type(exc).__name__,
         )
+        return None
+    return incident_id
+
+
+def _incident_for_alert(session_factory: sessionmaker, alert_id: UUID) -> str | None:
+    """Best-effort lookup of the incident an alert is attached to (Phase 3.1)."""
+    try:
+        with session_scope(session_factory) as session:
+            incident = IncidentRepository(session).for_alert(alert_id)
+            return incident.incident_id if incident is not None else None
+    except SQLAlchemyError as exc:
+        logger.warning(
+            "incident_lookup_failed",
+            component="incidents",
+            alert_id=str(alert_id),
+            error_type=type(exc).__name__,
+        )
+        return None
 
 
 async def _read_body_with_limit(request: Request, max_size: int) -> bytes | None:

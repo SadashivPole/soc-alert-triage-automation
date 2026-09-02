@@ -21,6 +21,7 @@ from pydantic import BaseModel, Field
 
 from .ingest.deduplication import DedupeStatus, DeliveryDecision
 from .models.assessment import Decision, RiskAssessment
+from .models.incident import Incident
 
 # --- Audit vocabulary ------------------------------------------------------
 
@@ -34,6 +35,7 @@ ACTOR_SYSTEM = "system"
 
 ENTITY_ALERT = "alert"
 ENTITY_DEDUPE_GROUP = "dedupe_group"
+ENTITY_INCIDENT = "incident"
 ENTITY_NOTIFICATION = "notification"
 ENTITY_FEEDBACK = "feedback"
 
@@ -44,6 +46,9 @@ ACTION_GENERATION_STARTED = "dedupe.generation_started"
 ACTION_CONTENT_DIVERGENCE = "alert.content_divergence"
 ACTION_ALERT_SCORED = "alert.scored"
 ACTION_ALERT_DECIDED = "alert.decided"
+
+# Phase 3.1 — automatic incident creation
+ACTION_INCIDENT_CREATED = "incident.created"
 
 # Phase 2B — n8n SOAR integration
 ACTION_NOTIFICATION_ATTEMPT = "notification.attempt"
@@ -234,6 +239,30 @@ def audit_entries_for_assessment(
     ]
 
 
+def audit_entries_for_incident(incident: Incident) -> list[AuditEntry]:
+    """Map an automatic incident creation onto its audit entry (Phase 3.1).
+
+    Emits ``incident.created`` with a small structured snapshot (ids,
+    severity, status, dedupe group) — no raw payloads (SECURITY.md §5, §7).
+    ``entity_id`` is the human-readable incident id.
+    """
+    return [
+        AuditEntry(
+            actor=ACTOR_DECISION,
+            action=ACTION_INCIDENT_CREATED,
+            entity_type=ENTITY_INCIDENT,
+            entity_id=incident.incident_id,
+            after={
+                "incident_id": incident.incident_id,
+                "alert_id": str(incident.primary_alert_id),
+                "severity": incident.severity.value,
+                "status": incident.status.value,
+                "dedupe_group_key": incident.dedupe_group_key,
+            },
+        )
+    ]
+
+
 def audit_entries_for_notification(
     alert_id: UUID,
     *,
@@ -366,6 +395,7 @@ __all__ = [
     "ACTION_DUPLICATE_ABSORBED",
     "ACTION_FEEDBACK_RECEIVED",
     "ACTION_GENERATION_STARTED",
+    "ACTION_INCIDENT_CREATED",
     "ACTION_NOTIFICATION_ATTEMPT",
     "ACTION_NOTIFICATION_DELIVERED",
     "ACTION_NOTIFICATION_DUPLICATE_SUPPRESSED",
@@ -380,10 +410,12 @@ __all__ = [
     "ENTITY_ALERT",
     "ENTITY_DEDUPE_GROUP",
     "ENTITY_FEEDBACK",
+    "ENTITY_INCIDENT",
     "ENTITY_NOTIFICATION",
     "AuditEntry",
     "audit_entries_for_assessment",
     "audit_entries_for_decision",
     "audit_entries_for_feedback",
+    "audit_entries_for_incident",
     "audit_entries_for_notification",
 ]
