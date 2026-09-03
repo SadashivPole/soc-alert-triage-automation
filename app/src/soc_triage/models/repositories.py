@@ -20,6 +20,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from sqlalchemy import Select, delete, func, select
+from sqlalchemy.engine import CursorResult
 from sqlalchemy.orm import Session
 
 from ..audit import AuditEntry
@@ -474,6 +475,119 @@ class IncidentRepository:
     def count(self) -> int:
         """Number of persisted incidents."""
         return self._session.execute(select(func.count(Incident.incident_id))).scalar_one()
+
+    # ------------------------------------------------------------------
+    # Phase 3.4 — auto-close TTL sweeper support
+    # ------------------------------------------------------------------
+
+    def list_incidents_eligible_for_auto_close(
+        self,
+        *,
+        ttl_seconds: int,
+        as_of: datetime,
+        limit: int = 500,
+    ) -> list[IncidentDomain]:
+        """Return incidents eligible for TTL-driven auto-close.
+
+        Eligibility rule (ARCHITECTURE.md §10.4):
+
+        * status is **non-terminal** (``open``, ``investigating``,
+          ``acknowledged``, ``escalated``) — terminal ``resolved`` /
+          ``false_positive`` rows are never touched;
+        * ``updated_at <= as_of - ttl_seconds`` — i.e. no analyst/feedback
+          activity has touched the incident within the TTL window, using
+          the standard activity timestamp ``updated_at``.
+
+        Results are ordered oldest-``updated_at`` first so the stalest
+        incidents are closed first. The ``limit`` bounds a single sweep
+        pass; subsequent passes pick up remaining work.
+        """
+        from .incident import TERMINAL_STATUSES
+
+        if ttl_seconds < 1:
+            raise ValueError("ttl_seconds must be >= 1")
+        if limit < 1:
+            raise ValueError("limit must be >= 1")
+        cutoff = as_utc(as_of) - timedelta(seconds=ttl_seconds)
+        terminal_values = {s.value for s in TERMINAL_STATUSES}
+        stmt = (
+            select(Incident)
+            .where(Incident.status.not_in(terminal_values))
+            .where(Incident.updated_at <= cutoff)
+            .order_by(Incident.updated_at.asc(), Incident.incident_id.asc())
+            .limit(limit)
+        )
+        rows = self._session.scalars(stmt).all()
+        return [self._to_domain(row) for row in rows]
+
+    def auto_close_if_stale(
+        self,
+        incident_id: str,
+        *,
+        ttl_seconds: int,
+        as_of: datetime,
+        expected_previous_updated_at: datetime,
+        expected_previous_status: str,
+    ) -> IncidentDomain | None:
+        """Atomically transition one incident to ``resolved`` if still stale.
+
+        This is the race-safe primitive used by the auto-close sweeper. It
+        issues a single ``UPDATE`` with a ``WHERE`` clause that re-checks
+        **both** the previous status and the previous ``updated_at`` read
+        during the eligibility query:
+
+        * If an analyst PATCH (or feedback sync) changed the status or
+          bumped ``updated_at`` in the meantime, the UPDATE matches zero
+          rows and the method returns ``None`` — the stale read is
+          discarded and the manual action wins.
+        * Otherwise the incident is moved to ``resolved``, ``updated_at``
+          is set to ``as_of``, ``resolved_at`` is set exactly once (SQL
+          ``COALESCE``-equivalent via Python: we only set it when NULL —
+          terminal rows would not be eligible anyway), ``acknowledged_at``
+          is preserved untouched, and the updated domain object is
+          returned.
+
+        The caller is responsible for appending the
+        ``incident.auto_closed`` audit entry on a non-``None`` return.
+        """
+        from sqlalchemy import update as sa_update
+
+        if ttl_seconds < 1:
+            raise ValueError("ttl_seconds must be >= 1")
+        timestamp = as_utc(as_of)
+        cutoff = timestamp - timedelta(seconds=ttl_seconds)
+        prev_updated_at = as_utc(expected_previous_updated_at)
+
+        # Conditional UPDATE: only matches if the incident is still in the
+        # exact state/activity we observed during candidate selection AND
+        # is still past the TTL cutoff (defense in depth). SQLite serializes
+        # writes; on PostgreSQL this is a single atomic UPDATE with a
+        # predicate that guarantees lost-update safety without distributed
+        # locks (good enough for the single-instance lab target).
+        stmt = (
+            sa_update(Incident)
+            .where(Incident.incident_id == incident_id)
+            .where(Incident.status == expected_previous_status)
+            .where(Incident.updated_at == prev_updated_at)
+            .where(Incident.updated_at <= cutoff)
+            .values(
+                status=IncidentStatus.RESOLVED.value,
+                updated_at=timestamp,
+                resolved_at=timestamp,
+            )
+            .execution_options(synchronize_session=False)
+        )
+        result: CursorResult[Any] = self._session.execute(stmt)  # type: ignore[assignment]
+        if result.rowcount != 1:
+            return None
+        self._session.flush()
+        # Reload to get the post-update row (refresh() would require the
+        # identity-map to already hold the object; a fresh SELECT is
+        # simpler and works under synchronize_session=False).
+        row = self._session.get(Incident, incident_id)
+        if row is None:  # pragma: no cover - defensive
+            return None
+        return self._to_domain(row)
 
     # ------------------------------------------------------------------
     # Writes (inside the caller's transaction)

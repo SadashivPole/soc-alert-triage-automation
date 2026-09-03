@@ -128,6 +128,22 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             decision_policy=decision_policy.policy_version,
         )
 
+        # --- Phase 3.4: incident auto-close TTL sweeper (background loop) ---
+        # Lightweight asyncio periodic task (ADR-4: no Celery/Redis for the
+        # lab). Started once here; cancelled cleanly on shutdown. Runs one
+        # immediate pass so stale incidents left by a prior crashed process
+        # are closed without waiting a full interval.
+        from .sweeper import start_sweeper_task
+
+        sweeper_task = start_sweeper_task(_app)
+        _app.state.sweeper_task = sweeper_task
+        logger.info(
+            "sweeper_configured",
+            component="main",
+            ttl_seconds=app_settings.incident_auto_close_ttl_seconds,
+            interval_seconds=app_settings.incident_sweeper_interval_seconds,
+        )
+
         # --- n8n SOAR webhook integration (Phase 2B) ---
         # Outbound client: disabled by default (empty URL). When enabled, it
         # POSTs structured payloads with timeout/retry and fail-open semantics.
@@ -154,6 +170,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         try:
             yield
         finally:
+            # Cancel the sweeper task first (it uses the session factory /
+            # engine) so it is not running while we tear down DB resources.
+            if sweeper_task is not None:
+                sweeper_task.cancel()
+                # Await the task, tolerating CancelledError (normal shutdown).
+                with suppress(BaseException):
+                    await sweeper_task
             with suppress(Exception):
                 n8n_client.close()
             engine.dispose()

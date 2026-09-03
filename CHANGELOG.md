@@ -6,6 +6,79 @@ semantic (`v0.1.0` targeted at the end of Phase 1).
 
 ## [Unreleased]
 
+### Added — Phase 3.4: Incident auto-close TTL sweeper
+
+- **Configurable auto-close TTL.** New settings (env-driven, validated):
+  `INCIDENT_AUTO_CLOSE_TTL_SECONDS` (default **604800 s = 7 days** — conservative
+  lab default) and `INCIDENT_SWEEPER_INTERVAL_SECONDS` (default **300 s = 5
+  minutes**). Both are `ge=1` and documented in `.env.example`. No hardcoded
+  secrets; no overlapping TTL settings introduced.
+- **Eligibility rule.** A background sweeper periodically scans for
+  non-terminal incidents (`open`, `investigating`, `acknowledged`,
+  `escalated`) whose `updated_at ≤ now − TTL`. Terminal states (`resolved`,
+  `false_positive`) and any incident touched (PATCH / feedback / escalation)
+  within the TTL window are excluded. The activity timestamp is the existing
+  `incidents.updated_at` — no new column is introduced.
+- **Auto-close transition.** Eligible incidents are moved to `resolved` with
+  `updated_at` refreshed to the sweep time, `resolved_at` set exactly once,
+  and `acknowledged_at` preserved. The transition is performed by a narrow
+  system-only path (actor `system:sweeper`); manual analyst transitions
+  continue to enforce the strict Phase 3.2 state machine unchanged (so
+  `open → resolved` via the public API remains `409`).
+- **Audit.** Exactly one append-only `audit_log` row per auto-close:
+  `actor = "system:sweeper"`, `action = "incident.auto_closed"`, with a small
+  structured `after` snapshot (`incident_id`, `previous_status`, `status`,
+  `acknowledged_at`, `resolved_at`, `ttl_seconds`, `idle_seconds`,
+  `reason = "ttl_expired"`, `actor`). Secrets and raw payloads are never
+  logged. Repeat sweeps are idempotent: terminal rows never match the
+  eligibility predicate, so no second `incident.auto_closed` row is ever
+  appended.
+- **Sweeper implementation.** A lightweight `asyncio` periodic loop
+  (`soc_triage/sweeper.py`) is started from the FastAPI lifespan and
+  cancelled cleanly on shutdown — no Celery, Redis, APScheduler, or new
+  infrastructure dependency (ADR-4). The first pass runs immediately at
+  startup so stale rows left by a crashed process are closed without
+  waiting a full interval. Each candidate runs in its own short
+  transaction; a failure on one incident is logged (by `error_type` only)
+  and processing continues. Structured logs (`sweeper_started`,
+  `sweeper_pass_completed` with `candidates/closed/skipped/errors/
+  duration_ms`, `incident_auto_closed`, `sweeper_incident_failed`,
+  `sweeper_stopped`) make the sweeper observable without Prometheus
+  metrics (deferred to Phase 3.7).
+- **Race safety.** Each close uses a single conditional `UPDATE ... WHERE
+  incident_id = :id AND status = :expected_status AND updated_at =
+  :expected_updated_at AND updated_at <= :cutoff`. If an analyst PATCH or
+  feedback synchronisation bumps `updated_at` between the sweeper's SELECT
+  and UPDATE, the UPDATE matches zero rows, no audit row is written, and
+  the manual action wins — no stale overwrite. SQLite's single-writer lock
+  serialises the UPDATE; the same predicate is atomic on PostgreSQL. No
+  distributed-lock claims are made (single-instance lab target).
+- **Repository layer.** `IncidentRepository` gains
+  `list_incidents_eligible_for_auto_close(ttl_seconds, as_of, limit)` and
+  `auto_close_if_stale(...)` — minimal additions that follow the existing
+    repository pattern and do not bypass the state machine for manual paths.
+- **API impact.** No new public endpoint; GET endpoints never trigger the
+  sweeper. The sweeper is background-only behavior.
+- **No schema migration.** Auto-close uses columns that already exist
+  (`status`, `updated_at`, `acknowledged_at`, `resolved_at`) from
+  Phase 3.1/3.2 — no Alembic revision is required.
+- **Documentation.** `ARCHITECTURE.md §10.4` defines TTL semantics,
+  eligibility, the automatic transition, audit schema, race-safety
+  strategy, restart behavior, and single-instance SQLite limitations.
+  `.env.example` documents the two new settings.
+- **Tests:** `tests/integration/test_sweeper.py` (27 new tests) covers
+  config defaults + overrides + validation (1–3), eligibility for each
+  non-terminal state and exclusion for terminal/recently-updated
+  incidents plus exact boundary behavior (4–10), auto-close correctness
+  (resolved status, `resolved_at` once, `acknowledged_at` preserved,
+  `updated_at` bump, `system:sweeper` actor, single audit row, idempotency
+  across reruns, unrelated incidents untouched) (11–18), race safety
+  against manual updates and double-pass idempotency (19–20), restart
+  persistence and lifespan start/stop (21–22), terminal-state regression
+  (24), and per-incident error isolation. All **640** tests pass; ruff,
+  mypy (pre-existing PyYAML stub warnings only), and `check_secrets.sh`
+  are clean. Phase 3.1/3.2/3.3 tests remain green.
+
 ### Added — Phase 3.3: Incident/alert read APIs + incident timeline
 
 - **Alert read APIs.** `GET /api/v1/alerts` (paginated list) and

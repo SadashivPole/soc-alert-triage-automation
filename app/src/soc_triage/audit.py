@@ -56,6 +56,11 @@ ACTION_INCIDENT_STATUS_UPDATED = "incident.status_updated"
 ACTION_INCIDENT_ESCALATED = "incident.escalated"
 ACTION_INCIDENT_CONTAINMENT_REQUESTED = "incident.containment_requested"
 
+# Phase 3.4 — auto-close TTL sweeper
+ACTION_INCIDENT_AUTO_CLOSED = "incident.auto_closed"
+#: Actor used for TTL auto-close transitions (never a human).
+ACTOR_SWEEPER = "system:sweeper"
+
 # Phase 2B — n8n SOAR integration
 ACTION_NOTIFICATION_ATTEMPT = "notification.attempt"
 ACTION_NOTIFICATION_DELIVERED = "notification.delivered"
@@ -367,6 +372,52 @@ def audit_entries_for_incident_containment_request(
     ]
 
 
+def audit_entries_for_incident_auto_closed(
+    *,
+    incident: Incident,
+    previous_status: IncidentStatus,
+    ttl_seconds: int,
+    idle_seconds: float,
+    reason: str = "ttl_expired",
+) -> list[AuditEntry]:
+    """Map an automatic TTL-driven close onto its audit entry (Phase 3.4).
+
+    Emits exactly one ``incident.auto_closed`` entry per incident with safe
+    structured metadata: incident id, before/after status, the TTL used, the
+    age (``idle_seconds``) of the incident at close time, and the actor
+    ``system:sweeper``. No raw payloads, no secrets (SECURITY.md §5, §7).
+
+    The entry is only produced for a successful transition — if the
+    conditional update finds the incident no longer eligible (e.g. a
+    concurrent analyst PATCH moved it), no row is appended. That is what
+    makes sweeper reruns idempotent.
+    """
+    return [
+        AuditEntry(
+            actor=ACTOR_SWEEPER,
+            action=ACTION_INCIDENT_AUTO_CLOSED,
+            entity_type=ENTITY_INCIDENT,
+            entity_id=incident.incident_id,
+            before={"status": previous_status.value},
+            after={
+                "incident_id": incident.incident_id,
+                "status": incident.status.value,
+                "previous_status": previous_status.value,
+                "acknowledged_at": incident.acknowledged_at.isoformat()
+                if incident.acknowledged_at is not None
+                else None,
+                "resolved_at": incident.resolved_at.isoformat()
+                if incident.resolved_at is not None
+                else None,
+                "ttl_seconds": ttl_seconds,
+                "idle_seconds": round(idle_seconds),
+                "reason": reason,
+                "actor": ACTOR_SWEEPER,
+            },
+        )
+    ]
+
+
 def audit_entries_for_notification(
     alert_id: UUID,
     *,
@@ -499,6 +550,7 @@ __all__ = [
     "ACTION_DUPLICATE_ABSORBED",
     "ACTION_FEEDBACK_RECEIVED",
     "ACTION_GENERATION_STARTED",
+    "ACTION_INCIDENT_AUTO_CLOSED",
     "ACTION_INCIDENT_CONTAINMENT_REQUESTED",
     "ACTION_INCIDENT_CREATED",
     "ACTION_INCIDENT_ESCALATED",
@@ -513,6 +565,7 @@ __all__ = [
     "ACTOR_INGEST",
     "ACTOR_N8N",
     "ACTOR_SCORING",
+    "ACTOR_SWEEPER",
     "ACTOR_SYSTEM",
     "ENTITY_ALERT",
     "ENTITY_DEDUPE_GROUP",
@@ -524,6 +577,7 @@ __all__ = [
     "audit_entries_for_decision",
     "audit_entries_for_feedback",
     "audit_entries_for_incident",
+    "audit_entries_for_incident_auto_closed",
     "audit_entries_for_incident_containment_request",
     "audit_entries_for_incident_status",
     "audit_entries_for_notification",
