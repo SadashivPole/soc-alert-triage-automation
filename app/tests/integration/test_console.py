@@ -68,7 +68,7 @@ def _patch_status(client: TestClient, incident_id: str, target: str) -> object:
 
 
 def _console_text(filename: str) -> str:
-    return (CONSOLE_DIR / filename).read_text()
+    return (CONSOLE_DIR / filename).read_text(encoding="utf-8")
 
 
 # --------------------------------------------------------------------------- #
