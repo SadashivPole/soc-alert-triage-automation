@@ -17,8 +17,9 @@ from __future__ import annotations
 import uuid
 from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import Select, delete, func, select
 from sqlalchemy.orm import Session
 
 from ..audit import AuditEntry
@@ -37,6 +38,12 @@ from .orm import (
     Incident,
     NotificationAttempt,
 )
+from .records import (
+    DEFAULT_PAGE_LIMIT,
+    MAX_PAGE_LIMIT,
+    AuditRecord,
+    PersistedAlert,
+)
 
 
 def as_utc(value: datetime) -> datetime:
@@ -44,6 +51,48 @@ def as_utc(value: datetime) -> datetime:
     if value.tzinfo is None:
         return value.replace(tzinfo=UTC)
     return value.astimezone(UTC)
+
+
+def _clamp_page(*, limit: int, offset: int) -> tuple[int, int]:
+    """Apply the shared pagination bounds (never unbounded, never negative)."""
+    return min(max(limit, 1), MAX_PAGE_LIMIT), max(offset, 0)
+
+
+def _alert_to_persisted(row: Alert) -> PersistedAlert:
+    """Map an ORM alert row onto the read-side domain record."""
+    return PersistedAlert(
+        alert_id=row.alert_id,
+        source=row.source,
+        received_at=as_utc(row.received_at),
+        created_at=as_utc(row.created_at),
+        incident_id=row.incident_id,
+        rule_id=row.rule_id,
+        rule_level=row.rule_level,
+        agent_id=row.agent_id,
+        agent_name=row.agent_name,
+        dedupe_group_key=row.dedupe_group_key,
+        event_identity=row.event_identity,
+        canonical=CanonicalAlert.model_validate(row.normalized_payload),
+    )
+
+
+def _audit_to_record(row: AuditEvent) -> AuditRecord:
+    """Map an ORM audit row onto the read-side domain record."""
+    return AuditRecord(
+        id=int(row.id),
+        occurred_at=as_utc(row.occurred_at),
+        actor=row.actor,
+        action=row.action,
+        entity_type=row.entity_type,
+        entity_id=row.entity_id,
+        before=row.before,
+        after=row.after,
+    )
+
+
+def _json_extract(column: Any, path: str) -> Any:
+    """SQLite/Postgres-portable JSON path extract (``$.a.b``)."""
+    return func.json_extract(column, path)
 
 
 def _event_to_record(event: AlertEvent, alert: Alert) -> EventRecord:
@@ -82,6 +131,106 @@ class AlertRepository:
         if row is None:
             return None
         return CanonicalAlert.model_validate(row.normalized_payload)
+
+    def get_alert(self, alert_id: uuid.UUID) -> PersistedAlert | None:
+        """Return the persisted alert record (denormalized columns + canonical)."""
+        row = self._session.get(Alert, alert_id)
+        if row is None:
+            return None
+        return _alert_to_persisted(row)
+
+    def list_alerts(
+        self,
+        *,
+        source: str | None = None,
+        incident_id: str | None = None,
+        rule_id: str | None = None,
+        agent_id: str | None = None,
+        tier: str | None = None,
+        severity: str | None = None,
+        dedupe_group_key: str | None = None,
+        duplicate: bool | None = None,
+        limit: int = DEFAULT_PAGE_LIMIT,
+        offset: int = 0,
+    ) -> tuple[list[PersistedAlert], int]:
+        """Return a newest-first page of alerts plus the filtered total.
+
+        Ordering is ``received_at DESC, alert_id DESC`` so pagination is
+        stable. Filters only use columns / JSON paths already on the alert
+        of record — there is no query language.
+        """
+        limit, offset = _clamp_page(limit=limit, offset=offset)
+        stmt = self._filter_alerts(
+            select(Alert),
+            source=source,
+            incident_id=incident_id,
+            rule_id=rule_id,
+            agent_id=agent_id,
+            tier=tier,
+            severity=severity,
+            dedupe_group_key=dedupe_group_key,
+            duplicate=duplicate,
+        )
+        total = self._session.execute(
+            select(func.count()).select_from(stmt.subquery())
+        ).scalar_one()
+        rows = self._session.scalars(
+            stmt.order_by(Alert.received_at.desc(), Alert.alert_id.desc())
+            .limit(limit)
+            .offset(offset)
+        ).all()
+        return [_alert_to_persisted(row) for row in rows], int(total)
+
+    def for_incident(self, incident_id: str) -> list[PersistedAlert]:
+        """Alerts attached to ``incident_id``, oldest first (stable)."""
+        rows = self._session.scalars(
+            select(Alert)
+            .where(Alert.incident_id == incident_id)
+            .order_by(Alert.received_at.asc(), Alert.alert_id.asc())
+        ).all()
+        return [_alert_to_persisted(row) for row in rows]
+
+    @staticmethod
+    def _filter_alerts(
+        stmt: Select[tuple[Alert]],
+        *,
+        source: str | None,
+        incident_id: str | None,
+        rule_id: str | None,
+        agent_id: str | None,
+        tier: str | None,
+        severity: str | None,
+        dedupe_group_key: str | None,
+        duplicate: bool | None,
+    ) -> Select[tuple[Alert]]:
+        """Apply equality filters that map onto existing schema fields."""
+        if source is not None:
+            stmt = stmt.where(Alert.source == source)
+        if incident_id is not None:
+            stmt = stmt.where(Alert.incident_id == incident_id)
+        if rule_id is not None:
+            stmt = stmt.where(Alert.rule_id == rule_id)
+        if agent_id is not None:
+            stmt = stmt.where(Alert.agent_id == agent_id)
+        if dedupe_group_key is not None:
+            stmt = stmt.where(Alert.dedupe_group_key == dedupe_group_key)
+        if tier is not None:
+            stmt = stmt.where(_json_extract(Alert.normalized_payload, "$.risk.tier") == tier)
+        if severity is not None:
+            stmt = stmt.where(
+                _json_extract(Alert.normalized_payload, "$.decision.severity") == severity
+            )
+        if duplicate is True:
+            # Exact re-deliveries bump ``alert_events.delivery_count`` (the
+            # canonical JSON is not rewritten on absorb).
+            stmt = stmt.join(AlertEvent, AlertEvent.alert_id == Alert.alert_id).where(
+                AlertEvent.delivery_count > 1
+            )
+        elif duplicate is False:
+            stmt = stmt.join(AlertEvent, AlertEvent.alert_id == Alert.alert_id).where(
+                AlertEvent.delivery_count == 1
+            )
+        return stmt
 
     def update_normalized_payload(self, alert_id: uuid.UUID, canonical: CanonicalAlert) -> None:
         """Overwrite the alert of record's canonical payload (Phase 1F).
@@ -273,6 +422,48 @@ class IncidentRepository:
         row = self._session.get(Incident, incident_id)
         return self._to_domain(row) if row is not None else None
 
+    def get_incident(self, incident_id: str) -> IncidentDomain | None:
+        """Alias of :meth:`get` for the Phase 3.3 read-API naming."""
+        return self.get(incident_id)
+
+    def list_incidents(
+        self,
+        *,
+        status: IncidentStatus | None = None,
+        severity: DecisionSeverity | None = None,
+        dedupe_group_key: str | None = None,
+        created_from: datetime | None = None,
+        created_to: datetime | None = None,
+        limit: int = DEFAULT_PAGE_LIMIT,
+        offset: int = 0,
+    ) -> tuple[list[IncidentDomain], int]:
+        """Return a newest-first page of incidents plus the filtered total.
+
+        Ordering is ``created_at DESC, incident_id DESC`` so pagination is
+        stable. Date bounds are inclusive on ``created_at`` (UTC).
+        """
+        limit, offset = _clamp_page(limit=limit, offset=offset)
+        stmt = select(Incident)
+        if status is not None:
+            stmt = stmt.where(Incident.status == status.value)
+        if severity is not None:
+            stmt = stmt.where(Incident.severity == severity.value)
+        if dedupe_group_key is not None:
+            stmt = stmt.where(Incident.dedupe_group_key == dedupe_group_key)
+        if created_from is not None:
+            stmt = stmt.where(Incident.created_at >= as_utc(created_from))
+        if created_to is not None:
+            stmt = stmt.where(Incident.created_at <= as_utc(created_to))
+        total = self._session.execute(
+            select(func.count()).select_from(stmt.subquery())
+        ).scalar_one()
+        rows = self._session.scalars(
+            stmt.order_by(Incident.created_at.desc(), Incident.incident_id.desc())
+            .limit(limit)
+            .offset(offset)
+        ).all()
+        return [self._to_domain(row) for row in rows], int(total)
+
     def all(self, *, limit: int | None = None) -> list[IncidentDomain]:
         """All incidents (for tests/observability), oldest first."""
         statement = select(Incident).order_by(Incident.created_at, Incident.incident_id)
@@ -425,8 +616,9 @@ class IncidentRepository:
 class AuditRepository:
     """Append-only writer for the ``audit_log`` table.
 
-    Exposes **only** :meth:`append` — there is deliberately no update or
-    delete path (ARCHITECTURE.md §15: audit_log is the system of record).
+    Writes are append-only (:meth:`append`); there is deliberately no update
+    or delete path (ARCHITECTURE.md §15: audit_log is the system of record).
+    :meth:`for_entity_ids` is a read helper for the incident timeline.
     """
 
     def __init__(self, session: Session) -> None:
@@ -453,6 +645,23 @@ class AuditRepository:
         if limit is not None:
             statement = statement.limit(limit)
         return list(self._session.scalars(statement))
+
+    def for_entity_ids(self, entity_ids: Sequence[str]) -> list[AuditRecord]:
+        """Load audit rows whose ``entity_id`` is in ``entity_ids`` (read-only).
+
+        Used by the incident timeline: the incident id itself plus every
+        linked alert id (feedback and notification rows use the alert id as
+        ``entity_id``). Returns domain records, never ORM objects. Does not
+        insert, update, or delete.
+        """
+        if not entity_ids:
+            return []
+        rows = self._session.scalars(
+            select(AuditEvent)
+            .where(AuditEvent.entity_id.in_(list(entity_ids)))
+            .order_by(AuditEvent.occurred_at.asc(), AuditEvent.id.asc())
+        ).all()
+        return [_audit_to_record(row) for row in rows]
 
 
 class NotificationRepository:

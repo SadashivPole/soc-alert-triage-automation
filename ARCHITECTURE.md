@@ -431,6 +431,24 @@ entry. Lifecycle timestamps (`acknowledged_at`, `resolved_at`) are populated onl
 when the corresponding state is reached; every change is append-only audited
 (`incident.status_updated`, `incident.escalated`, `incident.containment_requested`).
 
+**Read APIs + timeline** (Phase 3.3): analyst-safe GET surfaces for the SOC
+console, authenticated with the existing shared N8N token (same channel as
+feedback / incident status; a dedicated analyst/read token is deferred to the
+console milestone — SECURITY.md §3). All five endpoints are **read-only**: they
+never write audit rows, never transition incidents, and never call n8n / Wazuh /
+VirusTotal / MISP / TheHive / an LLM.
+
+| Method | Path | Query | Notes |
+| --- | --- | --- | --- |
+| GET | `/api/v1/alerts` | `limit` (1–200, default 50), `offset` (≥0), `source`, `incident_id`, `rule_id`, `agent_id`, `tier` (risk tier), `severity` (decision SEV1/SEV2), `dedupe_group_key`, `duplicate` (bool: absorbed ≥1 exact re-delivery) | Newest-first (`received_at DESC, alert_id DESC`). No `full_log`, tokens, or credentials. |
+| GET | `/api/v1/alerts/{alert_id}` | — | Identity, rule/agent, risk/decision, dedupe, incident link, IOC summaries, trimmed `source_event` (no `full_log`). Structured `404`. |
+| GET | `/api/v1/incidents` | `limit`/`offset` as above, `status`, `severity`, `dedupe_group_key`, `created_from`, `created_to` (inclusive UTC) | Newest-first (`created_at DESC, incident_id DESC`). |
+| GET | `/api/v1/incidents/{incident_id}` | — | Metadata, lifecycle timestamps, primary + linked alert summaries/count. Structured `404`. |
+| GET | `/api/v1/incidents/{incident_id}/timeline` | — | Chronological events from existing `audit_log` rows for the incident id and every linked alert id (`incident.created`, `incident.status_updated`, `incident.escalated`, `alert.created`/`scored`/`decided`, `feedback.received`, …). Sorted by `occurred_at` then audit `id` (deterministic on equal timestamps). Structured `404`. |
+
+List responses use `{items, pagination: {limit, offset, total, has_more}}`. Unknown
+resources use the shared error envelope `{"error": {"code": "not_found", "message": "…"}}`.
+
 **Notifications** (n8n-mediated): the API never talks to SMTP/chat directly; it POSTs a
 compact `scored_alert` event to the n8n webhook (with `N8N_CALLBACK_TOKEN`). The message
 contains: agent, rule, top IOCs + intel verdicts, score + top factors, runbook link, a

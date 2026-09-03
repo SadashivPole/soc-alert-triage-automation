@@ -6,6 +6,39 @@ semantic (`v0.1.0` targeted at the end of Phase 1).
 
 ## [Unreleased]
 
+### Added — Phase 3.3: Incident/alert read APIs + incident timeline
+
+- **Alert read APIs.** `GET /api/v1/alerts` (paginated list) and
+  `GET /api/v1/alerts/{alert_id}` (detail) return analyst-safe projections of
+  persisted alerts: identity, source, timestamps, rule/agent, risk score/tier,
+  decision, incident linkage, dedupe summary, IOC summaries. `full_log`,
+  credentials, tokens, and API keys are never included. Filters are simple
+  equality matches on fields already stored (`source`, `incident_id`,
+  `rule_id`, `agent_id`, risk `tier`, decision `severity`, `dedupe_group_key`,
+  `duplicate`). Unknown alerts return a structured `404`.
+- **Incident read APIs.** `GET /api/v1/incidents` and
+  `GET /api/v1/incidents/{incident_id}` return status, severity,
+  `primary_alert_id`, `dedupe_group_key`, lifecycle timestamps, and (on
+  detail) linked-alert summaries/count. Filters: `status`, `severity`,
+  `dedupe_group_key`, `created_from`/`created_to`. Unknown incidents return a
+  structured `404`.
+- **Incident timeline.** `GET /api/v1/incidents/{incident_id}/timeline` is a
+  **read-only** assembly of existing `audit_log` rows for the incident and its
+  linked alerts (`incident.created`, `incident.status_updated`,
+  `incident.escalated`, alert created/scored/decided, `feedback.received`).
+  Events are sorted by timestamp with a deterministic audit-id tie-breaker.
+  GET never writes audit rows, never transitions state, and never calls
+  n8n/Wazuh/intel/LLM.
+- **Pagination.** Shared `limit` (default 50, max 200) / `offset` (≥0) with
+  `{items, pagination: {limit, offset, total, has_more}}`. Alerts order by
+  `received_at DESC, alert_id DESC`; incidents by `created_at DESC,
+  incident_id DESC`.
+- **Auth.** Shared N8N token (same convention as feedback / incident status
+  PATCH). A dedicated analyst/read token is not introduced in this milestone.
+- **Tests:** `tests/integration/test_read_apis.py`, `tests/unit/test_timeline.py`,
+  `tests/unit/test_read_redaction.py`. All **613** tests pass; ruff, mypy and
+  `check_secrets.sh` are clean. Phase 3.1/3.2 tests remain green.
+
 ### Added — Phase 3.2: Incident lifecycle + feedback synchronization
 
 - **Strict incident status model.** `IncidentStatus` is now
