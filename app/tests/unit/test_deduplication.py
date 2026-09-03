@@ -518,21 +518,27 @@ def test_repeated_rapid_delivery_is_idempotent(harness: Harness) -> None:
     assert group.events[compute_event_identity(alert)].delivery_count == 20
 
 
-def test_concurrent_deliveries_serialize_deterministically(harness: Harness) -> None:
-    """Hammer the deduplicator from many threads at once.
+def test_concurrent_deliveries_serialize_deterministically(
+    harness: Harness,
+) -> None:
+    """Concurrent deliveries serialize without losing idempotency.
 
-    Exactly one delivery may create the alert for a given identity; all other
-    concurrent deliveries must resolve idempotently to the same alert_id,
-    and occurrence counts must match the number of distinct events exactly.
+    Exactly one delivery may create the group's first alert. The shared event
+    may be that first delivery or may arrive after a distinct event has already
+    created the group. In either case, all deliveries of the same event must
+    resolve to the same canonical alert.
     """
     distinct_events = [build_alert({"id": f"1770000000.2000{i:02d}"}) for i in range(8)]
-    same_event = build_alert()  # every thread also hammers this one
+    same_event = build_alert()
 
     def deliver(index: int):
         at = T0 + timedelta(milliseconds=index)
         if index % 3 == 0:
             return harness.deliver(same_event, at)
-        return harness.deliver(distinct_events[index % len(distinct_events)], at)
+        return harness.deliver(
+            distinct_events[index % len(distinct_events)],
+            at,
+        )
 
     with ThreadPoolExecutor(max_workers=8) as pool:
         outcomes = list(pool.map(deliver, range(64)))
@@ -541,24 +547,37 @@ def test_concurrent_deliveries_serialize_deterministically(harness: Harness) -> 
     duplicate_outcomes = [o for o in outcomes if o.status is DedupeStatus.EXACT_DUPLICATE]
     repeated_outcomes = [o for o in outcomes if o.status is DedupeStatus.REPEATED]
 
-    # The shared event: exactly one NEW, everything else EXACT_DUPLICATE.
-    shared_new = [o for o in new_outcomes if o.event_identity == compute_event_identity(same_event)]
-    assert len(shared_new) == 1
-    shared_dups = [
-        o for o in duplicate_outcomes if o.event_identity == compute_event_identity(same_event)
-    ]
-    assert all(o.alert_id == shared_new[0].alert_id for o in shared_dups)
+    # Exactly one concurrent delivery may create the group's first alert.
+    assert len(new_outcomes) == 1
 
-    # Distinct events: first delivery NEW (or REPEATED), never re-created.
-    created_ids = {o.alert_id for o in new_outcomes}
-    assert len(created_ids) == len({o.event_identity for o in new_outcomes})
+    # Every delivery of the shared event must resolve to the same canonical
+    # alert, whether that event won the race or arrived after another event.
+    shared_identity = compute_event_identity(same_event)
+    shared_outcomes = [o for o in outcomes if o.event_identity == shared_identity]
+
+    assert shared_outcomes
+    assert len({o.alert_id for o in shared_outcomes}) == 1
+    assert all(o.canonical_alert is not None for o in shared_outcomes)
+
+    shared_new = [o for o in shared_outcomes if o.status is DedupeStatus.NEW_GENERATION]
+    shared_dups = [o for o in shared_outcomes if o.status is DedupeStatus.EXACT_DUPLICATE]
+    shared_repeated = [o for o in shared_outcomes if o.status is DedupeStatus.REPEATED]
+
+    # If the shared event wins the race it is NEW; otherwise it is REPEATED.
+    assert len(shared_new) <= 1
+    assert all(o.alert_id == shared_outcomes[0].alert_id for o in shared_dups + shared_repeated)
+
+    # Eight distinct events plus the shared event.
+    distinct_delivered = len({o.event_identity for o in outcomes})
+    assert distinct_delivered == 9
+    assert len(new_outcomes) == 1
+    assert len(repeated_outcomes) == distinct_delivered - 1
 
     group = harness.dedup.group_state("wazuh:5710:001")
     assert group is not None
-    distinct_delivered = len({o.event_identity for o in outcomes})
     assert group.occurrences == distinct_delivered
     assert group.duplicate_deliveries == len(duplicate_outcomes)
-    assert len(repeated_outcomes) == distinct_delivered - 1
+
     # Every delivery resolved to a canonical alert of record.
     assert all(o.canonical_alert is not None for o in outcomes)
 
