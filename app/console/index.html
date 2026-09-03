@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>SOC Triage Console</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-mark">◈</span>
+        <span class="brand-name">SOC Triage Console</span>
+        <span class="brand-sub">Phase 3.5 · static analyst view</span>
+      </div>
+
+      <nav class="mainnav">
+        <a id="nav-queue" href="#queue">Alert Queue</a>
+        <a id="nav-incidents" href="#incidents">Incident Board</a>
+      </nav>
+
+      <div class="authbar" id="token-wrap">
+        <span class="conn">
+          <span id="conn-dot" class="conn-dot conn-idle"></span>
+          <span id="conn-label" class="conn-label">Idle</span>
+        </span>
+        <label class="token-field">
+          <span class="token-masked" id="token-masked">no token</span>
+          <input
+            id="token-input"
+            type="password"
+            autocomplete="off"
+            placeholder="N8N callback token (analyst)"
+            aria-label="Analyst token"
+          />
+          <button id="token-apply" class="btn btn-sm" type="button">Set</button>
+          <button id="token-clear" class="btn btn-sm btn-ghost" type="button">Clear</button>
+        </label>
+      </div>
+    </header>
+
+    <main id="content" class="content"><!-- views render here --></main>
+
+    <div id="toast-area" class="toast-area" aria-live="polite"></div>
+
+    <footer class="footer muted small">
+      Read + lifecycle only. All data is server-provided and rendered
+      untrusted. The token is kept in browser memory for this session only.
+    </footer>
+
+    <script src="console-core.js"></script>
+    <script src="console.js"></script>
+  </body>
+</html>

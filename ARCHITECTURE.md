@@ -757,3 +757,63 @@ upgrade are documented so the "production-style" story holds up in review.
 | ADR-6 | **Webhook-push ingest via Wazuh `integrator`** | simplest supported Wazuh path; JSON alerts; no indexer dependency | Filebeat→indexer (heavy), polling the Wazuh API (lag, quota) |
 | ADR-7 | **Free-tier hard constraint** | the portfolio must run for anyone at $0: public VT (4/min), self-hosted MISP, TheHive CE only, LLM optional/disabled | any paid-tier dependency (excluded by charter) |
 | ADR-8 | **Human-approved response actions** | containment (host isolation, user disable) is gated behind explicit analyst approval with audit — safely demonstrable automation | autonomous response (unsafe, out of scope) |
+
+---
+
+## 21. SOC Console (Phase 3.5)
+
+A lightweight, **static** analyst console for the lab — no frontend framework, no
+build step, no new container. It is served by the same FastAPI service that
+exposes the API (see `main._mount_static_console`), so the browser and the API
+share one origin.
+
+### 21.1 Serving model
+* `app/console/` (`index.html`, `styles.css`, `console.js`, `console-core.js`)
+  is mounted at `/console` with `StaticFiles(html=True)`. The Docker image copies
+  `app/console/` into the image (see `Dockerfile`); `triage-api` serves it at
+  `http://localhost:8000/console/`. `/` redirects to `/console/`.
+* Same-origin means **no CORS** is required and the analyst token rides the
+  existing `X-N8N-Token` header — identical to the n8n callback channel. If the
+  console is ever served from a different origin, CORS (`TRIAGE_CORS_ORIGINS`)
+  must be configured server-side; the lab default keeps it same-origin.
+
+### 21.2 Views & endpoints consumed
+| View | Endpoint | Notes |
+| --- | --- | --- |
+| Alert Queue | `GET /api/v1/alerts` | pagination (`limit`/`offset`) + filters `tier`/`severity`/`source`/`duplicate`; dense table |
+| Alert Detail | `GET /api/v1/alerts/{alert_id}` | server-provided score + factor breakdown, decision, dedupe, IOCs, enrichment |
+| Incident Board | `GET /api/v1/incidents` | grouped into Open / Investigating / Acknowledged / Escalated / Resolved / False-positive |
+| Incident Detail | `GET /api/v1/incidents/{incident_id}` | lifecycle timestamps, primary + linked alerts |
+| Incident Timeline | `GET /api/v1/incidents/{incident_id}/timeline` | read-only chronological events (before/after/metadata) |
+| Lifecycle action | `PATCH /api/v1/incidents/{incident_id}/status` | `{status, notes?, actor?}` |
+
+The console **never recomputes a score** — it renders the server's `risk.factors`
+verbatim. It is read + lifecycle only; GET endpoints never mutate and the
+auto-close sweeper is never triggered from the UI (the console only displays its
+result).
+
+### 21.3 Authentication (no new auth system)
+The analyst pastes the shared N8N callback token into the top bar. It is held
+**in memory only** (a module variable in `console.js`), never in
+`localStorage`/`sessionStorage`, never hardcoded, never in the served files.
+Every API call attaches it as `X-N8N-Token`. A dedicated analyst/read token
+remains deferred (§19); the console documents this limitation rather than
+weakening backend authorization.
+
+### 21.4 Security / XSS / redaction
+* All alert/incident/timeline text is rendered via DOM `textContent` (or the
+  `escapeHtml` helper in `console-core.js`). No untrusted string is ever injected
+  with `innerHTML`. `console-core.js` is pure (no DOM, no secrets) and is mirrored
+  1:1 by `app/tests/js/console_core.test.cjs` (Node, no browser stack).
+* The console consumes only the redacted read models (no `full_log`, no secrets);
+  `schemas.redact_mapping` still applies server-side.
+* `401/404/409/422/5xx`/network errors surface concise, analyst-friendly messages —
+  no raw server internals. Loading / empty / error states exist for every view.
+
+### 21.5 Lifecycle actions
+The console offers **only** the transitions the backend state machine allows for
+the current status — a read-only mirror of `VALID_TRANSITIONS`
+(`console-core.js` `legalTransitions`). It never invents a transition. On success
+it re-fetches the incident + timeline to reflect server truth; a backend `409`
+(illegal transition) is surfaced with the allowed targets. The backend remains
+the single source of truth and still rejects anything illegal.
