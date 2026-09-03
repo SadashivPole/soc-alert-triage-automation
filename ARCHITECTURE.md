@@ -449,6 +449,107 @@ VirusTotal / MISP / TheHive / an LLM.
 List responses use `{items, pagination: {limit, offset, total, has_more}}`. Unknown
 resources use the shared error envelope `{"error": {"code": "not_found", "message": "…"}}`.
 
+#### §10.4 — Auto-close TTL sweeper (Phase 3.4)
+
+A lightweight, restart-safe background loop (asyncio task started from the
+FastAPI lifespan — no Celery/Redis/APScheduler, per ADR-4) periodically scans
+for incidents that have been idle past a configurable TTL and transitions them
+to `resolved` following a strict, auditable rule set.
+
+**TTL semantics**
+
+* Setting: `INCIDENT_AUTO_CLOSE_TTL_SECONDS` (default **604800 s = 7 days**,
+  conservative lab value; environment-driven; validated to be ≥ 1).
+* Activity timestamp: **`incidents.updated_at`** — the same timestamp bumped by
+  every lifecycle transition (PATCH `/incidents/{id}/status`) and by feedback
+  synchronisation (Phase 3.2). It is the natural "last touched" column; no new
+  timestamp is introduced.
+* Eligibility rule: an incident is eligible iff **all** of:
+    1. `status ∈ {open, investigating, acknowledged, escalated}` (non-terminal);
+    2. `updated_at ≤ now − TTL` (no analyst/feedback activity inside the TTL
+       window).
+* Explicitly **excluded** from auto-close:
+    * `resolved` / `false_positive` (terminal states, no outgoing transitions);
+    * any incident whose `updated_at` was bumped by a manual PATCH, feedback
+      verdict, or escalation within the TTL window;
+    * any incident that does not meet the predicate at the moment the
+      conditional UPDATE is applied (see race safety below).
+
+**Automatic transition**
+
+Eligible incidents are moved to `resolved` via the existing lifecycle semantics:
+
+* `status := resolved`;
+* `updated_at := sweep_time` (UTC);
+* `resolved_at := sweep_time` — set **exactly once** (the conditional UPDATE
+  only targets non-terminal rows whose `resolved_at IS NULL`, so a re-run never
+  overwrites a prior resolution timestamp);
+* `acknowledged_at` is preserved untouched (analyst acknowledgement history is
+  never erased by the sweeper);
+* no new lifecycle state is introduced; `open → resolved` is permitted as a
+  narrow, audited exception for the `system:sweeper` actor only (manual
+  transitions still enforce the strict state machine, so an analyst cannot
+  "skip" investigation via the public API).
+
+**Audit**
+
+Every successful auto-close appends exactly one `audit_log` row:
+
+* `actor = "system:sweeper"`;
+* `action = "incident.auto_closed"`;
+* `before = {"status": <previous non-terminal status>}`;
+* `after` carries a small structured snapshot: `incident_id`, `status`
+  (`"resolved"`), `previous_status`, `acknowledged_at`, `resolved_at`,
+  `ttl_seconds`, `idle_seconds` (age of the incident at close time, seconds),
+  `reason = "ttl_expired"`, `actor`.
+
+No secrets, no raw alert payloads, no free-form notes. Idempotency is enforced
+by the conditional UPDATE: an already-resolved incident never matches the
+predicate, so re-runs never append a second `incident.auto_closed` row.
+
+**Concurrency / race safety**
+
+Each candidate is closed inside its own transaction via a single conditional
+`UPDATE incidents SET status='resolved', updated_at=:ts, resolved_at=:ts WHERE
+incident_id=:id AND status=:expected_status AND updated_at=:expected_updated_at
+AND updated_at <= :cutoff`. If an analyst PATCH (or feedback sync) bumps
+`updated_at` or changes the status between the sweeper's SELECT and this
+UPDATE, the UPDATE matches zero rows, the transaction commits no changes, no
+audit row is appended, and the manual action wins.
+
+The sweeper is **single-instance** by design (ADR-4). On SQLite the
+single-writer lock serialises the UPDATE; on PostgreSQL the same statement is
+atomic without distributed locks. The sweeper explicitly does **not** claim
+cross-process / distributed-lock semantics — multi-instance deployments are
+Phase 3.8+ (Postgres profile + dedicated worker).
+
+**Runtime behavior**
+
+* Interval is configurable via `INCIDENT_SWEEPER_INTERVAL_SECONDS` (default
+  300 s / 5 minutes); validated to be ≥ 1.
+* The first pass runs immediately at startup so stale incidents left behind by
+  a prior crashed process are closed without waiting a full interval.
+* Each candidate is processed in its own short transaction; a failure on one
+  incident is logged (`error_type` only, never exception messages) and the
+  loop continues — a single bad row can never kill the periodic task.
+* On shutdown the lifespan cancels the background task and awaits it cleanly
+  before disposing the engine, so no task is leaked and no in-flight close is
+  left mid-commit.
+* No new public API endpoint is exposed; GET endpoints never trigger the
+  sweeper. The sweeper is background behavior only.
+* Structured logs (`sweeper_started`, `sweeper_pass_completed` with
+  `candidates/closed/skipped/errors/duration_ms`, `incident_auto_closed`,
+  `sweeper_incident_failed`, `sweeper_stopped`) make the sweeper observable
+  without introducing Prometheus metrics (deferred to Phase 3.7).
+
+**Restart behavior**
+
+The sweeper's only state is the rows in `incidents` + `audit_log` (both
+durable). On startup the task runs one immediate pass against whatever it
+finds, so auto-closes survive restarts and backlogged stale incidents are
+picked up without operator action. A restart mid-sweep simply leaves
+unclosed candidates for the next pass (idempotent).
+
 **Notifications** (n8n-mediated): the API never talks to SMTP/chat directly; it POSTs a
 compact `scored_alert` event to the n8n webhook (with `N8N_CALLBACK_TOKEN`). The message
 contains: agent, rule, top IOCs + intel verdicts, score + top factors, runbook link, a

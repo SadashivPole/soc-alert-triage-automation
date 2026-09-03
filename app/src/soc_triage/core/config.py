@@ -45,6 +45,27 @@ class Settings(BaseSettings):
         default=900, alias="TRIAGE_DEDUPE_WINDOW_SECONDS", ge=1
     )
 
+    # ------------------------------------------------------------------
+    # Phase 3.4 — incident auto-close TTL sweeper
+    # ------------------------------------------------------------------
+    # Non-terminal incidents (open / investigating / acknowledged / escalated)
+    # whose ``updated_at`` has not changed within this TTL are automatically
+    # transitioned to ``resolved`` by a periodic background sweeper. Terminal
+    # states (``resolved``, ``false_positive``) are never touched.
+    # Conservative lab default: 7 days (604800 s) — long enough for the
+    # analyst workflow in a lab/portfolio setting, short enough to keep the
+    # incident board from accumulating unbounded stale rows. Must be >= 1.
+    incident_auto_close_ttl_seconds: int = Field(
+        default=604800, alias="INCIDENT_AUTO_CLOSE_TTL_SECONDS", ge=1
+    )
+    # Period between sweeper passes. The sweeper runs an idempotent pass,
+    # so a shorter interval is safe; default 5 minutes keeps DB load minimal.
+    # Must be >= 1. Set to 0 via code (not env) only in tests that drive
+    # the sweeper manually.
+    incident_sweeper_interval_seconds: int = Field(
+        default=300, alias="INCIDENT_SWEEPER_INTERVAL_SECONDS", ge=1
+    )
+
     triage_ingest_api_key: SecretStr = Field(
         default_factory=lambda: SecretStr("change-me-generate-a-long-random-value"),
         alias="TRIAGE_INGEST_API_KEY",

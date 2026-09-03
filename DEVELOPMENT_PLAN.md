@@ -103,8 +103,8 @@ observable via logs + stats endpoint.
 **Goal:** the full analyst loop with human-in-the-loop response.
 
 - 3.1 `incidents` table + API + WF3 · 3.2 incident lifecycle + feedback sync ·
-  3.3 alert/incident read APIs + incident timeline (this milestone) · 3.4 auto-close
-  TTL sweeper · 3.5 SOC console (static HTML): alert queue, score drill-down,
+  3.3 alert/incident read APIs + incident timeline · 3.4 auto-close TTL sweeper
+  (this milestone) · 3.5 SOC console (static HTML): alert queue, score drill-down,
   incident board · 3.6 runbooks for the six sample scenarios · 3.7 Prometheus
   `/metrics` + optional Grafana profile · 3.8 PostgreSQL profile + migration
   parity tests · 3.9 `stats` endpoints + WF6 daily digest. (WF4 SLA / WF5 form
