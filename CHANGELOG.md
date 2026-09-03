@@ -79,6 +79,63 @@ semantic (`v0.1.0` targeted at the end of Phase 1).
   mypy (pre-existing PyYAML stub warnings only), and `check_secrets.sh`
   are clean. Phase 3.1/3.2/3.3 tests remain green.
 
+### Added — Phase 3.5: Static SOC console
+
+- **What it is.** A lightweight, static analyst console served by the same
+  FastAPI service that exposes the API. No frontend framework, no build step,
+  no new container — `app/console/` (plain `index.html` + `styles.css` +
+  `console.js` + `console-core.js`) is mounted at `/console` via
+  `StaticFiles(html=True)` in `main.py`. Sharing the origin means the browser
+  calls the API with no CORS and the analyst token is sent as the `X-N8N-Token`
+  header, exactly like the existing n8n callback channel.
+- **Three views.** (1) **Alert Queue** — `GET /api/v1/alerts` with
+  pagination + tier/severity/source/duplicate filters, dense table, risk tier
+  + decision + incident linkage per row. (2) **Alert Detail / score
+  drill-down** — `GET /api/v1/alerts/{alert_id}` showing metadata, source/rule/
+  agent/asset/location, the server-provided risk **score + factor breakdown**
+  (the UI never recomputes a score), decision + reasons, dedupe, IOC summary,
+  and enrichment status. (3) **Incident Board / Incident Detail** —
+  `GET /api/v1/incidents` grouped into Open / Investigating / Acknowledged /
+  Escalated / Resolved / False-positive columns, drill-down to
+  `GET /api/v1/incidents/{id}` (lifecycle timestamps, primary + linked alerts)
+  and `GET /api/v1/incidents/{id}/timeline` (chronological events with
+  before/after/metadata — rendered read-only, never mutated).
+- **Lifecycle actions.** The console reuses the existing
+  `PATCH /api/v1/incidents/{id}/status` endpoint. It offers **only** the
+  transitions the backend state machine allows for the current status
+  (a read-only mirror of `VALID_TRANSITIONS` in `console-core.js`); it never
+  invents a transition. On success it re-fetches the incident + timeline to
+  reflect server truth; backend `409` (illegal transition) and `422`/`5xx`
+  errors are surfaced to the analyst with the allowed transitions. The
+  auto-close sweeper is **never** triggered from the UI (the console only
+  displays its result).
+- **Authentication (no new auth system).** The analyst pastes the shared N8N
+  callback token into the top bar; it is held **in memory only** (a module
+  variable), never in `localStorage`/`sessionStorage`, never hardcoded, never
+  in the served files. Every API call attaches it as `X-N8N-Token`. A
+  dedicated analyst/read token remains deferred (ARCHITECTURE.md §19); the
+  console documents this limitation rather than weakening backend authz.
+- **Security / XSS / redaction.** All alert/incident/timeline text is rendered
+  via DOM `textContent` (or `escapeHtml` in `console-core.js`) — no untrusted
+  string is ever injected with `innerHTML`. The console consumes only the
+  redacted read models (no `full_log`, no secrets); server-side redaction
+  (`schemas.redact_mapping`) still applies. Treats all API data as untrusted.
+- **API error handling.** `401/404/409/422/5xx`/network errors show concise,
+  analyst-friendly messages (no raw server internals). Loading / empty / error
+  states are present for every view.
+- **Tests.** `tests/integration/test_console.py` (17 tests) verifies the
+  console is served, references the correct endpoints, keeps the token
+  in-memory-only, embeds no secrets, and that every endpoint it depends on
+  behaves (read-only lists/detail/timeline, legal PATCH → 200, illegal
+  transition → 409, filters/pagination preserved, no GET mutation, safe
+  rendering of alert-controlled strings). `app/tests/js/console_core.test.cjs`
+  (Node, no browser stack) unit-tests the shared helpers (escaping, state
+  machine, score-factor projection, query-string/pagination). All **657** tests
+  pass; ruff, ruff format, mypy, and `check_secrets.sh` are clean.
+- **Docker.** `Dockerfile` copies `app/console/` into the image; the existing
+  `triage-api` service serves it at `http://localhost:8000/console/`. No new
+  compose service is required.
+
 ### Added — Phase 3.3: Incident/alert read APIs + incident timeline
 
 - **Alert read APIs.** `GET /api/v1/alerts` (paginated list) and

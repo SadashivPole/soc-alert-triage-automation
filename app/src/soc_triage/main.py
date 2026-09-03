@@ -4,9 +4,12 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
+from pathlib import Path
 
 from fastapi import FastAPI
 from sqlalchemy.exc import SQLAlchemyError
+from starlette import status as http_status
+from starlette.responses import RedirectResponse
 
 from . import __version__
 from .api.router import api_router
@@ -196,7 +199,53 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     register_exception_handlers(app)
     app.include_router(api_router)
+    _mount_static_console(app)
     return app
+
+
+def _mount_static_console(app: FastAPI) -> None:
+    """Mount the Phase 3.5 static SOC console, if its assets are present.
+
+    The console is a tiny set of static HTML/CSS/JS files served by the same
+    service that exposes the API. Sharing the origin means:
+
+    * no CORS configuration is required for the analyst browser to call the
+      API (the user-entered, in-memory token is sent as ``X-N8N-Token``);
+    * the console is read + lifecycle only — it reuses the existing API and
+      never weakens backend authorization (every endpoint still enforces
+      ``RequireN8NToken``).
+
+    The mount is additive and defensive: if the ``console/`` directory is not
+    found next to the package (e.g. an install that omitted it), the app boots
+    without a console rather than failing. This keeps the backend architecture
+    unchanged — it is a static-serving convenience, not a new subsystem.
+    """
+
+    console_dir = Path(__file__).resolve().parents[2] / "console"
+    if not console_dir.is_dir():
+        logger.info(
+            "console_assets_missing",
+            component="main",
+            path=str(console_dir),
+        )
+        return
+
+    from fastapi.staticfiles import StaticFiles
+
+    app.mount(
+        "/console",
+        StaticFiles(directory=str(console_dir), html=True, check_dir=True),
+        name="console",
+    )
+    logger.info("console_mounted", component="main", path="/console")
+
+    @app.get("/", include_in_schema=False)
+    def _root_redirect() -> RedirectResponse:
+        """Send the browser to the console when it hits the service root."""
+
+        return RedirectResponse(
+            url="/console/", status_code=http_status.HTTP_307_TEMPORARY_REDIRECT
+        )
 
 
 app = create_app()

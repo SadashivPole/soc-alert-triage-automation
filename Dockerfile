@@ -1,4 +1,4 @@
-﻿# Phase 2C - Minimum Docker lab for triage-api
+# Phase 2C - Minimum Docker lab for triage-api
 # Based on ARCHITECTURE.md S13, SECURITY.md S4
 FROM python:3.11-slim-bookworm
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -18,6 +18,7 @@ COPY app/src/ ./src/
 COPY app/alembic/ ./alembic/
 COPY app/alembic.ini ./
 COPY app/config/ ./config/
+COPY app/console/ ./console/
 RUN pip install --no-cache-dir -e .
 RUN groupadd -r appgroup && useradd -r -g appgroup -d /app -s /sbin/nologin app
 RUN chown -R app:appgroup /app
