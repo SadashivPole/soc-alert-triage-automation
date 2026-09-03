@@ -102,12 +102,13 @@ observable via logs + stats endpoint.
 
 **Goal:** the full analyst loop with human-in-the-loop response.
 
-- 3.1 `incidents` table + API + WF3 · 3.2 WF4 SLA escalation (15/30 min, L2 re-notify,
-  max 2 loops) · 3.3 feedback endpoint + WF5 form (verdicts: TP / FP / escalate /
-  contain) · 3.4 auto-close TTL sweeper · 3.5 SOC console (static HTML): alert queue,
-  score drill-down, incident board · 3.6 runbooks for the six sample scenarios ·
-  3.7 Prometheus `/metrics` + optional Grafana profile · 3.8 PostgreSQL profile +
-  migration parity tests · 3.9 `stats` endpoints + WF6 daily digest.
+- 3.1 `incidents` table + API + WF3 · 3.2 incident lifecycle + feedback sync ·
+  3.3 alert/incident read APIs + incident timeline (this milestone) · 3.4 auto-close
+  TTL sweeper · 3.5 SOC console (static HTML): alert queue, score drill-down,
+  incident board · 3.6 runbooks for the six sample scenarios · 3.7 Prometheus
+  `/metrics` + optional Grafana profile · 3.8 PostgreSQL profile + migration
+  parity tests · 3.9 `stats` endpoints + WF6 daily digest. (WF4 SLA / WF5 form
+  landed with Phase 2B/2C.)
 
 **Acceptance:** end-to-end demo — sample alert → incident → (no ack) → escalation email →
 FP verdict via form → tuning suggestion in next digest. All actions audit-logged.

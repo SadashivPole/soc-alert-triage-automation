@@ -1,4 +1,7 @@
-"""Alert ingestion endpoint: POST /api/v1/alerts/ingest.
+"""Alert ingest + read APIs.
+
+Ingest: POST /api/v1/alerts/ingest.
+Read (Phase 3.3): GET /api/v1/alerts, GET /api/v1/alerts/{alert_id}.
 
 Accepts Wazuh-shaped alert JSON, validates the schema, normalizes to the
 canonical format, extracts IOCs and runs the enrichment chain (Phase 1E),
@@ -34,10 +37,10 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, datetime
-from typing import Any
+from typing import Annotated, Any
 from uuid import UUID
 
-from fastapi import APIRouter, Request, status
+from fastapi import APIRouter, Path, Query, Request, status
 from fastapi.responses import JSONResponse
 from pydantic import ValidationError
 from sqlalchemy.exc import SQLAlchemyError
@@ -59,6 +62,7 @@ from ..ingest.normalizer import normalize_wazuh_alert
 from ..ingest.schemas import WazuhAlert
 from ..models.assessment import Decision, DecisionAction, RiskAssessment
 from ..models.canonical import CanonicalAlert
+from ..models.records import DEFAULT_PAGE_LIMIT, MAX_PAGE_LIMIT
 from ..models.repositories import (
     AlertRepository,
     AuditRepository,
@@ -74,6 +78,14 @@ from .dependencies import (
     ScorerDependency,
     SessionFactoryDependency,
     SettingsDependency,
+)
+from .n8n_auth import RequireN8NToken
+from .schemas import (
+    AlertDetail,
+    AlertListResponse,
+    alert_detail_from_record,
+    alert_summary_from_record,
+    make_pagination,
 )
 
 logger = get_logger("soc_triage.ingest")
@@ -567,6 +579,131 @@ async def _read_body_with_limit(request: Request, max_size: int) -> bytes | None
 async def _parse_json(body: bytes) -> Any:
     """Parse a JSON body from raw bytes."""
     return json.loads(body)
+
+
+# ---------------------------------------------------------------------------
+# Phase 3.3 — read APIs (GET is strictly read-only: no audit writes, no
+# incident transitions, no n8n/Wazuh/intel/LLM calls).
+# ---------------------------------------------------------------------------
+
+
+@router.get(
+    "/",
+    response_model=AlertListResponse,
+    status_code=status.HTTP_200_OK,
+    include_in_schema=False,
+)
+@router.get(
+    "",
+    response_model=AlertListResponse,
+    status_code=status.HTTP_200_OK,
+    summary="List persisted alerts",
+    description=(
+        "Return a newest-first page of analyst-safe alert summaries. "
+        "Filters are simple equality matches on fields already stored "
+        "(source, incident_id, rule_id, agent_id, risk tier, decision "
+        "severity, dedupe_group_key, duplicate-absorbed). Requires the "
+        "shared N8N token (same analyst channel as feedback). "
+        "A dedicated analyst/read token is deferred to the console milestone."
+    ),
+)
+async def list_alerts(
+    session_factory: SessionFactoryDependency,
+    limit: Annotated[int, Query(ge=1, le=MAX_PAGE_LIMIT)] = DEFAULT_PAGE_LIMIT,
+    offset: Annotated[int, Query(ge=0)] = 0,
+    source: Annotated[str | None, Query()] = None,
+    incident_id: Annotated[str | None, Query()] = None,
+    rule_id: Annotated[str | None, Query()] = None,
+    agent_id: Annotated[str | None, Query()] = None,
+    tier: Annotated[str | None, Query(description="Risk tier")] = None,
+    severity: Annotated[str | None, Query(description="Decision severity (SEV1/SEV2)")] = None,
+    dedupe_group_key: Annotated[str | None, Query()] = None,
+    duplicate: Annotated[bool | None, Query()] = None,
+    _: None = RequireN8NToken,
+) -> AlertListResponse | JSONResponse:
+    """List persisted alerts (paginated, filtered, no raw logs)."""
+    try:
+        with session_scope(session_factory) as session:
+            items, total = AlertRepository(session).list_alerts(
+                source=source,
+                incident_id=incident_id,
+                rule_id=rule_id,
+                agent_id=agent_id,
+                tier=tier,
+                severity=severity,
+                dedupe_group_key=dedupe_group_key,
+                duplicate=duplicate,
+                limit=limit,
+                offset=offset,
+            )
+            response = AlertListResponse(
+                items=[alert_summary_from_record(item) for item in items],
+                pagination=make_pagination(limit=limit, offset=offset, total=total),
+            )
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.error(
+            "alert_list_failed",
+            component="alerts",
+            error_type=type(exc).__name__,
+        )
+        return error_response(
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+            "internal_error",
+            "failed to list alerts",
+        )
+    logger.info(
+        "alerts_listed",
+        component="alerts",
+        count=len(response.items),
+        total=total,
+        limit=limit,
+        offset=offset,
+    )
+    return response
+
+
+@router.get(
+    "/{alert_id}",
+    response_model=AlertDetail,
+    status_code=status.HTTP_200_OK,
+    summary="Get a persisted alert",
+    description=(
+        "Return an analyst-safe alert representation (identity, rule/agent, "
+        "risk/decision, dedupe, incident linkage, IOC summaries). Never "
+        "includes full_log, credentials, or tokens. Unknown ids return a "
+        "structured 404. Requires the shared N8N token."
+    ),
+)
+async def get_alert(
+    session_factory: SessionFactoryDependency,
+    alert_id: Annotated[UUID, Path(description="Alert ID")],
+    _: None = RequireN8NToken,
+) -> AlertDetail | JSONResponse:
+    """Return one persisted alert, or a structured 404."""
+    try:
+        with session_scope(session_factory) as session:
+            record = AlertRepository(session).get_alert(alert_id)
+            if record is None:
+                return error_response(
+                    status.HTTP_404_NOT_FOUND,
+                    "not_found",
+                    f"alert {alert_id} not found",
+                )
+            detail = alert_detail_from_record(record)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.error(
+            "alert_get_failed",
+            component="alerts",
+            alert_id=str(alert_id),
+            error_type=type(exc).__name__,
+        )
+        return error_response(
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+            "internal_error",
+            "failed to load alert",
+        )
+    logger.info("alert_read", component="alerts", alert_id=str(alert_id))
+    return detail
 
 
 __all__ = ["MAX_BODY_SIZE", "router"]

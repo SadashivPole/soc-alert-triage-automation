@@ -57,7 +57,8 @@ cookies.
 | --- | --- | --- | --- |
 | `POST /api/v1/alerts/ingest` | 1 | `X-API-Key`, constant-time compare, per-key rate limit (default 120/min) | upgrade path: per-source keys + HMAC-SHA256 (`X-Signature`: body + timestamp, ±5 min window) |
 | n8n → API callbacks (feedback, incident create, stats) | 1–3 | `N8N_CALLBACK_TOKEN` header | distinct from ingest key; least privilege per endpoint |
-| Analyst console/read APIs | 3 | separate analyst token; read-mostly scopes | SSO/OIDC documented as future work |
+| Alert/incident **read** APIs + timeline (Phase 3.3) | 3 | shared N8N token (`X-N8N-Token` / `X-Callback-Token` / Bearer) — same analyst channel as feedback | read-only; no dedicated analyst token yet (deferred to the console milestone) |
+| Analyst console/read APIs | 3 (later) | separate analyst token; read-mostly scopes | SSO/OIDC documented as future work |
 | Containment approval | 4 | explicit authenticated approval endpoint, two-step confirm, audit | never callable by workflows autonomously |
 | n8n UI | 1 | n8n's own auth; bind behind `soc-edge`; do not expose publicly | lab-only exposure guidance below |
 
