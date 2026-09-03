@@ -56,6 +56,8 @@ INCIDENT_ID_RE = re.compile(r"^INC-\d{4}-\d{2}-\d{2}-\d{4}$")
 
 PREVIOUS_REVISION = "b2c3d4e5f6a7"
 INCIDENT_REVISION = "d4e5f6a7b8c9"
+#: Phase 3.2 head revision (incident lifecycle timestamps).
+HEAD_REVISION = "e7f8a9b0c1d2"
 
 #: The exact DDL the interrupted migration left committed in the Windows
 #: Docker database (verbatim from the crash): the incidents table with all of
@@ -303,9 +305,15 @@ def _assert_complete_incident_schema(engine: Any) -> None:
         "dedupe_group_key",
         "created_at",
         "updated_at",
+        # Phase 3.2 lifecycle timestamps (nullable until the state is reached)
+        "acknowledged_at",
+        "resolved_at",
     }
     for name, column in incidents_columns.items():
-        assert not column["nullable"], f"incidents.{name} must be NOT NULL"
+        if name in ("acknowledged_at", "resolved_at"):
+            assert column["nullable"], f"incidents.{name} must be nullable"
+        else:
+            assert not column["nullable"], f"incidents.{name} must be NOT NULL"
 
     pk = inspector.get_pk_constraint("incidents")
     assert pk["constrained_columns"] == ["incident_id"]
@@ -402,7 +410,7 @@ def test_upgrade_recovers_from_partially_applied_incidents_table(db_url: str) ->
     run_migrations(engine, ALEMBIC_SCRIPT_LOCATION)
 
     # Migration completed and the revision is recorded.
-    assert _alembic_version(engine) == INCIDENT_REVISION
+    assert _alembic_version(engine) == HEAD_REVISION
     # The orphaned batch scratch table was cleaned up.
     assert "_alembic_tmp_alerts" not in _table_names(engine)
     # Full intended schema is in place (verified, not blind-stamped).
@@ -430,17 +438,17 @@ def test_upgrade_recovers_from_partially_applied_incidents_table(db_url: str) ->
 
 
 def test_fresh_database_migrates_cleanly_to_head(db_url: str) -> None:
-    """A brand-new database migrates to d4e5f6a7b8c9 with the full schema."""
+    """A brand-new database migrates to head (e7f8a9b0c1d2) with the full schema."""
     engine = create_app_engine(db_url)
     run_migrations(engine, ALEMBIC_SCRIPT_LOCATION)
 
-    assert _alembic_version(engine) == INCIDENT_REVISION
+    assert _alembic_version(engine) == HEAD_REVISION
     assert "_alembic_tmp_alerts" not in _table_names(engine)
     _assert_complete_incident_schema(engine)
 
     # Migrations are idempotent: a second startup run is a no-op.
     run_migrations(engine, ALEMBIC_SCRIPT_LOCATION)
-    assert _alembic_version(engine) == INCIDENT_REVISION
+    assert _alembic_version(engine) == HEAD_REVISION
     _assert_complete_incident_schema(engine)
 
     # Downgrade still works from a fresh head (batch recreate with no data).
@@ -475,7 +483,7 @@ def test_upgrade_phase_2b_database_with_real_data(db_url: str) -> None:
 
     run_migrations(engine, ALEMBIC_SCRIPT_LOCATION)
 
-    assert _alembic_version(engine) == INCIDENT_REVISION
+    assert _alembic_version(engine) == HEAD_REVISION
     _assert_complete_incident_schema(engine)
     assert _data_snapshot(engine) == before
     with engine.connect() as conn:
@@ -509,7 +517,7 @@ def test_recovery_completes_partially_created_pieces(db_url: str) -> None:
 
     run_migrations(engine, ALEMBIC_SCRIPT_LOCATION)
 
-    assert _alembic_version(engine) == INCIDENT_REVISION
+    assert _alembic_version(engine) == HEAD_REVISION
     _assert_complete_incident_schema(engine)
     assert _data_snapshot(engine) == before
     engine.dispose()
@@ -627,7 +635,7 @@ def test_restart_after_recovered_migration_serves_and_persists_incident(db_url: 
     engine = _build_phase_2b_database(db_url, with_data=True)
     _simulate_crashed_migration(engine)
     run_migrations(engine, ALEMBIC_SCRIPT_LOCATION)  # first startup: recovers
-    assert _alembic_version(engine) == INCIDENT_REVISION
+    assert _alembic_version(engine) == HEAD_REVISION
     engine.dispose()
 
     # triage-api boots against the recovered database and serves traffic.

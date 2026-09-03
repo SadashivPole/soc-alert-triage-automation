@@ -27,7 +27,7 @@ from ..notifications.client import NotificationResult
 from .assessment import DecisionSeverity
 from .canonical import CanonicalAlert
 from .incident import Incident as IncidentDomain
-from .incident import IncidentStatus
+from .incident import IncidentStatus, InvalidIncidentTransitionError, can_transition
 from .orm import (
     Alert,
     AlertDedupeGroup,
@@ -335,6 +335,49 @@ class IncidentRepository:
             raise LookupError(f"incident {incident_id!r} not found")
         self._link_alert(alert_id, incident_id)
 
+    def update_status(
+        self,
+        incident_id: str,
+        *,
+        target: IncidentStatus,
+        occurred_at: datetime,
+    ) -> IncidentDomain:
+        """Move an incident along its lifecycle (Phase 3.2), inside the
+        caller's transaction.
+
+        Enforces the explicit state machine (:data:`VALID_TRANSITIONS`):
+        unknown incidents raise :class:`LookupError`, illegal transitions
+        raise :class:`InvalidIncidentTransitionError` (neither mutates
+        anything). On success:
+
+        * ``status`` and ``updated_at`` are set (UTC);
+        * ``acknowledged_at`` is set exactly when the new state is
+          ``acknowledged``;
+        * ``resolved_at`` is set exactly when the new state is a terminal one
+          (``resolved`` / ``false_positive``).
+
+        Neither lifecycle timestamp is ever written for any other state, so
+        timestamps are never fabricated and never overwritten once the
+        terminal state is reached (terminal states have no outgoing
+        transitions). The acting analyst is carried by the caller's audit
+        entries — the row itself never stores free-form text.
+        """
+        row = self._session.get(Incident, incident_id)
+        if row is None:
+            raise LookupError(f"incident {incident_id!r} not found")
+        current = IncidentStatus(row.status)
+        if not can_transition(current, target):
+            raise InvalidIncidentTransitionError(current, target)
+        timestamp = as_utc(occurred_at)
+        row.status = target.value
+        row.updated_at = timestamp
+        if target is IncidentStatus.ACKNOWLEDGED:
+            row.acknowledged_at = timestamp
+        if target in (IncidentStatus.RESOLVED, IncidentStatus.FALSE_POSITIVE):
+            row.resolved_at = timestamp
+        self._session.flush()
+        return self._to_domain(row)
+
     # ------------------------------------------------------------------
     # Internals
     # ------------------------------------------------------------------
@@ -372,6 +415,10 @@ class IncidentRepository:
             dedupe_group_key=row.dedupe_group_key,
             created_at=as_utc(row.created_at),
             updated_at=as_utc(row.updated_at),
+            acknowledged_at=as_utc(row.acknowledged_at)
+            if row.acknowledged_at is not None
+            else None,
+            resolved_at=as_utc(row.resolved_at) if row.resolved_at is not None else None,
         )
 
 

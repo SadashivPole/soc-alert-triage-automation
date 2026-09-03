@@ -22,6 +22,39 @@ Security:
 Persistence:
 * analyst_feedback table (append-only for this entity)
 * audit_log: feedback.received
+
+Incident synchronization (Phase 3.2)
+------------------------------------
+
+After a verdict is persisted, the alert's linked incident (if any) is
+synchronized with the verdict **in the same transaction** — feedback row,
+``feedback.received`` audit, and any incident transition commit or roll back
+together. The response contract of this endpoint is unchanged.
+
+A feedback verdict is **not** automatically proof that remediation is
+complete, so the mapping is deliberately conservative (see
+:data:`FEEDBACK_INCIDENT_STATUS_TARGETS` and :func:`plan_incident_sync` for
+the documented table):
+
+* ``true_positive``    → ``acknowledged`` **only if the current state and the
+  state machine explicitly support it** — a confirmation, never a resolution
+  (an incident is never marked ``resolved`` because of a TP verdict);
+* ``acknowledged``     → ``acknowledged`` (when legal);
+* ``resolved``         → ``resolved`` (when legal — note ``open`` incidents
+  must be investigated/acknowledged first, per the state machine);
+* ``false_positive``   → ``false_positive`` (when legal);
+* ``escalate``         → ``escalated`` (when legal);
+* ``benign``           → ``false_positive`` — the safest *valid* terminal
+  meaning for a harmless alert; never ``resolved`` (no remediation implied);
+* ``contain_requested``→ **no transition at all** — human approval is
+  required (the WF5 approval email is the mechanism); the incident side only
+  records an ``incident.containment_requested`` audit entry.
+
+When the current incident state does not allow the mapped transition (e.g.
+``resolved`` verdict on an ``open`` incident, or any verdict on a terminal
+incident), the verdict is still recorded exactly as before, the incident is
+left untouched, and no incident audit entry is written — repeated identical
+feedback is therefore idempotent with respect to the incident lifecycle.
 """
 
 from __future__ import annotations
@@ -34,12 +67,23 @@ from uuid import UUID
 from fastapi import APIRouter, Path, status
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
+from sqlalchemy.orm import Session
 
-from ..audit import audit_entries_for_feedback
+from ..audit import (
+    audit_entries_for_feedback,
+    audit_entries_for_incident_containment_request,
+    audit_entries_for_incident_status,
+)
 from ..core.errors import error_response
 from ..core.logging import get_logger
 from ..db.session import session_scope
-from ..models.repositories import AlertRepository, AuditRepository, FeedbackRepository
+from ..models.incident import Incident, IncidentStatus, can_transition
+from ..models.repositories import (
+    AlertRepository,
+    AuditRepository,
+    FeedbackRepository,
+    IncidentRepository,
+)
 from .dependencies import SessionFactoryDependency
 from .n8n_auth import RequireN8NToken
 
@@ -95,6 +139,131 @@ ACKNOWLEDGED_VERDICTS: frozenset[str] = frozenset(
         FeedbackVerdict.CONTAIN_REQUESTED.value,
     }
 )
+
+# ---------------------------------------------------------------------------
+# Feedback → incident lifecycle synchronization (Phase 3.2)
+# ---------------------------------------------------------------------------
+
+#: The smallest defensible verdict → incident-status mapping (Phase 3.2).
+#:
+#: A verdict is evidence about the *alert*, not proof that *remediation is
+#: complete* — so nothing here auto-resolves an incident:
+#:
+#: * ``true_positive``: the analyst confirms the alert is real. That is an
+#:   acknowledgement, never a resolution → target ``acknowledged`` (applied
+#:   only when the incident's current state explicitly allows it, e.g. not
+#:   from terminal states).
+#: * ``resolved``: the analyst says remediation is done → target ``resolved``
+#:   (the state machine still requires the incident to have been
+#:   investigated/acknowledged first, so ``open`` incidents are untouched).
+#: * ``benign``: the alert was harmless → the safest *valid* terminal meaning
+#:   is ``false_positive`` (never ``resolved``: no remediation happened).
+#: * ``contain_requested`` is intentionally absent: it requires human
+#:   approval (WF5) and must never move or close the incident.
+FEEDBACK_INCIDENT_STATUS_TARGETS: dict[FeedbackVerdict, IncidentStatus] = {
+    FeedbackVerdict.TRUE_POSITIVE: IncidentStatus.ACKNOWLEDGED,
+    FeedbackVerdict.ACKNOWLEDGED: IncidentStatus.ACKNOWLEDGED,
+    FeedbackVerdict.RESOLVED: IncidentStatus.RESOLVED,
+    FeedbackVerdict.FALSE_POSITIVE: IncidentStatus.FALSE_POSITIVE,
+    FeedbackVerdict.ESCALATE: IncidentStatus.ESCALATED,
+    FeedbackVerdict.BENIGN: IncidentStatus.FALSE_POSITIVE,
+    # CONTAIN_REQUESTED deliberately has no target (approval-required).
+}
+
+
+def plan_incident_sync(incident: Incident, verdict: FeedbackVerdict) -> IncidentStatus | None:
+    """The incident status a persisted verdict should move the incident to.
+
+    Returns ``None`` when the incident must be left untouched:
+
+    * ``contain_requested`` — approval-required, no lifecycle change at all;
+    * the mapped target is not a legal transition from the incident's current
+      state (state machine guard — e.g. ``resolved`` on an ``open`` incident,
+      or any verdict on an already-terminal incident).
+    """
+    if verdict is FeedbackVerdict.CONTAIN_REQUESTED:
+        return None
+    target = FEEDBACK_INCIDENT_STATUS_TARGETS.get(verdict)
+    if target is None or not can_transition(incident.status, target):
+        return None
+    return target
+
+
+def _sync_incident_with_feedback(
+    session: Session,
+    *,
+    incident: Incident,
+    alert_id: UUID,
+    verdict: FeedbackVerdict,
+    actor: str,
+    occurred_at: datetime,
+) -> None:
+    """Synchronize the linked incident with a just-persisted verdict.
+
+    Called inside the same unit of work as the feedback persistence, so the
+    feedback row, its ``feedback.received`` audit entry and any incident
+    transition commit or roll back atomically. Never raises for a missing or
+    terminal incident state — a verdict without a legal incident transition
+    still counts as recorded feedback (existing contract).
+    """
+    audit_repo = AuditRepository(session)
+    if verdict is FeedbackVerdict.CONTAIN_REQUESTED:
+        # Approval-required (WF5 sends the approval email): record the
+        # request against the incident; no state change, no containment, no
+        # resolution — non-destructive by design (ADR-8).
+        audit_repo.append(
+            audit_entries_for_incident_containment_request(
+                incident_id=incident.incident_id,
+                alert_id=alert_id,
+                actor=actor,
+            ),
+            occurred_at=occurred_at,
+        )
+        logger.info(
+            "incident_containment_request_recorded",
+            component="feedback",
+            incident_id=incident.incident_id,
+            alert_id=str(alert_id),
+            actor=actor,
+        )
+        return
+
+    target = plan_incident_sync(incident, verdict)
+    if target is None:
+        logger.info(
+            "incident_feedback_sync_skipped",
+            component="feedback",
+            incident_id=incident.incident_id,
+            alert_id=str(alert_id),
+            verdict=verdict.value,
+            incident_status=incident.status.value,
+            reason="no_valid_transition",
+        )
+        return
+
+    updated = IncidentRepository(session).update_status(
+        incident.incident_id,
+        target=target,
+        occurred_at=occurred_at,
+    )
+    audit_repo.append(
+        audit_entries_for_incident_status(
+            incident=updated,
+            previous_status=incident.status,
+            actor=actor,
+        ),
+        occurred_at=occurred_at,
+    )
+    logger.info(
+        "incident_synced_from_feedback",
+        component="feedback",
+        incident_id=updated.incident_id,
+        alert_id=str(alert_id),
+        verdict=verdict.value,
+        before=incident.status.value,
+        after=updated.status.value,
+        actor=actor,
+    )
 
 
 @router.post(
@@ -152,6 +321,21 @@ async def submit_feedback(
                 ),
                 occurred_at=received_at,
             )
+
+            # Phase 3.2 — synchronize the linked incident lifecycle with the
+            # verdict (same transaction: all-or-nothing with the feedback row
+            # and its audit entry). Alerts without a linked incident are
+            # simply skipped — the feedback contract is unchanged.
+            linked_incident = IncidentRepository(session).for_alert(alert_id)
+            if linked_incident is not None:
+                _sync_incident_with_feedback(
+                    session,
+                    incident=linked_incident,
+                    alert_id=alert_id,
+                    verdict=body.verdict,
+                    actor=actor,
+                    occurred_at=received_at,
+                )
 
         logger.info(
             "feedback_received",

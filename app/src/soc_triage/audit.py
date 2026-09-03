@@ -14,6 +14,7 @@ never raw alert payloads and never anything resembling a secret
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any
 from uuid import UUID
 
@@ -21,7 +22,7 @@ from pydantic import BaseModel, Field
 
 from .ingest.deduplication import DedupeStatus, DeliveryDecision
 from .models.assessment import Decision, RiskAssessment
-from .models.incident import Incident
+from .models.incident import Incident, IncidentStatus
 
 # --- Audit vocabulary ------------------------------------------------------
 
@@ -49,6 +50,11 @@ ACTION_ALERT_DECIDED = "alert.decided"
 
 # Phase 3.1 — automatic incident creation
 ACTION_INCIDENT_CREATED = "incident.created"
+
+# Phase 3.2 — incident lifecycle
+ACTION_INCIDENT_STATUS_UPDATED = "incident.status_updated"
+ACTION_INCIDENT_ESCALATED = "incident.escalated"
+ACTION_INCIDENT_CONTAINMENT_REQUESTED = "incident.containment_requested"
 
 # Phase 2B — n8n SOAR integration
 ACTION_NOTIFICATION_ATTEMPT = "notification.attempt"
@@ -263,6 +269,104 @@ def audit_entries_for_incident(incident: Incident) -> list[AuditEntry]:
     ]
 
 
+def _incident_status_snapshot(
+    incident_id: str,
+    *,
+    status: IncidentStatus,
+    acknowledged_at: datetime | None = None,
+    resolved_at: datetime | None = None,
+) -> dict[str, Any]:
+    """Small structured lifecycle snapshot (ids + timestamps only, Phase 3.2)."""
+    return {
+        "incident_id": incident_id,
+        "status": status.value,
+        "acknowledged_at": acknowledged_at.isoformat() if acknowledged_at is not None else None,
+        "resolved_at": resolved_at.isoformat() if resolved_at is not None else None,
+    }
+
+
+def audit_entries_for_incident_status(
+    *,
+    incident: Incident,
+    previous_status: IncidentStatus,
+    actor: str,
+    notes: str | None = None,
+) -> list[AuditEntry]:
+    """Map one incident lifecycle transition onto its audit entries (Phase 3.2).
+
+    Emits ``incident.status_updated`` with the acting analyst, the incident
+    id, and the **before/after** lifecycle state (including the lifecycle
+    timestamps after the change). When the new state is ``escalated``, an
+    additional ``incident.escalated`` entry records the same change for
+    escalation-specific consumers. Snapshots are small and structured —
+    never raw alert payloads and never secrets (SECURITY.md §5, §7);
+    optional analyst ``notes`` are included as provided (callers bound them).
+    """
+    before = {"status": previous_status.value}
+    after = _incident_status_snapshot(
+        incident.incident_id,
+        status=incident.status,
+        acknowledged_at=incident.acknowledged_at,
+        resolved_at=incident.resolved_at,
+    )
+    if notes:
+        after["notes"] = notes
+    entries = [
+        AuditEntry(
+            actor=actor,
+            action=ACTION_INCIDENT_STATUS_UPDATED,
+            entity_type=ENTITY_INCIDENT,
+            entity_id=incident.incident_id,
+            before=before,
+            after=after,
+        )
+    ]
+    if incident.status is IncidentStatus.ESCALATED:
+        entries.append(
+            AuditEntry(
+                actor=actor,
+                action=ACTION_INCIDENT_ESCALATED,
+                entity_type=ENTITY_INCIDENT,
+                entity_id=incident.incident_id,
+                before=before,
+                after=after,
+            )
+        )
+    return entries
+
+
+def audit_entries_for_incident_containment_request(
+    *,
+    incident_id: str,
+    alert_id: UUID,
+    actor: str,
+) -> list[AuditEntry]:
+    """Record an approval-required containment request against an incident.
+
+    A ``contain_requested`` analyst verdict never changes the incident state
+    and never executes containment (ADR-8: human approval required). The
+    approval email itself is sent by the n8n workflow (WF5); this entry is
+    the incident-side record that a containment approval was requested and
+    is pending — and that nothing was executed.
+    """
+    return [
+        AuditEntry(
+            actor=actor,
+            action=ACTION_INCIDENT_CONTAINMENT_REQUESTED,
+            entity_type=ENTITY_INCIDENT,
+            entity_id=incident_id,
+            before=None,
+            after={
+                "incident_id": incident_id,
+                "alert_id": str(alert_id),
+                "requested_by": actor,
+                "state": "approval_required",
+                "containment_executed": False,
+            },
+        )
+    ]
+
+
 def audit_entries_for_notification(
     alert_id: UUID,
     *,
@@ -395,7 +499,10 @@ __all__ = [
     "ACTION_DUPLICATE_ABSORBED",
     "ACTION_FEEDBACK_RECEIVED",
     "ACTION_GENERATION_STARTED",
+    "ACTION_INCIDENT_CONTAINMENT_REQUESTED",
     "ACTION_INCIDENT_CREATED",
+    "ACTION_INCIDENT_ESCALATED",
+    "ACTION_INCIDENT_STATUS_UPDATED",
     "ACTION_NOTIFICATION_ATTEMPT",
     "ACTION_NOTIFICATION_DELIVERED",
     "ACTION_NOTIFICATION_DUPLICATE_SUPPRESSED",
@@ -417,5 +524,7 @@ __all__ = [
     "audit_entries_for_decision",
     "audit_entries_for_feedback",
     "audit_entries_for_incident",
+    "audit_entries_for_incident_containment_request",
+    "audit_entries_for_incident_status",
     "audit_entries_for_notification",
 ]

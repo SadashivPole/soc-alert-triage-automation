@@ -11,10 +11,14 @@ ARCHITECTURE.md §19):
   to the incident it belongs to (Phase 3.1).
 * ``incidents`` — first-class incidents (Phase 3.1), created automatically
   when an alert decision is ``open_incident``: human-readable ``INC-YYYY-MM-DD-NNNN``
-  id (sequential per UTC date, unique), severity (SEV1/SEV2), status
-  (``open``), the primary alert it was opened from, and the dedupe group it
-  belongs to (so recurring/deduplicated alerts attach to the existing open
-  incident instead of creating duplicates).
+  id (sequential per UTC date, unique), severity (SEV1/SEV2), lifecycle
+  status (``open`` / ``investigating`` / ``acknowledged`` / ``resolved`` /
+  ``false_positive`` / ``escalated``, Phase 3.2), the primary alert it was
+  opened from, and the dedupe group it belongs to (so
+  recurring/deduplicated alerts attach to the existing open incident instead
+  of creating duplicates). ``acknowledged_at`` / ``resolved_at`` are
+  nullable lifecycle timestamps populated only when the corresponding state
+  is actually reached (Phase 3.2).
 * ``alert_dedupe_groups`` — the **recurrence / generation state** required by
   the Phase 1C deduplication contract (ARCHITECTURE.md §6): one row per
   deduplication group (``rule.id + agent.id``) carrying ``occurrences``,
@@ -107,7 +111,8 @@ class Incident(Base):
     __table_args__ = (Index("ix_incidents_group_status", "dedupe_group_key", "status"),)
 
     incident_id: Mapped[str] = mapped_column(String(32), primary_key=True)
-    #: Incident lifecycle status (Phase 3.1 only creates ``open`` rows).
+    #: Incident lifecycle status (Phase 3.1 only creates ``open`` rows;
+    #: Phase 3.2 moves them along the explicit state machine).
     status: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
     #: SEV1 (critical) / SEV2 (high) as decided by the decision engine.
     severity: Mapped[str] = mapped_column(String(8), nullable=False, index=True)
@@ -119,6 +124,12 @@ class Incident(Base):
         DateTime(timezone=True), nullable=False, index=True
     )
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    #: Set exactly when the incident transitions to ``acknowledged`` (Phase
+    #: 3.2); nullable until that state is reached.
+    acknowledged_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    #: Set exactly when the incident reaches a terminal state (``resolved``
+    #: or ``false_positive``); nullable otherwise (Phase 3.2).
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class AlertDedupeGroup(Base):

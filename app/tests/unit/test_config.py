@@ -72,11 +72,60 @@ def test_rejects_invalid_log_level() -> None:
         Settings(soc_log_level="CHATTY")
 
 
-def test_rejects_placeholder_secrets_in_test_environment() -> None:
+def test_rejects_placeholder_secrets_in_test_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """SOC_ENV=test + placeholder secrets must fail, independent of .env.
+
+    Placeholders are passed as explicit init kwargs so a developer's local
+    ``.env`` (loaded by SettingsConfigDict) cannot supply real secrets and
+    mask the rejection.
+    """
+    _clear_environment(monkeypatch)
     with pytest.raises(ValidationError):
-        Settings(soc_env="test")
+        Settings(
+            soc_env="test",
+            triage_ingest_api_key="change-me-generate-a-long-random-value",
+            n8n_callback_token="change-me-generate-a-long-random-value",
+        )
 
 
-def test_rejects_placeholder_secrets_in_production_environment() -> None:
+def test_rejects_placeholder_secrets_in_production_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """SOC_ENV=production + placeholder secrets must fail, independent of .env."""
+    _clear_environment(monkeypatch)
     with pytest.raises(ValidationError):
-        Settings(soc_env="production")
+        Settings(
+            soc_env="production",
+            triage_ingest_api_key="change-me-generate-a-long-random-value",
+            n8n_callback_token="change-me-generate-a-long-random-value",
+        )
+
+
+def test_explicit_placeholder_kwargs_override_env_file_and_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Prove ambient non-placeholder secrets cannot make rejection nondeterministic.
+
+    Simulates a developer machine where process env (or .env-loaded values
+    mirrored into the environment) carries real secrets: explicit init kwargs
+    still supply the placeholders under test, so ValidationError is raised.
+    """
+    _clear_environment(monkeypatch)
+    monkeypatch.setenv("TRIAGE_INGEST_API_KEY", "real-secret-from-developer-dotenv")
+    monkeypatch.setenv("N8N_CALLBACK_TOKEN", "real-callback-from-developer-dotenv")
+
+    with pytest.raises(ValidationError):
+        Settings(
+            soc_env="test",
+            triage_ingest_api_key="change-me-generate-a-long-random-value",
+            n8n_callback_token="change-me-generate-a-long-random-value",
+        )
+
+    with pytest.raises(ValidationError):
+        Settings(
+            soc_env="production",
+            triage_ingest_api_key="change-me-generate-a-long-random-value",
+            n8n_callback_token="change-me-generate-a-long-random-value",
+        )
