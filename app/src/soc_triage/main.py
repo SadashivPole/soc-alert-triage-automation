@@ -12,10 +12,13 @@ from starlette import status as http_status
 from starlette.responses import RedirectResponse
 
 from . import __version__
+from .api.metrics import router as metrics_router
+from .api.middleware import MetricsMiddleware, collect_route_paths
 from .api.router import api_router
 from .core.config import Settings, get_settings
 from .core.errors import register_exception_handlers
 from .core.logging import configure_logging, get_logger
+from .core.metrics import MetricsRegistry
 from .db.engine import (
     ALEMBIC_SCRIPT_LOCATION,
     create_app_engine,
@@ -116,6 +119,26 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             ],
         )
 
+        # --- Phase 3.7: app-scoped Prometheus metrics (D4 wiring) ---
+        # One MetricsRegistry per application instance, never the
+        # process-global prometheus REGISTRY (test isolation, ADR-9).
+        # Provider names come from the registered enrichment chain so
+        # provider-outcome labels stay bounded; static route templates are
+        # collected from the mounted routes so HTTP labels stay bounded (D5).
+        if app_settings.metrics_enabled:
+            metrics_registry = MetricsRegistry(
+                provider_names=[provider.name for provider in enrichment_chain.providers],
+                static_routes=sorted(
+                    path for path in collect_route_paths(_app.router) if "{" not in path
+                ),
+            )
+            _app.state.metrics = metrics_registry
+            logger.info(
+                "metrics_ready",
+                component="main",
+                enabled=app_settings.metrics_enabled,
+            )
+
         # --- Deterministic scoring & decisioning (Phase 1F) ---
         # Policies are versioned, non-secret YAML under app/config/ and are
         # schema-validated at load (fail loud). Both engines are pure —
@@ -199,6 +222,22 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     register_exception_handlers(app)
     app.include_router(api_router)
+
+    # Phase 3.7: the metrics surface is optional and additive. When
+    # METRICS_ENABLED=false the route is not mounted at all (true
+    # unavailability, matching the existing environment-gated endpoint
+    # convention); when enabled it stays hidden from OpenAPI
+    # (include_in_schema=False in api/metrics.py).
+    if app_settings.metrics_enabled:
+        app.include_router(metrics_router)
+        # Thin pure-ASGI middleware (Task D5): records bounded
+        # soc_triage_http_requests / _duration metrics per request. It is
+        # non-load-bearing (failures swallowed), never reads request
+        # bodies/headers as labels, and records /metrics scrapes with the
+        # static "/metrics" route label — one increment per scrape, never
+        # recursive or self-amplifying.
+        app.add_middleware(MetricsMiddleware)
+
     _mount_static_console(app)
     return app
 

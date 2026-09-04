@@ -36,8 +36,9 @@ Based on ARCHITECTURE.md §6 and SECURITY.md §3.
 from __future__ import annotations
 
 import json
+import time
 from datetime import UTC, datetime
-from typing import Annotated, Any
+from typing import Annotated, Any, NamedTuple
 from uuid import UUID
 
 from fastapi import APIRouter, Path, Query, Request, status
@@ -53,6 +54,7 @@ from ..audit import (
 )
 from ..core.errors import error_response
 from ..core.logging import get_logger
+from ..core.metrics import MetricsRegistry, resolve_metrics
 from ..db.errors import StorageError
 from ..db.session import session_scope
 from ..enrichment import EnrichmentContext, extract_iocs
@@ -101,6 +103,28 @@ def _utc_now() -> datetime:
     return datetime.now(UTC)
 
 
+def _monotonic() -> float:
+    """Monotonic clock for ingest processing timing (Phase 3.7, D6).
+
+    Isolated like :func:`_utc_now` so tests can inject a deterministic,
+    non-wall-clock timeline without affecting the HTTP middleware's own
+    clock or any other ``time`` consumer.
+    """
+    return time.perf_counter()
+
+
+class _AssessmentPersistResult(NamedTuple):
+    """Outcome of one assessment persistence attempt (Phase 3.7, D7).
+
+    ``persisted`` is True only when the score/decision/audit/incident writes
+    committed atomically; ``incident_id`` is the durable incident id when an
+    incident applies (``None`` otherwise — including a failed persistence).
+    """
+
+    incident_id: str | None
+    persisted: bool
+
+
 @router.post(
     "/ingest",
     status_code=status.HTTP_202_ACCEPTED,
@@ -134,11 +158,18 @@ async def ingest_alert(
         413 if the request body exceeds 256 KiB.
         422 if the payload fails schema validation or identity validation.
     """
+    # Phase 3.7 (D6): app-scoped ingest metrics. resolve_metrics returns None
+    # when METRICS_ENABLED=false, so all instrumentation below is skipped
+    # without touching pipeline behavior (ADR-9).
+    ingest_metrics = resolve_metrics(request.app)
+
     # --- Body size guard ---
     content_length = request.headers.get("content-length")
     if content_length is not None:
         try:
             if int(content_length) > MAX_BODY_SIZE:
+                if ingest_metrics is not None:
+                    ingest_metrics.record_ingest_rejection("payload_too_large")
                 return error_response(
                     status.HTTP_413_CONTENT_TOO_LARGE,
                     "payload_too_large",
@@ -150,6 +181,8 @@ async def ingest_alert(
     # Read the raw body with a size cap
     body = await _read_body_with_limit(request, MAX_BODY_SIZE)
     if body is None:
+        if ingest_metrics is not None:
+            ingest_metrics.record_ingest_rejection("payload_too_large")
         return error_response(
             status.HTTP_413_CONTENT_TOO_LARGE,
             "payload_too_large",
@@ -160,6 +193,8 @@ async def ingest_alert(
     try:
         raw_payload: Any = await _parse_json(body)
     except Exception:
+        if ingest_metrics is not None:
+            ingest_metrics.record_ingest_rejection("malformed_json")
         return error_response(
             status.HTTP_422_UNPROCESSABLE_CONTENT,
             "validation_error",
@@ -175,12 +210,23 @@ async def ingest_alert(
             component="ingest",
             error_count=len(exc.errors()),
         )
+        if ingest_metrics is not None:
+            ingest_metrics.record_ingest_rejection("schema_invalid")
         return error_response(
             status.HTTP_422_UNPROCESSABLE_CONTENT,
             "validation_error",
             "alert schema validation failed",
             details=exc.errors(),
         )
+
+    # --- Ingest metrics: accepted boundary (Phase 3.7, D6) ---
+    # The measured processing path starts after the body-size / JSON / schema
+    # guards pass, spans normalize → extract → enrich → dedupe → assess
+    # (score/decide/persist for new/repeated; incident lookup for exact
+    # duplicates), and stops BEFORE the fail-open n8n notification step
+    # (tracked separately). Rejected requests never produce a processing
+    # observation. Monotonic clock only (see _monotonic).
+    processing_started = _monotonic()
 
     # --- Normalize → extract IOCs → enrich → deduplicate ---
     received_at = _utc_now()
@@ -195,6 +241,22 @@ async def ingest_alert(
                 received_at=received_at,
             ),
         )
+        # --- Phase 3.7 (D8): enrichment metrics at the chain's semantic
+        # outcome boundary ---
+        # Exactly one alert-level status per returned EnrichmentOutcome and
+        # exactly one provider outcome per ProviderOutcome the chain returned
+        # (one per registered provider, including disabled/skipped ones; the
+        # chain never raises — provider failures are folded into the outcome).
+        # Provider labels pass through the D2 registered-name allowlist, so
+        # unknown names collapse to the fixed fallback and never create new
+        # series. Helpers are non-raising (ADR-9) and never read back.
+        if ingest_metrics is not None:
+            ingest_metrics.record_enrichment_status(enrichment.status.value)
+            for provider_outcome in enrichment.providers:
+                ingest_metrics.record_enrichment_provider_outcome(
+                    provider=provider_outcome.provider,
+                    status=provider_outcome.status.value,
+                )
         canonical = canonical.model_copy(
             update={
                 "iocs": list(enrichment.iocs),
@@ -203,6 +265,8 @@ async def ingest_alert(
         )
         outcome = deduplicator.process(wazuh_alert, canonical, received_at)
     except InvalidDedupeInputError as exc:
+        if ingest_metrics is not None:
+            ingest_metrics.record_ingest_rejection("identity_invalid")
         logger.info(
             "alert_identity_validation_failed",
             component="ingest",
@@ -215,6 +279,8 @@ async def ingest_alert(
             details={"reason": str(exc)},
         )
     except StorageError:
+        if ingest_metrics is not None:
+            ingest_metrics.record_ingest_rejection("storage_unavailable")
         logger.warning(
             "ingest_storage_unavailable",
             component="ingest",
@@ -241,7 +307,7 @@ async def ingest_alert(
         risk = scorer.score(outcome.canonical_alert)
         decision = decider.decide(risk, alert=outcome.canonical_alert, decided_at=received_at)
         assessed = outcome.canonical_alert.model_copy(update={"risk": risk, "decision": decision})
-        incident_id = _persist_assessment(
+        persist_result = _persist_assessment(
             session_factory,
             alert_id=outcome.alert_id,
             canonical=assessed,
@@ -250,6 +316,7 @@ async def ingest_alert(
             dedupe_group_key=outcome.group_key,
             occurred_at=received_at,
         )
+        incident_id = persist_result.incident_id
         logger.info(
             "alert_scored",
             component="scoring",
@@ -259,6 +326,32 @@ async def ingest_alert(
             decision=decision.action.value,
             degraded=risk.degraded,
         )
+        # --- Phase 3.7 (D7): scoring/decision metric ---
+        # Recorded exactly once per newly scored+decided alert, only after the
+        # score/decision are final AND the assessment transaction committed
+        # (persist_result.persisted). Labels are the domain enum values;
+        # degraded is the existing RiskAssessment.degraded flag — the
+        # rule-severity-only engine fallback (ARCHITECTURE.md §16), never a
+        # re-interpretation of enrichment status. Exact duplicates never reach
+        # this branch, so they can never create a phantom scored event. The
+        # D2 helper is non-raising (ADR-9) and never read back into the
+        # pipeline.
+        if ingest_metrics is not None and persist_result.persisted:
+            ingest_metrics.record_alert_scored(
+                tier=risk.tier.value,
+                decision=decision.action.value,
+                degraded=risk.degraded,
+            )
+
+    # --- Ingest metrics: outcome + duration once per accepted attempt ---
+    # Exactly one alerts_processed increment with the dedupe outcome value
+    # (new_generation / repeated / exact_duplicate) and exactly one processing
+    # duration observation; recorded only after the outcome is known and the
+    # assess step completed, before the fail-open notification. The D2 record
+    # helpers are non-raising (ADR-9) and never read back into the pipeline.
+    if ingest_metrics is not None:
+        ingest_metrics.observe_alert_processing(_monotonic() - processing_started)
+        ingest_metrics.record_alerts_processed(outcome.status.value)
 
     logger.info(
         "iocs_extracted",
@@ -300,6 +393,7 @@ async def ingest_alert(
                 dedupe_status=outcome.status.value,
                 received_at=received_at,
                 investigation_base_url=base_url,
+                metrics=ingest_metrics,
             )
         except Exception as exc:  # defensive: notification must never crash ingest
             logger.error(
@@ -355,16 +449,26 @@ def _notify_n8n(
     dedupe_status: str,
     received_at: datetime,
     investigation_base_url: str | None = None,
+    metrics: MetricsRegistry | None = None,
 ) -> Any:
     """Notify n8n with duplicate prevention, persistence and audit (fail-open).
 
     Returns the :class:`NotificationResult` or None if notification is disabled.
     Never raises — failures are logged and audited, but the alert itself is
     already durable.
+
+    Phase 3.7 (D9): the notification outcome metric is recorded at the exact
+    points where the business outcome is already final — the explicit
+    duplicate-suppression decision and the client's aggregated send result
+    (retries are folded into one result by the client, so one attempt yields
+    one outcome). The duration histogram observes only actual send attempts
+    (``result.attempted``), using the client's monotonic elapsed milliseconds.
+    Helpers are non-raising (ADR-9) and never read back into the pipeline.
     """
     from ..notifications.client import NotificationResult
 
     # Duplicate prevention: if this alert_id already delivered, skip
+    suppressed_result: NotificationResult | None = None
     try:
         with session_scope(session_factory) as session:
             notif_repo = NotificationRepository(session)
@@ -398,7 +502,7 @@ def _notify_n8n(
                     ),
                     occurred_at=received_at,
                 )
-                return result
+                suppressed_result = result
     except Exception as exc:
         # If duplicate check fails, proceed to attempt notification anyway
         # (fail-open for the check itself)
@@ -408,6 +512,14 @@ def _notify_n8n(
             alert_id=str(alert.alert_id),
             error_type=type(exc).__name__,
         )
+    else:
+        # The suppression transaction committed above, so the decision is
+        # final — record exactly once at this boundary. A commit failure
+        # lands in the except branch and proceeds to send instead (fail-open).
+        if suppressed_result is not None:
+            if metrics is not None:
+                metrics.record_n8n_notification("duplicate_suppressed")
+            return suppressed_result
 
     # Build payload (pure, no I/O) — investigation base from settings if available
     try:
@@ -425,8 +537,21 @@ def _notify_n8n(
         )
         return None
 
-    # Send (with retry, timeout — client handles fail-open)
+    # Send (with retry, timeout — client handles fail-open). The client
+    # aggregates all retries into one NotificationResult, so this is exactly
+    # one semantic notification attempt.
     result = n8n_client.send(payload)
+    if metrics is not None:
+        if result.delivered:
+            metrics.record_n8n_notification("delivered")
+        elif result.skipped:
+            metrics.record_n8n_notification("skipped")
+        else:
+            metrics.record_n8n_notification("failed")
+        if result.attempted:
+            # The client measures the whole attempt (incl. retries) with a
+            # monotonic clock; convert the integer milliseconds to seconds.
+            metrics.observe_n8n_notification(result.duration_ms / 1000.0)
 
     # Persist attempt + audit (best-effort, never crash ingest)
     try:
@@ -474,7 +599,7 @@ def _persist_assessment(
     decision: Decision,
     dedupe_group_key: str,
     occurred_at: datetime,
-) -> str | None:
+) -> _AssessmentPersistResult:
     """Persist a scored alert's assessment + audit entries (best-effort).
 
     Phase 3.1 — incident handling: when the decision is ``open_incident`` the
@@ -487,8 +612,11 @@ def _persist_assessment(
     * an open incident already exists for the group (recurring/deduplicated
       alert) ⇒ attach this alert to it, no second incident, no duplicate.
 
-    Returns the incident id, or ``None`` when no incident applies / persistence
-    failed (the transaction is rolled back atomically).
+    Returns an :class:`_AssessmentPersistResult` carrying the durable
+    incident id (``None`` when no incident applies) and a ``persisted`` flag
+    that is True only when the transaction committed. A persistence failure is
+    logged and reported as ``persisted=False`` (the transaction is rolled
+    back atomically; the caller stays fail-open, ARCHITECTURE.md §16).
     """
     incident_id: str | None = None
     incident_action: str | None = None
@@ -544,8 +672,8 @@ def _persist_assessment(
             alert_id=str(alert_id),
             error_type=type(exc).__name__,
         )
-        return None
-    return incident_id
+        return _AssessmentPersistResult(incident_id=None, persisted=False)
+    return _AssessmentPersistResult(incident_id=incident_id, persisted=True)
 
 
 def _incident_for_alert(session_factory: sessionmaker, alert_id: UUID) -> str | None:

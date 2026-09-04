@@ -1,0 +1,38 @@
+# Phase 3.7 (D11) — Prometheus scrape configuration for the optional
+# `observability` compose profile (docker-compose.yml, profile-gated).
+#
+# Scope: scrape ONLY the Triage API's approved `/metrics` exposition over the
+# internal `soc-core` network. There are no external targets, no target labels
+# derived from request data, no hardcoded credentials, and no authentication
+# configured here by default.
+#
+# Authentication (optional, decision D1): the API accepts
+# `Authorization: Bearer <METRICS_SCRAPE_TOKEN>` when that env var is set.
+# This file never contains a token. If `METRICS_SCRAPE_TOKEN` is set on the
+# Prometheus container at runtime, deploy/prometheus/entrypoint.sh replaces
+# the `# __SCRAPE_AUTH__` marker below with an `authorization` block that
+# reads the token from a runtime-only credentials file (never committed, and
+# the value is never inlined into a configuration file).
+#
+# Deterministic and readable by design: one job, one target, fixed interval.
+
+global:
+  # Approved D11 contract: scrape every 15 seconds.
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  scrape_timeout: 10s
+
+scrape_configs:
+  # The only scrape target. `triage-api` is the compose service name on the
+  # shared internal `soc-core` network; the API listens on 8000 inside the
+  # container (TRIAGE_API_PORT).
+  - job_name: triage-api
+    metrics_path: /metrics
+    scheme: http
+    static_configs:
+      - targets: ["triage-api:8000"]
+        labels:
+          # Static, declarative job label only — never derived from alert
+          # content, request paths, query strings, headers or bodies.
+          job: triage-api
+    # __SCRAPE_AUTH__

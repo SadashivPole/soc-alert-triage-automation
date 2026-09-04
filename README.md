@@ -8,14 +8,16 @@
 ![n8n](https://img.shields.io/badge/n8n-workflows-orange)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
-> **Project status (honest):** **Phase 3.5 (static SOC console) is complete** — the
-> minimum Docker lab (triage-api + n8n + mailpit) builds and runs, and the alert
-> pipeline (ingest → normalize → dedupe → enrich → score → decide → notify) is
-> implemented and tested. A lightweight **static SOC console** is served by the API
-> at `http://localhost:8000/console/` for analyst triage (alert queue, score
-> drill-down, incident board/detail + timeline, lifecycle actions). This is a
-> **portfolio / homelab-grade project**. It is *not* deployed in any production
-> SOC, makes **no production claims**, and ships only defensive capabilities.
+> **Project status (honest):** **Phase 3.5 (static SOC console)** and **Phase 3.7
+> (observability)** are complete — the minimum Docker lab (triage-api + n8n + mailpit)
+> builds and runs, and the alert pipeline (ingest → normalize → dedupe → enrich → score →
+> decide → notify) is implemented and tested. A lightweight **static SOC console** is
+> served by the API at `http://localhost:8000/console/` for analyst triage (alert queue,
+> score drill-down, incident board/detail + timeline, lifecycle actions), and an
+> **optional Prometheus/Grafana profile** exposes the pipeline's metrics for lab display
+> (see [Observability](#observability)). This is a **portfolio / homelab-grade project**.
+> It is *not* deployed in any production SOC, makes **no production claims**, and ships
+> only defensive capabilities.
 
 ---
 
@@ -31,9 +33,10 @@
 8. [Security Considerations](#security-considerations)
 9. [Installation Prerequisites](#installation-prerequisites)
 10. [Development Roadmap](#development-roadmap)
-11. [Documentation Index](#documentation-index)
-12. [SOC Console](#soc-console)
-13. [Contributing & License](#contributing--license)
+11. [SOC Console](#soc-console)
+12. [Observability](#observability)
+13. [Documentation Index](#documentation-index)
+14. [Contributing & License](#contributing--license)
 
 ---
 
@@ -233,7 +236,7 @@ Full detail with acceptance criteria: [DEVELOPMENT_PLAN.md](DEVELOPMENT_PLAN.md)
 | **0 — Foundation** | Docs & scaffolding | ARCHITECTURE, DEVELOPMENT_PLAN, SECURITY, CONTRIBUTING, README, .env.example, tree | ✅ complete |
 | **1 — MVP pipeline** | Core triage loop | FastAPI skeleton, ingest+normalize+dedupe, SQLite models, scoring v1, docker compose (API+n8n+Mailpit), simulator, unit tests | ✅ complete |
 | **2 — Enrichment** | Threat intel | VirusTotal client (cache + rate limit), MISP profile, scoring v2 (intel signals), n8n notifications | ✅ complete (2A–2C) |
-| **3 — Incidents & UX** | Analyst workflow | Incident records (3.1), SLA escalation + feedback sync (3.2), read APIs + timeline (3.3), auto-close sweeper (3.4), **static SOC console (3.5)**; runbooks (3.6) pending | 🟡 3.1–3.5 |
+| **3 — Incidents & UX** | Analyst workflow | Incident records (3.1), SLA escalation + feedback sync (3.2), read APIs + timeline (3.3), auto-close sweeper (3.4), **static SOC console (3.5)**, **Prometheus `/metrics` + optional Grafana (3.7)**; runbooks (3.6) pending | 🟡 3.1–3.5, 3.7 |
 | **4 — Real Wazuh** | Full integration | Wazuh manager profile, integrator script, custom ruleset, asset inventory, human-approved response runbooks | ⬜ |
 | **5 — Optional AI** | LLM assist & tuning | Clearly-labeled LLM triage summaries (deterministic fallback), feedback-driven weight tuning, MITRE mapping | ⬜ |
 
@@ -267,6 +270,50 @@ kept **in browser memory only** for the session and sent as `X-N8N-Token`. No
 token is hardcoded or persisted. (A dedicated analyst/read token is deferred —
 the console documents this rather than weakening backend authz.)
 
+## Observability
+
+Phase 3.7 adds an **optional, self-hosted, read-only** observability surface for the lab.
+Nothing here is required to run the pipeline, and no production deployment is claimed.
+
+**`GET /metrics`** on the Triage API (`http://localhost:8000/metrics`, same origin as
+`/health`) exposes a bounded, app-scoped metric catalog in Prometheus text exposition
+format (`text/plain; version=0.0.4; charset=utf-8`):
+
+- Enabled by default (`METRICS_ENABLED=1`). With `METRICS_ENABLED=false` the route is
+  **not mounted at all** (requests return 404) and no metrics are recorded.
+- Optional bearer auth: `METRICS_SCRAPE_TOKEN` **empty** = authentication disabled
+  (development default); when set, scrapers must send
+  `Authorization: Bearer <token>` (constant-time check, never logged). It is a dedicated
+  token — ingest/N8N tokens are never reused.
+- All metrics are prefixed `soc_triage_` and labeled only from fixed enums/route
+  templates; counters and histograms are recorded at existing decision points and are
+  **non-load-bearing** — they never change scores, decisions, responses, or audit rows.
+  Full catalog and cardinality contract:
+  [docs/specs/phase-3.7-prometheus-observability.md](docs/specs/phase-3.7-prometheus-observability.md).
+
+**Optional Prometheus + Grafana profile** — additive only; the default stack is
+unchanged:
+
+```bash
+docker compose up -d                          # default lab (triage-api + n8n + mailpit)
+docker compose --profile observability up -d  # + Prometheus + Grafana (lab)
+```
+
+- Prometheus (`prom/prometheus:v3.5.0`) scrapes `http://triage-api:8000/metrics`
+  internally on `soc-core` every **15 s**; **port 9090 is never published** to the host.
+- Grafana (`grafana/grafana:12.1.0`) publishes **port 3000 for lab access only** and is
+  provisioned with the Prometheus datasource plus a 13-panel `soc-triage-observability`
+  dashboard built only from the approved metric catalog.
+- No secrets live in the checked-in config; if you set `METRICS_SCRAPE_TOKEN`, the
+  Prometheus container's entrypoint injects it as a runtime-only credential file (never
+  committed, never inlined). See [deploy/README.md](deploy/README.md) and
+  [ARCHITECTURE.md §13](ARCHITECTURE.md#13-docker--deployment-architecture).
+
+> **Validation note:** the observability profile is validated statically (config parsing
+> and the compose/config test suite). Docker was unavailable in the environment where
+> this work was developed, so the containers were **not** runtime-smoke-tested here —
+> bring the stack up in a Docker-capable environment before relying on it.
+
 ## Documentation Index
 
 | Document | Contents |
@@ -277,6 +324,7 @@ the console documents this rather than weakening backend authz.)
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Workflow, style guides, PR checklist, sample-data rules |
 | [app/console/README.md](app/console/README.md) | Static SOC console: run, API dependency, auth expectation, limitations, security |
 | [docs/sample-alerts/README.md](docs/sample-alerts/README.md) | Synthetic alert scenarios & expected triage behavior |
+| [docs/specs/phase-3.7-prometheus-observability.md](docs/specs/phase-3.7-prometheus-observability.md) | Phase 3.7 spec: `/metrics` catalog, cardinality/security rules, observability profile, decisions |
 
 ## Contributing & License
 
