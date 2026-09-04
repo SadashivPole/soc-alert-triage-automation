@@ -62,6 +62,26 @@ clean slate and never deletes or resets data:
 5. After the batch, ``PRAGMA foreign_key_check`` proves no referential damage
    was done, and a final full-schema verification gate must pass before the
    migration returns: only then does Alembic record the revision as applied.
+
+PostgreSQL reflection compatibility (Phase 3.8 D3)
+--------------------------------------------------
+The same verification gate ran on PostgreSQL and rejected a schema the
+migration itself had just created::
+
+    incidents.created_at type is TIMESTAMP,
+    expected one of ['DATETIME', 'TIMESTAMP WITH TIME ZONE']
+
+Reflection never runs a dialect compiler, so a PostgreSQL
+``TIMESTAMP WITH TIME ZONE`` column comes back as
+``postgresql.TIMESTAMP(timezone=True)`` whose ``str()`` rendering is plain
+``TIMESTAMP`` — the ``WITH TIME ZONE`` suffix exists only in emitted DDL. That
+rendering is now accepted (``_TIMESTAMP_TYPES``) without giving up the
+requirement that these columns are timezone-aware: PostgreSQL reflects
+``TIMESTAMP`` *without* time zone as the identical string, so
+``_timezone_aware_timestamp_problems`` checks the reflected type object's
+``timezone`` attribute and still rejects a naive timestamp. Dialects that
+cannot express a timezone-qualified timestamp (SQLite) are skipped rather than
+failed, because their DDL carries no qualifier for reflection to report.
 """
 
 from __future__ import annotations
@@ -86,18 +106,50 @@ _ALERTS = "alerts"
 #: Alembic's batch-mode scratch table name on SQLite (``_alembic_tmp_`` prefix).
 _BATCH_TMP_ALERTS = "_alembic_tmp_alerts"
 
+#: Renderings of a timezone-aware ``DateTime(timezone=True)`` column across the
+#: supported dialects (all three are the same logical schema):
+#:
+#: * ``DATETIME`` — SQLite reflects ``DateTime(timezone=True)`` as the generic
+#:   ``DATETIME`` type;
+#: * ``TIMESTAMP`` — PostgreSQL reflects the ``TIMESTAMP WITH TIME ZONE`` DDL
+#:   as ``postgresql.TIMESTAMP(timezone=True)``, whose ``__visit_name__`` is
+#:   ``TIMESTAMP``. The ``str()`` rendering compared here therefore has **no**
+#:   ``WITH TIME ZONE`` suffix: that suffix only appears when a *dialect
+#:   compiler* renders DDL, which reflection never does. Without this
+#:   rendering the migration failed its own final verification gate on
+#:   PostgreSQL (Phase 3.8 D3).
+#: * ``TIMESTAMP WITH TIME ZONE`` — the dialect-compiler spelling, kept for
+#:   dialects/drivers that reflect it verbatim.
+#:
+#: Accepting the plain ``TIMESTAMP`` rendering does not weaken the "created as
+#: timezone-aware" requirement: PostgreSQL reflects ``TIMESTAMP`` *without*
+#: time zone as the very same ``TIMESTAMP`` string, so
+#: ``_timezone_aware_timestamp_problems`` below checks the reflected type
+#: object's ``timezone`` attribute to keep naive timestamps rejected.
+_TIMESTAMP_TYPES = frozenset({"DATETIME", "TIMESTAMP", "TIMESTAMP WITH TIME ZONE"})
+
+#: Columns that must have been created as timezone-aware timestamps.
+_TIMEZONE_AWARE_COLUMNS = frozenset({"created_at", "updated_at"})
+
+#: Dialects whose *reflection* preserves the timezone qualifier, i.e. where the
+#: requirement above is checkable. SQLite has no timezone-qualified timestamp
+#: type at all (its DDL renders ``DateTime(timezone=True)`` as plain DATETIME
+#: and reflection hands back ``timezone=False``), so there is nothing to check
+#: there — the check is skipped rather than weakened.
+_TIMEZONE_AWARE_REFLECTION_DIALECTS = frozenset({"postgresql"})
+
 #: Expected ``incidents`` columns: name -> (accepted type renderings, nullable).
 #: SQLite renders ``Uuid`` as CHAR(32) and ``DateTime(timezone=True)`` as
-#: DATETIME; PostgreSQL renders UUID / TIMESTAMP WITH TIME ZONE. Both spellings
-#: of the same logical schema are accepted.
+#: DATETIME; PostgreSQL renders UUID / TIMESTAMP (see ``_TIMESTAMP_TYPES``).
+#: Every spelling of the same logical schema is accepted.
 _INCIDENT_COLUMNS: dict[str, tuple[frozenset[str], bool]] = {
     "incident_id": (frozenset({"VARCHAR(32)"}), False),
     "status": (frozenset({"VARCHAR(16)"}), False),
     "severity": (frozenset({"VARCHAR(8)"}), False),
     "primary_alert_id": (frozenset({"CHAR(32)", "UUID"}), False),
     "dedupe_group_key": (frozenset({"VARCHAR(255)"}), False),
-    "created_at": (frozenset({"DATETIME", "TIMESTAMP WITH TIME ZONE"}), False),
-    "updated_at": (frozenset({"DATETIME", "TIMESTAMP WITH TIME ZONE"}), False),
+    "created_at": (_TIMESTAMP_TYPES, False),
+    "updated_at": (_TIMESTAMP_TYPES, False),
 }
 
 #: Expected ``incidents`` indexes: name -> (columns, unique).
@@ -167,11 +219,50 @@ def _fk_defs(inspector: Any, table: str) -> list[tuple[list[str], str, list[str]
     return defs
 
 
+def _reflected_timezone_flags(inspector: Any, table: str) -> dict[str, bool]:
+    """Column name -> whether the reflected type carries a time-zone qualifier.
+
+    ``False`` both for a genuinely naive timestamp and for a type that reports
+    no ``timezone`` attribute at all: the check fails closed.
+    """
+    return {
+        col["name"].lower(): bool(getattr(col["type"], "timezone", False))
+        for col in inspector.get_columns(table)
+    }
+
+
 # ---------------------------------------------------------------------------
 # Compatibility checks — an existing object is only *accepted* when it matches
 # the intended schema; anything else fails the migration with a precise diff.
 # Missing pieces are not errors here: they are completed later.
 # ---------------------------------------------------------------------------
+
+
+def _timezone_aware_timestamp_problems(inspector: Any, accepted_names: set[str]) -> list[str]:
+    """Accepted-as-timestamp columns that are not timezone-aware, where visible.
+
+    This is what keeps ``_TIMESTAMP_TYPES`` accepting PostgreSQL's plain
+    ``TIMESTAMP`` rendering from also accepting a column created as
+    ``TIMESTAMP`` **without** time zone: PostgreSQL reflects both as
+    ``postgresql.TIMESTAMP`` and ``str()`` renders both as ``TIMESTAMP``, so
+    only the type object's ``timezone`` attribute tells them apart. Dialects
+    that cannot express a timezone-qualified timestamp at all are skipped (see
+    ``_TIMEZONE_AWARE_REFLECTION_DIALECTS``) — for those the DDL itself carries
+    no qualifier that reflection could ever report.
+
+    Only columns whose *rendering* was already accepted are examined, so a
+    column of an unrelated type is reported once (as a type mismatch) instead
+    of twice.
+    """
+    if inspector.bind.dialect.name not in _TIMEZONE_AWARE_REFLECTION_DIALECTS:
+        return []
+    flags = _reflected_timezone_flags(inspector, _INCIDENTS)
+    return [
+        f"incidents.{name} is not a timezone-aware timestamp (reflected without "
+        "a time-zone qualifier), expected TIMESTAMP WITH TIME ZONE"
+        for name in sorted(_TIMEZONE_AWARE_COLUMNS & accepted_names)
+        if not flags.get(name)
+    ]
 
 
 def _incidents_compatibility_problems(inspector: Any) -> list[str]:
@@ -185,6 +276,7 @@ def _incidents_compatibility_problems(inspector: Any) -> list[str]:
         problems.append(f"incidents.{name} column is missing")
     for name in sorted(actual_names - expected_names):
         problems.append(f"incidents.{name} column is unexpected")
+    accepted_timestamps: set[str] = set()
     for name in sorted(expected_names & actual_names):
         types, nullable = _INCIDENT_COLUMNS[name]
         actual_type, actual_nullable = actual_columns[name]
@@ -192,8 +284,13 @@ def _incidents_compatibility_problems(inspector: Any) -> list[str]:
             problems.append(
                 f"incidents.{name} type is {actual_type}, expected one of {sorted(types)}"
             )
+        elif name in _TIMEZONE_AWARE_COLUMNS:
+            accepted_timestamps.add(name)
         if actual_nullable != nullable:
             problems.append(f"incidents.{name} nullable is {actual_nullable}, expected {nullable}")
+    # A rendering that is accepted is not yet a timezone-aware timestamp (see
+    # _TIMESTAMP_TYPES): PostgreSQL renders both spellings as 'TIMESTAMP'.
+    problems.extend(_timezone_aware_timestamp_problems(inspector, accepted_timestamps))
 
     pk_columns = [
         c.lower()
