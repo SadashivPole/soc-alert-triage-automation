@@ -65,7 +65,7 @@ flowchart TB
         MP["Mailpit (SMTP sink) :1025/:8025"]
         WAZ["wazuh-manager (profile: full)"]
         MISP["MISP (profile: intel)"]
-        PG[("PostgreSQL (profile: postgres)")]
+        PG[("PostgreSQL (profile: postgresql)")]
     end
 
     AG["Wazuh agents (lab only, optional)"] -->|1514/1515| WAZ
@@ -84,7 +84,7 @@ flowchart TB
 Only `n8n` (5678) and `triage-api` (8000) publish ports on the host by default; Mailpit
 publishes its UI (8025) for lab convenience. Wazuh enrollment ports (1514/1515/1516)
 publish only under the `full` profile. MISP and PostgreSQL stay internal (profiles
-`intel` / `postgres`).
+`intel` / `postgresql`).
 
 ---
 
@@ -98,7 +98,7 @@ publish only under the `full` profile. MISP and PostgreSQL stay internal (profil
 | **n8n** | n8n (self-hosted) | Notification fan-out, SLA escalation timers, incident ticket creation, analyst feedback form, daily digest; workflow JSONs version-controlled in `n8n/workflows/` | 1–3 |
 | **Wazuh manager** | Wazuh 4.x | Detection source: rules/decoders/FIM; ships alerts via its `integrator` module + custom script; optional API queries for agent context | 4 |
 | **Simulator** | `scripts/send_test_alert` | Replays synthetic alerts from `docs/sample-alerts/` (also CI fixtures) so the whole pipeline is demoable without Wazuh | 1 |
-| **Persistence** | SQLite (file volume) → PostgreSQL | Tables: `alerts`, `ioc_observations`, `incidents`, `feedback`, `audit_log`, `dead_letters`; migrations via Alembic | 1 / 3 |
+| **Persistence** | SQLite (file volume); optional PostgreSQL profile | Tables: `alerts`, `ioc_observations`, `incidents`, `feedback`, `audit_log`, `dead_letters`; migration parity deferred after Phase 3.8 D1 | 1 / 3.8 |
 | **Mailpit** | axllent/mailpit | Local SMTP sink + web UI — proves email flows without touching real relays | 1 |
 | **MISP (optional)** | MISP docker (profile `intel`) | Self-hosted threat intel: seeded with public/synthetic events; attribute lookups enrich alerts | 2 |
 | **SOC console (later)** | Static HTML + JSON endpoints (optionally Grafana profile) | Alert queue, score justifications, incident board, FP-rate trends | 3 |
@@ -603,7 +603,7 @@ app/src/soc_triage/
 ├── decisions/              # policy table, router, runbook registry
 ├── notifications/          # n8n webhook client (outbound only)
 ├── audit.py                # append-only audit_log policy + entries
-└── (app/alembic)           # Alembic migrations (SQLite now, identical on PostgreSQL)
+└── (app/alembic)           # Alembic migrations (SQLite now; PostgreSQL parity deferred)
 ```
 
 **Layering rules (enforced in review):**
@@ -633,7 +633,7 @@ app/src/soc_triage/
 | `mailpit` | `axllent/mailpit:<pinned>` | default | soc-core | 8025, 1025 | SMTP sink |
 | `wazuh-manager` | `wazuh/wazuh-manager:4.x` | `full` | soc-core | 1514–1516 (agents) | real detection source |
 | `misp-*` | MISP docker stack | `intel` | soc-core | internal only | threat intel |
-| `postgres` | `postgres:16-alpine` | `postgres` | soc-core | internal only | scalable DB |
+| `postgres` | `postgres:18.6-alpine` | `postgresql` | soc-core | internal only | optional PostgreSQL lab DB |
 | `prometheus` | `prom/prometheus:v3.5.0` | `observability` | soc-core | internal only | optional scrape of `triage-api:8000/metrics` |
 | `grafana` | `grafana/grafana:12.1.0` | `observability` | soc-core | 3000 | optional dashboards (lab) |
 
@@ -643,6 +643,17 @@ healthchecks on every service (`/health`/`/ready` for the API, SMTP ping for Mai
 CPU/memory limits per service; containers run non-root (the API image creates an `app`
 user); images pinned by tag (digest pinning when a release is cut); `deploy/` holds
 Dockerfiles + compose fragments so the root `docker-compose.yml` stays small.
+
+**PostgreSQL profile (Phase 3.8 D1, implemented):**
+`docker compose --profile postgresql up` adds the optional `postgres` service only;
+`docker compose up` remains the SQLite-backed default. The service uses the pinned
+`postgres:18.6-alpine` image, a named `postgres-data` volume, and `soc-core` only.
+Port 5432 is exposed to other containers but is never published to the host. Set
+`POSTGRES_DB`, `POSTGRES_USER`, and the untracked `POSTGRES_PASSWORD` in `.env`, then
+point `TRIAGE_DB_URL` at a `postgresql+psycopg://…@postgres:5432/…` URL to opt the API
+into it. This D1 change adds the profile, driver, and configuration coverage only;
+Alembic migrations and repository SQL are intentionally unchanged, so full
+PostgreSQL migration/parity support remains a later step.
 
 **Observability profile (Phase 3.7, implemented in D11):**
 `docker compose --profile observability up` adds two *optional* services and changes
@@ -738,8 +749,8 @@ nothing in the default stack:
   [`docs/specs/phase-3.7-prometheus-observability.md`](docs/specs/phase-3.7-prometheus-observability.md).
 - **No DB aggregates in Phase 3.7:** the only database touch per scrape is the cheap,
   dialect-agnostic liveness ping (`SELECT 1`) and `alembic_version` read already used by
-  `/health` / `/ready`. Incident-count-by-status style aggregate gauges are **deferred to
-  Phase 3.8** (PostgreSQL profile + migration parity tests) — Phase 3.7 counters are
+  `/health` / `/ready`. Incident-count-by-status style aggregate gauges and PostgreSQL
+  migration parity are **deferred after Phase 3.8 D1** — Phase 3.7 counters are
   in-process, so SQLite/PostgreSQL parity is trivially preserved.
 - **Grafana (optional):** visualizes the metrics via the profile-gated `observability`
   compose profile (Prometheus internal scrape + Grafana on port 3000 for the lab,
@@ -803,7 +814,8 @@ Full policy: [SECURITY.md](SECURITY.md). Key points:
 
 Designed-in upgrades, deliberately deferred until needed:
 
-1. **SQLite → PostgreSQL** (profile exists from Phase 3; Alembic migrations identical).
+1. **SQLite → PostgreSQL** (Phase 3.8 D1 adds the optional profile, driver, and
+   configuration; migration/repository parity is a later step).
 2. **Background tasks → dedicated worker** (asyncio worker process; same codebase, `--worker` entrypoint).
 3. **Single n8n → queue mode** (Redis + multiple executors) if workflow volume grows.
 4. **Per-source HMAC keys + mTLS** on ingest when multiple Wazuh managers report in.

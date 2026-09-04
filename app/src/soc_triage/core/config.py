@@ -1,8 +1,9 @@
 """Typed, environment-driven application settings.
 
 All runtime configuration comes from environment variables (and optionally a
-git-ignored `.env` file). Secrets are stored as ``SecretStr`` and the settings
-object fails fast when placeholder values are used outside development.
+git-ignored `.env` file). Secrets are stored as ``SecretStr``; the credential-
+bearing database URL is kept out of settings ``repr``/``str`` output; and the
+settings object fails fast when placeholder values are used outside development.
 """
 
 from __future__ import annotations
@@ -40,7 +41,12 @@ class Settings(BaseSettings):
     triage_api_host: str = Field(default="0.0.0.0", alias="TRIAGE_API_HOST")
     triage_api_port: int = Field(default=8000, alias="TRIAGE_API_PORT", ge=1, le=65535)
     triage_cors_origins: str = Field(default="http://localhost:8080", alias="TRIAGE_CORS_ORIGINS")
-    triage_db_url: str = Field(default="sqlite:////data/soc_triage.db", alias="TRIAGE_DB_URL")
+    # A PostgreSQL SQLAlchemy URL can contain credentials. Keep the value as a
+    # string for SQLAlchemy, but exclude it from Settings repr/str output so a
+    # settings object can be safely included in diagnostic log context.
+    triage_db_url: str = Field(
+        default="sqlite:////data/soc_triage.db", alias="TRIAGE_DB_URL", repr=False
+    )
     triage_dedupe_window_seconds: int = Field(
         default=900, alias="TRIAGE_DEDUPE_WINDOW_SECONDS", ge=1
     )

@@ -9,7 +9,9 @@ checked-in Docker/compose configuration without invoking a daemon:
   profile gating, pinned images, internal-only Prometheus scrape at
   ``triage-api:8000`` (9090 never published), Grafana lab port 3000, correct
   networks, healthchecks, resource limits, secret-free Prometheus/Grafana
-  configuration and dashboards restricted to the approved metric catalog.
+  configuration and dashboards restricted to the approved metric catalog;
+* the Phase 3.8 (D1) optional ``postgresql`` profile is internal-only,
+  password-configured through the environment, volume-backed, and hardened.
 """
 
 from __future__ import annotations
@@ -272,6 +274,66 @@ def test_health_source_does_not_hide_route_with_api_v1_prefix() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Phase 3.8 (D1) — optional PostgreSQL profile
+# ---------------------------------------------------------------------------
+
+
+def test_postgresql_profile_is_optional_internal_and_hardened() -> None:
+    """PostgreSQL is additive, volume-backed, and never host-published."""
+    compose = _compose()
+    service = compose["services"]["postgres"]
+
+    assert service["profiles"] == ["postgresql"]
+    assert service["image"] == "postgres:18.6-alpine"
+    assert "ports" not in service
+    assert service["expose"] == ["5432"]
+    assert service["networks"] == ["soc-core"]
+    assert service["volumes"] == ["postgres-data:/var/lib/postgresql"]
+
+    environment = service["environment"]
+    assert environment["POSTGRES_DB"] == "${POSTGRES_DB:-soc_triage}"
+    assert environment["POSTGRES_USER"] == "${POSTGRES_USER:-soc_triage}"
+    assert environment["POSTGRES_PASSWORD"] == "${POSTGRES_PASSWORD:-}"
+
+    triage_environment = compose["services"]["triage-api"]["environment"]
+    assert triage_environment["TRIAGE_DB_URL"] == "${TRIAGE_DB_URL:-sqlite:////data/soc_triage.db}"
+
+    healthcheck = service["healthcheck"]
+    healthcheck_text = " ".join(str(part) for part in healthcheck["test"])
+    assert "pg_isready" in healthcheck_text
+    assert "POSTGRES_USER" in healthcheck_text
+    assert "POSTGRES_DB" in healthcheck_text
+    assert healthcheck["interval"] == "10s"
+    assert healthcheck["timeout"] == "5s"
+    assert healthcheck["retries"] == 5
+
+    assert service["security_opt"] == ["no-new-privileges:true"]
+    assert service["cap_drop"] == ["NET_RAW"]
+    assert service["read_only"] is True
+    assert service["shm_size"] == "256m"
+    limits = service["deploy"]["resources"]["limits"]
+    assert limits == {"cpus": "1.0", "memory": "512M"}
+
+    env_example = (REPO_ROOT / ".env.example").read_text(encoding="utf-8")
+    assert "POSTGRES_DB=soc_triage" in env_example
+    assert "POSTGRES_USER=soc_triage" in env_example
+    assert "POSTGRES_PASSWORD=" in env_example
+    assert "postgresql+psycopg://" in env_example
+    assert "POSTGRES_PASSWORD=change-me" not in env_example
+
+
+def test_postgresql_profile_does_not_change_default_service_topology() -> None:
+    """The default services remain profile-free and SQLite-configured."""
+    compose = _compose()
+    for name in ("triage-api", "n8n", "mailpit"):
+        assert "profiles" not in compose["services"][name]
+    assert compose["services"]["triage-api"]["environment"]["TRIAGE_DB_URL"] == (
+        "${TRIAGE_DB_URL:-sqlite:////data/soc_triage.db}"
+    )
+    assert compose["services"]["postgres"]["profiles"] == ["postgresql"]
+
+
+# ---------------------------------------------------------------------------
 # Phase 3.7 (D11) — optional observability profile (compose + provisioning)
 # ---------------------------------------------------------------------------
 
@@ -297,7 +359,14 @@ def _observability_files() -> dict[str, str]:
 def test_observability_profile_gates_only_the_two_new_services() -> None:
     """prometheus/grafana are profile-gated; default services are not."""
     compose = _compose()
-    assert set(compose["services"]) == {"triage-api", "n8n", "mailpit", "prometheus", "grafana"}
+    assert set(compose["services"]) == {
+        "triage-api",
+        "n8n",
+        "mailpit",
+        "postgres",
+        "prometheus",
+        "grafana",
+    }
     for name in ("prometheus", "grafana"):
         assert compose["services"][name].get("profiles") == ["observability"], name
     for name in ("triage-api", "n8n", "mailpit"):
@@ -373,7 +442,12 @@ def test_observability_services_are_not_required_dependencies() -> None:
     assert set(compose["networks"]) == {"soc-core", "soc-edge"}
     for network in compose["networks"].values():
         assert network == {"driver": "bridge"}
-    assert set(compose["volumes"]) == {"n8n-data", "prometheus-data", "grafana-data"}
+    assert set(compose["volumes"]) == {
+        "n8n-data",
+        "postgres-data",
+        "prometheus-data",
+        "grafana-data",
+    }
 
 
 def test_observability_healthchecks_and_resource_limits_exist() -> None:

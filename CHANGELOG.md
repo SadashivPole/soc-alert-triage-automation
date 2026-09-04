@@ -6,6 +6,18 @@ semantic (`v0.1.0` targeted at the end of Phase 1).
 
 ## [Unreleased]
 
+### Added — Phase 3.8 D1: optional PostgreSQL Compose profile
+
+- Added the additive `postgresql` Compose profile with pinned `postgres:18.6-alpine`,
+  internal-only `soc-core` access, named `postgres-data` persistence, `pg_isready`
+  healthchecks, resource limits, and container hardening. The default stack remains
+  SQLite-backed and publishes no PostgreSQL host port.
+- Added the psycopg 3 SQLAlchemy driver and documented the environment-only
+  `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD`, and `TRIAGE_DB_URL` setup.
+- Kept the database URL out of `Settings` diagnostic representations and added a
+  PostgreSQL configuration/no-credential-leak regression test. Migrations and repository
+  SQL are intentionally unchanged in D1.
+
 ### Added — Phase 3.7: Prometheus `/metrics` + optional observability profile (D2–D11)
 
 - **Metrics core (D2–D3).** New `app/src/soc_triage/core/metrics.py`: an app-scoped

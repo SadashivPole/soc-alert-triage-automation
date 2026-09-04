@@ -2,20 +2,22 @@
 
 **AI-Assisted, defensive SOC automation for L1/L2 alert triage — built with Python, n8n, Wazuh, and Docker.**
 
-![Status](https://img.shields.io/badge/status-Phase%203.5%20console-green)
+![Status](https://img.shields.io/badge/status-Phase%203.8%20D1-green)
 ![Python](https://img.shields.io/badge/python-3.11%2B-blue)
 ![Docker](https://img.shields.io/badge/docker-compose-blue)
 ![n8n](https://img.shields.io/badge/n8n-workflows-orange)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
-> **Project status (honest):** **Phase 3.5 (static SOC console)** and **Phase 3.7
-> (observability)** are complete — the minimum Docker lab (triage-api + n8n + mailpit)
-> builds and runs, and the alert pipeline (ingest → normalize → dedupe → enrich → score →
-> decide → notify) is implemented and tested. A lightweight **static SOC console** is
-> served by the API at `http://localhost:8000/console/` for analyst triage (alert queue,
-> score drill-down, incident board/detail + timeline, lifecycle actions), and an
-> **optional Prometheus/Grafana profile** exposes the pipeline's metrics for lab display
-> (see [Observability](#observability)). This is a **portfolio / homelab-grade project**.
+> **Project status (honest):** **Phase 3.5 (static SOC console)**, **Phase 3.7
+> (observability)**, and **Phase 3.8 D1 (optional PostgreSQL profile)** are complete —
+> the minimum Docker lab (triage-api + n8n + mailpit) builds and runs, and the alert
+> pipeline (ingest → normalize → dedupe → enrich → score → decide → notify) is
+> implemented and tested. A lightweight **static SOC console** is served by the API at
+> `http://localhost:8000/console/` for analyst triage (alert queue, score drill-down,
+> incident board/detail + timeline, lifecycle actions), with optional Prometheus/Grafana
+> and PostgreSQL profiles for lab use (see [Observability](#observability) and
+> [Optional PostgreSQL profile](#optional-postgresql-profile)). This is a
+> **portfolio / homelab-grade project**.
 > It is *not* deployed in any production SOC, makes **no production claims**, and ships
 > only defensive capabilities.
 
@@ -35,8 +37,9 @@
 10. [Development Roadmap](#development-roadmap)
 11. [SOC Console](#soc-console)
 12. [Observability](#observability)
-13. [Documentation Index](#documentation-index)
-14. [Contributing & License](#contributing--license)
+13. [Optional PostgreSQL profile](#optional-postgresql-profile)
+14. [Documentation Index](#documentation-index)
+15. [Contributing & License](#contributing--license)
 
 ---
 
@@ -236,7 +239,7 @@ Full detail with acceptance criteria: [DEVELOPMENT_PLAN.md](DEVELOPMENT_PLAN.md)
 | **0 — Foundation** | Docs & scaffolding | ARCHITECTURE, DEVELOPMENT_PLAN, SECURITY, CONTRIBUTING, README, .env.example, tree | ✅ complete |
 | **1 — MVP pipeline** | Core triage loop | FastAPI skeleton, ingest+normalize+dedupe, SQLite models, scoring v1, docker compose (API+n8n+Mailpit), simulator, unit tests | ✅ complete |
 | **2 — Enrichment** | Threat intel | VirusTotal client (cache + rate limit), MISP profile, scoring v2 (intel signals), n8n notifications | ✅ complete (2A–2C) |
-| **3 — Incidents & UX** | Analyst workflow | Incident records (3.1), SLA escalation + feedback sync (3.2), read APIs + timeline (3.3), auto-close sweeper (3.4), **static SOC console (3.5)**, **Prometheus `/metrics` + optional Grafana (3.7)**; runbooks (3.6) pending | 🟡 3.1–3.5, 3.7 |
+| **3 — Incidents & UX** | Analyst workflow | Incident records (3.1), SLA escalation + feedback sync (3.2), read APIs + timeline (3.3), auto-close sweeper (3.4), **static SOC console (3.5)**, **Prometheus `/metrics` + optional Grafana (3.7)**, **optional PostgreSQL profile (3.8 D1)**; runbooks (3.6) pending | 🟡 3.1–3.5, 3.7, 3.8 D1 |
 | **4 — Real Wazuh** | Full integration | Wazuh manager profile, integrator script, custom ruleset, asset inventory, human-approved response runbooks | ⬜ |
 | **5 — Optional AI** | LLM assist & tuning | Clearly-labeled LLM triage summaries (deterministic fallback), feedback-driven weight tuning, MITRE mapping | ⬜ |
 
@@ -314,6 +317,33 @@ docker compose --profile observability up -d  # + Prometheus + Grafana (lab)
 > (`triage-api:8000/metrics` UP, 15 s scrape, port 9090 not host-published), and Grafana
 > (localhost:3000, Phase 3.7 dashboard loading with metrics populated) all verified
 > healthy.
+
+## Optional PostgreSQL profile
+
+Phase 3.8 D1 adds PostgreSQL as an **optional, additive** Docker Compose profile. The
+normal `docker compose up -d` path and the checked-in `.env.example` still use
+`TRIAGE_DB_URL=sqlite:////data/soc_triage.db`. PostgreSQL is not started unless its
+profile is selected, and port 5432 is available only on the internal `soc-core` network.
+
+To use it, copy `.env.example` to the untracked `.env`, set `POSTGRES_PASSWORD` to a
+locally-generated value, and replace the SQLite URL in `.env` with a URL using the
+profile service name:
+
+```text
+TRIAGE_DB_URL=postgresql+psycopg://soc_triage:<url-encoded-password>@postgres:5432/soc_triage
+```
+
+Then start the profile with the exact command:
+
+```bash
+docker compose --profile postgresql up -d --build
+```
+
+The profile uses the pinned `postgres:18.6-alpine` image, a named `postgres-data` volume,
+`pg_isready` health checks, resource limits, `no-new-privileges`, and no host-published
+PostgreSQL port. Phase 3.8 D1 intentionally adds only the container, psycopg 3 driver,
+and configuration coverage; migrations and repository SQL are unchanged, so full
+PostgreSQL migration/parity validation is deferred.
 
 ## Documentation Index
 

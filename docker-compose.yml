@@ -1,5 +1,6 @@
-# Phase 2C — SOAR Lab Configuration
-# Services: triage-api + n8n + mailpit
+# Phase 2C / Phase 3.8 D1 — SOAR Lab Configuration
+# Default services: triage-api + n8n + mailpit
+# Optional profiles: postgresql + observability
 # No TheHive, no autonomous containment, no new providers.
 # Based on ARCHITECTURE.md §13, SECURITY.md §4.
 
@@ -19,6 +20,8 @@ services:
       SOC_INSTANCE_NAME: ${SOC_INSTANCE_NAME:-soc-lab}
       TRIAGE_API_HOST: 0.0.0.0
       TRIAGE_API_PORT: 8000
+      # SQLite remains the default. Set TRIAGE_DB_URL in the untracked .env to
+      # a postgresql+psycopg URL when using the optional postgresql profile.
       TRIAGE_DB_URL: ${TRIAGE_DB_URL:-sqlite:////data/soc_triage.db}
       TRIAGE_DEDUPE_WINDOW_SECONDS: ${TRIAGE_DEDUPE_WINDOW_SECONDS:-900}
       TRIAGE_INGEST_API_KEY: ${TRIAGE_INGEST_API_KEY:-lab-test-key-change-in-production}
@@ -128,6 +131,62 @@ services:
       start_period: 5s
 
   # ---------------------------------------------------------------------------
+  # Phase 3.8 (D1) — optional PostgreSQL profile.
+  #
+  # `docker compose --profile postgresql up` adds ONLY postgres. It is
+  # strictly additive and OPTIONAL: the default stack keeps using SQLite,
+  # PostgreSQL has no host-published port, and soc-core is the only network.
+  # Set POSTGRES_PASSWORD and a postgresql+psycopg TRIAGE_DB_URL in the
+  # untracked .env before starting this profile.
+  # ---------------------------------------------------------------------------
+
+  postgres:
+    image: postgres:18.6-alpine
+    container_name: soc-postgres
+    restart: unless-stopped
+    profiles: ["postgresql"]
+    environment:
+      # POSTGRES_PASSWORD intentionally has no committed fallback. The
+      # profile will fail closed until an operator supplies it in .env.
+      POSTGRES_DB: ${POSTGRES_DB:-soc_triage}
+      POSTGRES_USER: ${POSTGRES_USER:-soc_triage}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-}
+    # Document the internal service port without publishing it to the host.
+    expose:
+      - "5432"
+    volumes:
+      # PostgreSQL 18 stores PGDATA below this versioned parent directory.
+      - postgres-data:/var/lib/postgresql
+    networks:
+      - soc-core
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -h 127.0.0.1 -p 5432 -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\"",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    security_opt:
+      - no-new-privileges:true
+    # Keep the capabilities required by the official entrypoint for volume
+    # initialization; PostgreSQL itself has no need for raw packet sockets.
+    cap_drop:
+      - NET_RAW
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /run/postgresql
+    shm_size: 256m
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M
+
+  # ---------------------------------------------------------------------------
   # Phase 3.7 (D11) — optional observability profile (approved decision D2).
   #
   # `docker compose --profile observability up` adds ONLY prometheus + grafana.
@@ -231,6 +290,10 @@ networks:
 
 volumes:
   n8n-data:
+    driver: local
+  # Phase 3.8 (D1) — PostgreSQL state is profile-only and never required by
+  # the default SQLite stack.
+  postgres-data:
     driver: local
   # Phase 3.7 (D11) — observability profile state only (additive; never
   # required by the default stack).

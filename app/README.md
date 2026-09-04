@@ -41,9 +41,17 @@ app/
 
 ## Database (Phase 1D)
 
-The database URL comes from `TRIAGE_DB_URL` (default
-`sqlite:////data/soc_triage.db`; PostgreSQL works with the same URL shape and
-identical migrations). The service creates the parent directory and applies
+The database URL comes from `TRIAGE_DB_URL`; the default remains
+`sqlite:////data/soc_triage.db`. Phase 3.8 D1 adds the optional root Compose
+`postgresql` profile and the psycopg 3 SQLAlchemy driver. To opt in, set
+`POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD`, and a
+`postgresql+psycopg://…@postgres:5432/…` `TRIAGE_DB_URL` in the untracked `.env`,
+then run `docker compose --profile postgresql up -d --build`. The PostgreSQL
+container is internal-only and stores data in the named `postgres-data` volume.
+
+D1 is deliberately configuration/profile work: migrations and repository SQL
+are unchanged, so PostgreSQL migration/parity support is not claimed yet. For
+the existing SQLite path, the service creates the parent directory and applies
 Alembic migrations automatically at startup — a fresh checkout just runs.
 Manual migration management (run from this directory, with the app installed
 and `TRIAGE_DB_URL` exported):

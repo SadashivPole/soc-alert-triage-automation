@@ -5,11 +5,13 @@ Dockerfiles and compose configuration for the stack. The root `docker-compose.ym
 profiles, ports, and hardening rules are fixed by design in
 [ARCHITECTURE.md §13](../ARCHITECTURE.md#13-docker--deployment-architecture).
 
-**Status:** the default stack (`triage-api`, `n8n`, `mailpit`) and the Phase 3.7
-`observability` profile (`prometheus`, `grafana`) are **implemented** in the root
-`docker-compose.yml`; the profile is optional and additive (the default stack is
-unchanged). Other profiles (`full`, `intel`, `postgres`) remain planned per the roadmap.
-See [docs/specs/phase-3.7-prometheus-observability.md](../docs/specs/phase-3.7-prometheus-observability.md).
+**Status:** the default stack (`triage-api`, `n8n`, `mailpit`), the Phase 3.7
+`observability` profile (`prometheus`, `grafana`), and the Phase 3.8 D1
+`postgresql` profile (`postgres`) are **implemented** in the root
+`docker-compose.yml`; both profiles are optional and additive (the default stack is
+unchanged). Other profiles (`full`, `intel`) remain planned per the roadmap.
+See [docs/specs/phase-3.7-prometheus-observability.md](../docs/specs/phase-3.7-prometheus-observability.md)
+and the [root PostgreSQL profile notes](../README.md#optional-postgresql-profile).
 
 Files:
 
@@ -33,13 +35,22 @@ Compose profiles (dockered, free, self-hosted only):
 | --- | --- | --- |
 | default | `triage-api`, `n8n`, `mailpit` | 8000, 5678, 8025/1025 |
 | `observability` (Phase 3.7) | `prometheus`, `grafana` | Grafana 3000 (lab) only; Prometheus 9090 never published (internal `soc-core` scrape) |
+| `postgresql` (Phase 3.8 D1) | `postgres` | none; 5432 is internal `soc-core` only |
 
 Profile usage (optional, additive — the default stack is unchanged by the profile):
 
 ```bash
-docker compose up -d                                   # default lab
+docker compose up -d                                   # default lab (SQLite)
 docker compose --profile observability up -d           # + Prometheus + Grafana
+docker compose --profile postgresql up -d --build      # + PostgreSQL (after .env setup)
 ```
+
+PostgreSQL notes (Phase 3.8 D1): set `POSTGRES_PASSWORD` only in the untracked
+`.env`, keep the default `TRIAGE_DB_URL` for SQLite, or replace it there with a
+`postgresql+psycopg://…@postgres:5432/…` URL when opting the API into the profile.
+The profile uses the named `postgres-data` volume, a `pg_isready` healthcheck,
+resource limits, and `no-new-privileges`; migrations and repository SQL are not
+changed in D1 and parity validation is deferred.
 
 Observability notes (Phase 3.7):
 

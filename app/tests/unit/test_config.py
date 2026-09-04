@@ -61,6 +61,25 @@ def test_environment_variables_override_defaults(monkeypatch: pytest.MonkeyPatch
     assert settings.triage_api_port == 9123
 
 
+def test_postgresql_db_url_is_accepted_without_repr_or_log_leak(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A credential-bearing PostgreSQL URL round-trips but stays diagnostic-safe."""
+    _clear_environment(monkeypatch)
+    pg_url = "postgresql+psycopg://soc_triage:pg-url-canary-7f3c@postgres:5432/soc_triage"
+    monkeypatch.setenv("TRIAGE_DB_URL", pg_url)
+
+    settings = Settings()
+
+    assert settings.triage_db_url == pg_url
+    # Settings objects are commonly passed as structured-log context. The DB
+    # URL is excluded from both diagnostic representations so its password
+    # cannot leak through a settings repr/str rendered in a log line.
+    for rendered in (repr(settings), str(settings)):
+        assert pg_url not in rendered
+        assert "pg-url-canary-7f3c" not in rendered
+
+
 def test_cors_origins_parse_comma_separated_values() -> None:
     settings = Settings(
         soc_env="test",

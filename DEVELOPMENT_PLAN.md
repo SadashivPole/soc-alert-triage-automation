@@ -107,8 +107,8 @@ observable via logs + stats endpoint.
   (this milestone) · 3.5 SOC console (static HTML) ✅ — alert queue, score
   drill-down, incident board, served same-origin at `/console` (this milestone) ·
   3.6 runbooks for the six sample scenarios · 3.7 Prometheus
-  `/metrics` + optional Grafana profile · 3.8 PostgreSQL profile + migration
-  parity tests · 3.9 `stats` endpoints + WF6 daily digest. (WF4 SLA / WF5 form
+  `/metrics` + optional Grafana profile · 3.8 PostgreSQL profile (D1; migration
+  parity deferred) · 3.9 `stats` endpoints + WF6 daily digest. (WF4 SLA / WF5 form
   landed with Phase 2B/2C.)
 
 **Acceptance:** end-to-end demo — sample alert → incident → (no ack) → escalation email →
