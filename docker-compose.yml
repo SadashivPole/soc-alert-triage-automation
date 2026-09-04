@@ -127,6 +127,102 @@ services:
       retries: 3
       start_period: 5s
 
+  # ---------------------------------------------------------------------------
+  # Phase 3.7 (D11) — optional observability profile (approved decision D2).
+  #
+  # `docker compose --profile observability up` adds ONLY prometheus + grafana.
+  # They are strictly additive and OPTIONAL: no default service depends on
+  # them, port 9090 is never published (internal soc-core scrape only), and
+  # Grafana publishes 3000 for lab access (ARCHITECTURE.md §13).
+  # ---------------------------------------------------------------------------
+
+  prometheus:
+    image: prom/prometheus:v3.5.0
+    container_name: soc-prometheus
+    restart: unless-stopped
+    profiles: ["observability"]
+    # Secret-free scrape config from deploy/prometheus/prometheus.yml; the
+    # entrypoint optionally injects METRICS_SCRAPE_TOKEN credentials at
+    # runtime (env-supplied, never committed; see deploy/prometheus/entrypoint.sh).
+    entrypoint: ["/usr/local/bin/prometheus-entrypoint.sh"]
+    command:
+      # --config.file here is replaced by the entrypoint when it generates an
+      # auth-enabled config (the entrypoint drops the duplicate flag).
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --web.enable-lifecycle
+    environment:
+      # Existing METRICS_SCRAPE_TOKEN model (D1): empty = auth disabled on the
+      # API side; set = bearer credentials injected at container start only.
+      METRICS_SCRAPE_TOKEN: ${METRICS_SCRAPE_TOKEN:-}
+    volumes:
+      - ./deploy/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./deploy/prometheus/entrypoint.sh:/usr/local/bin/prometheus-entrypoint.sh:ro
+      - prometheus-data:/prometheus
+    networks:
+      # Internal only: reaches triage-api:8000 and is reachable by Grafana.
+      # NOT on soc-edge: 9090/9091 are never host-visible.
+      - soc-core
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:9090/-/healthy"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M
+
+  grafana:
+    image: grafana/grafana:12.1.0
+    container_name: soc-grafana
+    restart: unless-stopped
+    profiles: ["observability"]
+    # Lab access only (ARCHITECTURE.md §13 table): 3000 published, nothing else.
+    ports:
+      - "3000:3000"
+    environment:
+      # Declarative provisioning from deploy/grafana/ (datasource + dashboards).
+      # The lab uses the image default login and should change it beyond
+      # localhost — no credentials are committed here.
+      GF_PATHS_PROVISIONING: /etc/grafana/provisioning
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - ./deploy/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./deploy/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    networks:
+      # soc-core only: Grafana reaches Prometheus (http://prometheus:9090)
+      # internally; the host reaches it through the published 3000 port.
+      - soc-core
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/api/health"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+      start_period: 15s
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M
+
 networks:
   soc-core:
     driver: bridge
@@ -135,4 +231,10 @@ networks:
 
 volumes:
   n8n-data:
+    driver: local
+  # Phase 3.7 (D11) — observability profile state only (additive; never
+  # required by the default stack).
+  prometheus-data:
+    driver: local
+  grafana-data:
     driver: local

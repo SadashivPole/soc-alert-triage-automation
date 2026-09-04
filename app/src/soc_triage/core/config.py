@@ -66,6 +66,24 @@ class Settings(BaseSettings):
         default=300, alias="INCIDENT_SWEEPER_INTERVAL_SECONDS", ge=1
     )
 
+    # ------------------------------------------------------------------
+    # Phase 3.7 — Prometheus metrics (optional scrape authentication)
+    # ------------------------------------------------------------------
+    # Enables the metrics recording surface and (Task D4) the `/metrics`
+    # endpoint. Default true: observability is on by default, but metrics
+    # are non-load-bearing and can be switched off entirely.
+    metrics_enabled: bool = Field(default=True, alias="METRICS_ENABLED")
+    # Optional bearer token protecting the `/metrics` exposition. Empty =
+    # metrics authentication disabled (development-compatible default);
+    # when set, a scrape must present `Authorization: Bearer <token>`.
+    # This is a DEDICATED token: the ingest API key and N8N tokens are never
+    # reused for scraping (SECURITY.md §2, approved decision D1). Held as
+    # SecretStr; `change-me-*` placeholders fail fast outside development.
+    metrics_scrape_token: SecretStr = Field(
+        default_factory=lambda: SecretStr(""),
+        alias="METRICS_SCRAPE_TOKEN",
+    )
+
     triage_ingest_api_key: SecretStr = Field(
         default_factory=lambda: SecretStr("change-me-generate-a-long-random-value"),
         alias="TRIAGE_INGEST_API_KEY",
@@ -160,6 +178,7 @@ class Settings(BaseSettings):
             "n8n_webhook_token": self.n8n_webhook_token.get_secret_value(),
             "virustotal_api_key": self.virustotal_api_key.get_secret_value(),
             "misp_api_key": self.misp_api_key.get_secret_value(),
+            "metrics_scrape_token": self.metrics_scrape_token.get_secret_value(),
         }
         for name, raw in secret_fields.items():
             # Empty values are the documented "disabled" default and are valid

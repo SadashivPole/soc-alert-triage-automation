@@ -14,6 +14,7 @@ dependencies = [
     "fastapi>=0.115,<1",
     "uvicorn[standard]>=0.30,<1",
     "pydantic-settings>=2.5,<3",
+    "prometheus-client>=0.20,<1",
     "structlog>=24.1,<26",
     "SQLAlchemy>=2.0,<3",
     "alembic>=1.13,<3",

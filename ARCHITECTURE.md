@@ -589,9 +589,10 @@ the repo's workflow files contain only credential *references*.
 app/src/soc_triage/
 ├── main.py                 # app factory, lifespan (db init + migrations, config load), health
 ├── api/                    # routers: alerts (ingest/get/list), incidents, feedback,
-│                           #        stats, health, internal (n8n errors)
+│                           #        stats, health, metrics, internal (n8n errors)
 ├── core/                   # config (pydantic-settings, env-driven), logging (structlog),
-│                           # security (api-key auth, rate limiting), errors, ids
+│                           # metrics (Prometheus registry, app-scoped), security
+│                           # (api-key auth, rate limiting), errors, ids
 ├── db/                     # engine/session bootstrap, unit-of-work transactions,
 │                           # storage errors (never leaks internals)
 ├── models/                 # SQLAlchemy ORM (alerts, alert_dedupe_groups, alert_events,
@@ -614,6 +615,10 @@ app/src/soc_triage/
 - Background work: Phase 1 uses FastAPI background tasks + a periodic re-score loop;
   Phase 3 may extract an asyncio worker process if load demands (no Celery/Redis until
   measurably needed — see ADR-4).
+- Observability is additive and non-load-bearing: metrics are recorded at the API
+  orchestration layer (plus optional injected recorders in the enrichment chain and
+  sweeper); the scoring engine stays I/O-free and instrumentation never affects
+  outcomes, responses, or audit rows (Phase 3.7, ADR-9).
 
 ---
 
@@ -623,19 +628,48 @@ app/src/soc_triage/
 
 | Service | Image (pinned by tag) | Profile | Networks | Published ports | Purpose |
 | --- | --- | --- | --- | --- | --- |
-| `triage-api` | built from `deploy/triage-api.Dockerfile` | default | soc-core, soc-edge | 8000 | Triage API |
+| `triage-api` | built from root `Dockerfile` (kept-in-sync copy: `deploy/triage-api.Dockerfile`) | default | soc-core, soc-edge | 8000 | Triage API |
 | `n8n` | `n8nio/n8n:<pinned>` | default | soc-edge, soc-core | 5678 | orchestration |
 | `mailpit` | `axllent/mailpit:<pinned>` | default | soc-core | 8025, 1025 | SMTP sink |
 | `wazuh-manager` | `wazuh/wazuh-manager:4.x` | `full` | soc-core | 1514–1516 (agents) | real detection source |
 | `misp-*` | MISP docker stack | `intel` | soc-core | internal only | threat intel |
 | `postgres` | `postgres:16-alpine` | `postgres` | soc-core | internal only | scalable DB |
-| `grafana` | `grafana/grafana:<pinned>` | `observability` | soc-core | 3000 | optional dashboards |
+| `prometheus` | `prom/prometheus:v3.5.0` | `observability` | soc-core | internal only | optional scrape of `triage-api:8000/metrics` |
+| `grafana` | `grafana/grafana:12.1.0` | `observability` | soc-core | 3000 | optional dashboards (lab) |
 
 **Conventions:** named volumes for `/data` (API), n8n home, Wazuh var, MISP/PG data;
-healthchecks on every service (`/health`, `/healthz`, SMTP ping); `restart: unless-stopped`;
+healthchecks on every service (`/health`/`/ready` for the API, SMTP ping for Mailpit);
+`restart: unless-stopped`;
 CPU/memory limits per service; containers run non-root (the API image creates an `app`
 user); images pinned by tag (digest pinning when a release is cut); `deploy/` holds
 Dockerfiles + compose fragments so the root `docker-compose.yml` stays small.
+
+**Observability profile (Phase 3.7, implemented in D11):**
+`docker compose --profile observability up` adds two *optional* services and changes
+nothing in the default stack:
+
+- `prometheus` (`prom/prometheus:v3.5.0`, `soc-core` only) scrapes `triage-api`
+  internally at `http://triage-api:8000/metrics` with a **15 s scrape interval and 10 s
+  timeout**; **port 9090 is never published to the host** (no `ports` entry at all).
+  Its config lives in `deploy/prometheus/prometheus.yml` (one static job, no external
+  targets, no secrets). Optional `METRICS_SCRAPE_TOKEN` bearer credentials are supplied
+  via the existing environment mechanism: `deploy/prometheus/entrypoint.sh` writes the
+  runtime token to a tmpfs credentials file (0600) and generates the scrape config with
+  `authorization.credentials_file` — never hardcoded, never inlined, and never sent when
+  the token is empty (which matches the API's "empty = auth disabled").
+- `grafana` (`grafana/grafana:12.1.0`, `soc-core`; **port 3000 published for the lab
+  only**) is provisioned from `deploy/grafana/provisioning/` (Prometheus datasource
+  pointing at `http://prometheus:9090`) and dashboards in `deploy/grafana/dashboards/`
+  (one 13-panel `soc-triage-observability` dashboard using only the approved metric
+  catalog). Everything in those files is non-secret; dashboards are labeled
+  lab/portfolio use.
+- Both services: non-root image users, `cap_drop: ALL`, `no-new-privileges`, read-only
+  root filesystem + tmpfs, healthchecks (`/-/healthy` for Prometheus, `/api/health` for
+  Grafana), 1 CPU / 512 MB resource limits, named state volumes (`prometheus-data`,
+  `grafana-data`), `soc-core` only.
+- The API's `/metrics` endpoint is the only requirement for the profile; neither service
+  is required to run the pipeline. Existing services never gain a `depends_on` on
+  `prometheus`/`grafana`.
 
 **Two run modes:**
 
@@ -674,8 +708,43 @@ Dockerfiles + compose fragments so the root `docker-compose.yml` stays small.
 - **Audit trail:** append-only `audit_log` table (actor, action, entity, before/after JSON,
   timestamp) for every state transition, decision, config change, and analyst verdict.
   This is the system of record for "why did the SOC bot do X".
-- **Metrics (Phase 3):** Prometheus `/metrics` — ingest rate, dedupe ratio, VT quota usage,
-  scoring distribution, incident counts, SLA-breach counter; Grafana profile visualizes.
+- **Metrics (Phase 3.7):** Prometheus `/metrics` on the API service (same origin as
+  `/health`), Prometheus text exposition, hidden from OpenAPI, optional
+  `METRICS_SCRAPE_TOKEN` bearer authentication (dedicated token — the N8N/API tokens are
+  never reused; empty = unauthenticated development default). Metrics are **additive and
+  non-load-bearing**: one app-scoped `CollectorRegistry` per service instance, counters
+  and histograms at existing decision points; recording never raises into the pipeline,
+  never writes to the database, never calls external services, and never changes a
+  score, decision, dedupe outcome, response body, or audit row (ADR-9).
+- **Metric namespace & cardinality:** every application metric is prefixed
+  `soc_triage_`. All labels come from fixed enums/registries — never alert contents,
+  alert/incident ids, rule/agent ids, IOC values, hosts/URLs, or free text. Route labels
+  use route templates (`/api/v1/alerts/{alert_id}`, else `unmatched`). A cardinality-guard
+  test asserts every observed `(metric, label-value)` pair is inside the documented
+  per-metric allowlist.
+- **Metric catalog (Phase 3.7):** request counter + latency histogram
+  (`soc_triage_http_requests`, `soc_triage_http_request_duration_seconds`); ingest
+  rejections + process counters + pipeline duration (`soc_triage_ingest_rejections`,
+  `soc_triage_alerts_processed{outcome}`, `soc_triage_alert_processing_duration_seconds`);
+  scoring/decision distribution (`soc_triage_alerts_scored{tier, decision, degraded}`);
+  enrichment status + per-provider outcomes (`soc_triage_enrichment_status`,
+  `soc_triage_enrichment_provider_outcomes` — never indicator values); n8n notifications
+  + duration; feedback verdicts; incident transitions; sweeper
+  (`soc_triage_incident_auto_close`, `soc_triage_sweeper_passes`); application health
+  (`soc_triage_up`, `soc_triage_database_up`, `soc_triage_migrations_applied`). The
+  default `process_*` / `python_info` collectors are **not registered** — the app-scoped
+  registry emits exactly the approved families above. Dedupe ratio and error rates are
+  derived in Grafana, not emitted. Full table + semantics in
+  [`docs/specs/phase-3.7-prometheus-observability.md`](docs/specs/phase-3.7-prometheus-observability.md).
+- **No DB aggregates in Phase 3.7:** the only database touch per scrape is the cheap,
+  dialect-agnostic liveness ping (`SELECT 1`) and `alembic_version` read already used by
+  `/health` / `/ready`. Incident-count-by-status style aggregate gauges are **deferred to
+  Phase 3.8** (PostgreSQL profile + migration parity tests) — Phase 3.7 counters are
+  in-process, so SQLite/PostgreSQL parity is trivially preserved.
+- **Grafana (optional):** visualizes the metrics via the profile-gated `observability`
+  compose profile (Prometheus internal scrape + Grafana on port 3000 for the lab,
+  ARCHITECTURE §13). No Grafana/Prometheus dependency is mandatory; the pipeline runs
+  unchanged without them.
 - **Health:** `/health` (liveness: process + DB ping) and `/ready` (readiness: config valid,
   migrations applied, n8n reachable best-effort).
 
@@ -757,6 +826,7 @@ upgrade are documented so the "production-style" story holds up in review.
 | ADR-6 | **Webhook-push ingest via Wazuh `integrator`** | simplest supported Wazuh path; JSON alerts; no indexer dependency | Filebeat→indexer (heavy), polling the Wazuh API (lag, quota) |
 | ADR-7 | **Free-tier hard constraint** | the portfolio must run for anyone at $0: public VT (4/min), self-hosted MISP, TheHive CE only, LLM optional/disabled | any paid-tier dependency (excluded by charter) |
 | ADR-8 | **Human-approved response actions** | containment (host isolation, user disable) is gated behind explicit analyst approval with audit — safely demonstrable automation | autonomous response (unsafe, out of scope) |
+| ADR-9 | **Prometheus `/metrics` + optional self-hosted observability profile** | free, self-hosted, passive visibility (ingest/dedupe ratio, enrichment, scoring, incidents, sweeper, n8n delivery) with enum-sourced bounded labels, a dedicated scrape token, and non-load-bearing instrumentation; Grafana/Prometheus remain optional compose-profile services (Phase 3.7) | SaaS metrics (paid, data leaves the lab), `prometheus-fastapi-instrumentator` (extra dependency, less explicit label control), DB-aggregate gauges in 3.7 (dialect/parity risk — deferred to 3.8) |
 
 ---
 

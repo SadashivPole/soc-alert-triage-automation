@@ -135,6 +135,36 @@ credentials in its userinfo. Extraction **never persists them**:
 Free-text fields and `full_log` remain raw by design (SECURITY.md §5 — the
 platform keeps what Wazuh already logged).
 
+## Metrics & observability (Phase 3.7)
+
+The API exposes an optional Prometheus read-only surface:
+
+- **`GET /metrics`** — Prometheus text exposition
+  (`text/plain; version=0.0.4; charset=utf-8`), same origin as `/health`, hidden from
+  OpenAPI. Mounted **only** when `METRICS_ENABLED=true` (default `1`); with
+  `METRICS_ENABLED=false` the route does not exist (404) and nothing is recorded.
+- **Optional bearer auth** — `METRICS_SCRAPE_TOKEN`. Empty (default) = authentication
+  disabled; when set, the scraper must send `Authorization: Bearer <token>` (constant-time
+  compare, token never logged). Dedicated token only: the ingest API key and N8N tokens
+  are never accepted.
+- **App-scoped registry** — `core/metrics.py` owns one
+  `prometheus_client.CollectorRegistry` per application instance; the process-global
+  `REGISTRY` is never used, so instances and tests cannot leak metrics into each other.
+- **Bounded catalog** — 17 `soc_triage_*` families (HTTP requests/duration, ingest
+  rejections/outcomes/duration, scoring/decision, enrichment status + provider outcomes,
+  n8n notifications/duration, feedback, incident transitions/auto-close, sweeper passes,
+  `up`/`database_up`/`migrations_applied`). All labels come from fixed enums or route
+  templates — never alert content, ids, IOCs, hosts, or free text; no DB aggregate
+  gauges in Phase 3.7. See
+  [docs/specs/phase-3.7-prometheus-observability.md](../docs/specs/phase-3.7-prometheus-observability.md)
+  and [ARCHITECTURE.md §15](../ARCHITECTURE.md#15-logging-audit--observability).
+- **Non-load-bearing** (ADR-9) — recording/render failures are swallowed (logged by type
+  only) and can never raise into the pipeline, write to the database, call external
+  services, or change a score, decision, response, or audit row. A failing render
+  returns an empty 200 exposition, never an error.
+- The `observability` Docker profile (Prometheus + Grafana) is optional and additive —
+  see [deploy/README.md](../deploy/README.md).
+
 ## Run & test (Phase 1A)
 
 ```bash
@@ -148,6 +178,7 @@ uvicorn soc_triage.main:app --host 0.0.0.0 --port 8000
 # check endpoints
 curl http://localhost:8000/health
 curl http://localhost:8000/ready
+curl http://localhost:8000/metrics   # Phase 3.7 (404 route if METRICS_ENABLED=false)
 
 # test + lint + type hints
 pytest

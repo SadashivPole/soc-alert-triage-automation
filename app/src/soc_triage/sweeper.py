@@ -37,6 +37,7 @@ from .audit import (
 )
 from .core.config import Settings
 from .core.logging import get_logger
+from .core.metrics import MetricsRegistry, resolve_metrics
 from .db.session import session_scope
 from .models.repositories import AuditRepository, IncidentRepository
 
@@ -58,6 +59,7 @@ def sweep_once(
     ttl_seconds: int,
     as_of: datetime | None = None,
     logger: structlog.stdlib.BoundLogger | None = None,
+    metrics: MetricsRegistry | None = None,
 ) -> dict[str, int]:
     """Run a single idempotent auto-close sweep.
 
@@ -66,6 +68,12 @@ def sweep_once(
     from a management hook: it does not schedule anything and does not
     swallow exceptions raised at the transaction boundary (those indicate
     DB problems, not per-incident errors, and must surface).
+
+    Phase 3.7 (D9): per-incident auto-close outcomes are recorded
+    (``closed`` / ``skipped`` / ``error``) at the exact points where the
+    existing summary counters are updated, so the metric mirrors the
+    existing result semantics 1:1. The recorder is non-raising (ADR-9) and
+    never read back into the sweep.
     """
     log = logger or get_logger("soc_triage.sweeper")
     if ttl_seconds < 1:
@@ -105,6 +113,8 @@ def sweep_once(
                     # the incident (analyst PATCH / feedback sync). Manual
                     # action wins — skip silently (logged at debug level).
                     stats["skipped"] += 1
+                    if metrics is not None:
+                        metrics.record_incident_auto_close("skipped")
                     log.debug(
                         "sweeper_skip_stale",
                         component="sweeper",
@@ -124,6 +134,8 @@ def sweep_once(
                 )
                 audit_repo.append(entries, occurred_at=timestamp)
                 stats["closed"] += 1
+                if metrics is not None:
+                    metrics.record_incident_auto_close("closed")
                 log.info(
                     "incident_auto_closed",
                     component="sweeper",
@@ -137,6 +149,8 @@ def sweep_once(
         except Exception as exc:  # pragma: no cover - defensive error isolation
             # Per-incident error isolation: log + continue. Never crash the loop.
             stats["errors"] += 1
+            if metrics is not None:
+                metrics.record_incident_auto_close("error")
             log.error(
                 "sweeper_incident_failed",
                 component="sweeper",
@@ -153,6 +167,7 @@ async def run_sweeper_loop(
     settings: Settings,
     *,
     logger: structlog.stdlib.BoundLogger | None = None,
+    metrics: MetricsRegistry | None = None,
 ) -> None:
     """Periodic sweeper loop, intended to be started from the FastAPI lifespan.
 
@@ -160,6 +175,11 @@ async def run_sweeper_loop(
     cancelled (application shutdown). The first pass runs immediately so
     stale incidents left behind after a restart are closed without waiting
     a full interval.
+
+    Phase 3.7 (D9): exactly one ``sweeper_passes`` result per actual pass —
+    ``completed`` after a successful sweep, ``failed`` when the pass-level
+    transaction/batch raised. The recorder is non-raising (ADR-9); scheduling,
+    timing and error isolation are untouched.
     """
     log = logger or get_logger("soc_triage.sweeper")
     interval = settings.incident_sweeper_interval_seconds
@@ -179,6 +199,7 @@ async def run_sweeper_loop(
                     session_factory,
                     ttl_seconds=ttl,
                     logger=log,
+                    metrics=metrics,
                 )
                 log.info(
                     "sweeper_pass_completed",
@@ -189,6 +210,8 @@ async def run_sweeper_loop(
                     errors=stats["errors"],
                     duration_ms=round((_utc_now() - started).total_seconds() * 1000),
                 )
+                if metrics is not None:
+                    metrics.record_sweeper_pass("completed")
             except asyncio.CancelledError:
                 raise
             except Exception as exc:  # pragma: no cover - defensive
@@ -199,6 +222,8 @@ async def run_sweeper_loop(
                     component="sweeper",
                     error_type=type(exc).__name__,
                 )
+                if metrics is not None:
+                    metrics.record_sweeper_pass("failed")
             await asyncio.sleep(interval)
     except asyncio.CancelledError:
         log.info("sweeper_stopped", component="sweeper")
@@ -221,6 +246,7 @@ def start_sweeper_task(app: Any) -> asyncio.Task[None] | None:
             app.state.session_factory,
             settings,
             logger=get_logger("soc_triage.sweeper"),
+            metrics=resolve_metrics(app),
         ),
         name="soc-triage-incident-sweeper",
     )

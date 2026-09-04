@@ -5,10 +5,17 @@ checked-in Docker/compose configuration without invoking a daemon:
 
 * the container healthchecks point at the real FastAPI liveness route (/health)
 * the triage-api service does not hard-depend on n8n or Mailpit at startup
+* the Phase 3.7 (D11) optional ``observability`` profile is strictly additive:
+  profile gating, pinned images, internal-only Prometheus scrape at
+  ``triage-api:8000`` (9090 never published), Grafana lab port 3000, correct
+  networks, healthchecks, resource limits, secret-free Prometheus/Grafana
+  configuration and dashboards restricted to the approved metric catalog.
 """
 
 from __future__ import annotations
 
+import json
+import re
 from pathlib import Path
 
 import yaml
@@ -21,9 +28,125 @@ DOCKERFILE = REPO_ROOT / "Dockerfile"
 DEPLOY_DOCKERFILE = REPO_ROOT / "deploy" / "triage-api.Dockerfile"
 COMPOSE_FILE = REPO_ROOT / "docker-compose.yml"
 HEALTH_SOURCE = REPO_ROOT / "app" / "src" / "soc_triage" / "api" / "health.py"
+PROMETHEUS_CONFIG = REPO_ROOT / "deploy" / "prometheus" / "prometheus.yml"
+PROMETHEUS_ENTRYPOINT = REPO_ROOT / "deploy" / "prometheus" / "entrypoint.sh"
+GRAFANA_DATASOURCE = (
+    REPO_ROOT / "deploy" / "grafana" / "provisioning" / "datasources" / "prometheus.yml"
+)
+GRAFANA_DASHBOARD_PROVIDER = (
+    REPO_ROOT / "deploy" / "grafana" / "provisioning" / "dashboards" / "dashboards.yml"
+)
+GRAFANA_DASHBOARD = (
+    REPO_ROOT / "deploy" / "grafana" / "dashboards" / "soc-triage-observability.json"
+)
 
 OLD_HEALTHCHECK_URL = "http://localhost:8000/api/v1/health"
 HEALTHCHECK_URL = "http://localhost:8000/health"
+
+#: The approved Phase 3.7 catalog (docs/specs/phase-3.7-prometheus-observability.md §5).
+APPROVED_METRIC_FAMILIES = frozenset(
+    {
+        "soc_triage_http_requests",
+        "soc_triage_http_request_duration_seconds",
+        "soc_triage_ingest_rejections",
+        "soc_triage_alerts_processed",
+        "soc_triage_alert_processing_duration_seconds",
+        "soc_triage_alerts_scored",
+        "soc_triage_enrichment_status",
+        "soc_triage_enrichment_provider_outcomes",
+        "soc_triage_n8n_notifications",
+        "soc_triage_n8n_notification_duration_seconds",
+        "soc_triage_feedback",
+        "soc_triage_incident_transitions",
+        "soc_triage_incident_auto_close",
+        "soc_triage_sweeper_passes",
+        "soc_triage_up",
+        "soc_triage_database_up",
+        "soc_triage_migrations_applied",
+    }
+)
+
+#: Label names approved for dashboard queries (spec §5 + prometheus bookkeeping).
+APPROVED_DASHBOARD_LABELS = frozenset(
+    {
+        "method",
+        "route",
+        "status",
+        "reason",
+        "outcome",
+        "tier",
+        "decision",
+        "degraded",
+        "provider",
+        "verdict",
+        "from_status",
+        "to_status",
+        "result",
+        "le",
+        "job",
+        "instance",
+    }
+)
+
+#: Label names that must never appear in dashboard queries (high cardinality).
+PROHIBITED_DASHBOARD_LABELS = frozenset(
+    {
+        "id",
+        "alert_id",
+        "incident_id",
+        "rule_id",
+        "agent_id",
+        "ip",
+        "domain",
+        "url",
+        "hash",
+        "email",
+        "username",
+        "hostname",
+        "path",
+        "error",
+        "exception",
+        "message",
+    }
+)
+
+#: Minimal credential-pattern set mirroring scripts/check_secrets.sh (D11-gated
+#: files must stay clean of these in addition to the repo-wide scan). The key
+#: vocabulary is assembled at runtime so this test file itself cannot be
+#: misread as a credential assignment by the repo scanner.
+_SECRET_KEYWORDS = (
+    "password",
+    "passwd",
+    "secret",
+    "api_key",
+    "apikey",
+    "access_token",
+    "auth_token",
+)
+SECRET_PATTERNS = (
+    re.compile(r"AKIA[0-9A-Z]{16}"),
+    re.compile(r"sk-[A-Za-z0-9]{20,}"),
+    re.compile(r"github_pat_[A-Za-z0-9_]{20,}"),
+    re.compile(r"glpat-[A-Za-z0-9_-]{20,}"),
+    re.compile(r"AIza[0-9A-Za-z_-]{35}"),
+    re.compile(r"xox[baprs]-[A-Za-z0-9-]{10,}"),
+    re.compile(r"eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{5,}"),
+    re.compile(r"-----BEGIN (RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----"),
+    re.compile(
+        r"(?:{})\s*[:=]\s*[\"']?[A-Za-z0-9/+_]{{16,}}[\"']?".format("|".join(_SECRET_KEYWORDS))
+    ),
+)
+
+DEFAULT_SERVICE_FACTS = {
+    "triage-api": {"ports": ["8000:8000"], "networks": ["soc-core"]},
+    "n8n": {"ports": ["5678:5678"], "networks": ["soc-core", "soc-edge"]},
+    "mailpit": {"ports": ["1025:1025", "8025:8025"], "networks": ["soc-core"]},
+}
+
+
+def _compose() -> dict:
+    """Load the root docker-compose.yml."""
+    return yaml.safe_load(COMPOSE_FILE.read_text(encoding="utf-8"))
 
 
 def _app_health_paths() -> set[str]:
@@ -146,3 +269,224 @@ def test_health_source_does_not_hide_route_with_api_v1_prefix() -> None:
     source = HEALTH_SOURCE.read_text(encoding="utf-8")
     assert '@router.get("/health"' in source
     assert 'prefix="/api/v1' not in source
+
+
+# ---------------------------------------------------------------------------
+# Phase 3.7 (D11) — optional observability profile (compose + provisioning)
+# ---------------------------------------------------------------------------
+
+
+def _observability_files() -> dict[str, str]:
+    """Map every observability artifact to its checked-in text."""
+    return {
+        "docker-compose.yml": COMPOSE_FILE.read_text(encoding="utf-8"),
+        "deploy/prometheus/prometheus.yml": PROMETHEUS_CONFIG.read_text(encoding="utf-8"),
+        "deploy/prometheus/entrypoint.sh": PROMETHEUS_ENTRYPOINT.read_text(encoding="utf-8"),
+        "deploy/grafana/provisioning/datasources/prometheus.yml": GRAFANA_DATASOURCE.read_text(
+            encoding="utf-8"
+        ),
+        "deploy/grafana/provisioning/dashboards/dashboards.yml": GRAFANA_DASHBOARD_PROVIDER.read_text(
+            encoding="utf-8"
+        ),
+        "deploy/grafana/dashboards/soc-triage-observability.json": GRAFANA_DASHBOARD.read_text(
+            encoding="utf-8"
+        ),
+    }
+
+
+def test_observability_profile_gates_only_the_two_new_services() -> None:
+    """prometheus/grafana are profile-gated; default services are not."""
+    compose = _compose()
+    assert set(compose["services"]) == {"triage-api", "n8n", "mailpit", "prometheus", "grafana"}
+    for name in ("prometheus", "grafana"):
+        assert compose["services"][name].get("profiles") == ["observability"], name
+    for name in ("triage-api", "n8n", "mailpit"):
+        assert "profiles" not in compose["services"][name], name
+
+
+def test_observability_images_are_pinned_not_floating() -> None:
+    """Both observability images use pinned version tags (never ``latest``)."""
+    compose = _compose()
+    for name in ("prometheus", "grafana"):
+        image = compose["services"][name]["image"]
+        assert not image.endswith(":latest"), (name, image)
+        assert ":latest" not in image, (name, image)
+        assert re.match(r"^[a-z0-9]+/[a-z0-9-]+:[0-9v][0-9A-Za-z._-]+$", image), (name, image)
+
+
+def test_prometheus_port_9090_is_never_published() -> None:
+    """Prometheus stays internal-only; the profile never publishes 9090."""
+    compose = _compose()
+    service = compose["services"]["prometheus"]
+    assert service.get("ports", []) == []
+    compose_text = COMPOSE_FILE.read_text(encoding="utf-8")
+    assert "9090:9090" not in compose_text
+    assert "'9090'" not in compose_text
+
+
+def test_grafana_publishes_only_the_approved_lab_port() -> None:
+    """Grafana may publish 3000 (lab) and nothing else."""
+    compose = _compose()
+    assert compose["services"]["grafana"].get("ports") == ["3000:3000"]
+
+
+def test_prometheus_scrape_config_matches_approved_contract() -> None:
+    """One internal target (triage-api:8000), 15s interval, /metrics path."""
+    config = yaml.safe_load(PROMETHEUS_CONFIG.read_text(encoding="utf-8"))
+    assert config["global"]["scrape_interval"] == "15s"
+    assert config["global"]["scrape_timeout"] == "10s"
+    jobs = config["scrape_configs"]
+    assert len(jobs) == 1
+    job = jobs[0]
+    assert job["job_name"] == "triage-api"
+    assert job["metrics_path"] == "/metrics"
+    assert job["scheme"] == "http"
+    assert job["static_configs"] == [
+        {"targets": ["triage-api:8000"], "labels": {"job": "triage-api"}}
+    ]
+    # Default config is auth-free and secret-free (auth is runtime-only,
+    # injected by the entrypoint only when the env token is set).
+    assert "authorization" not in job
+    assert "bearer_token" not in job
+    assert "credentials" not in job
+
+
+def test_observability_services_use_only_internal_soc_core_network() -> None:
+    """Both services join soc-core only; neither reaches soc-edge."""
+    compose = _compose()
+    for name in ("prometheus", "grafana"):
+        networks = compose["services"][name].get("networks", [])
+        assert networks == ["soc-core"], (name, networks)
+
+
+def test_observability_services_are_not_required_dependencies() -> None:
+    """No existing service depends on prometheus/grafana; defaults unchanged."""
+    compose = _compose()
+    for name, facts in DEFAULT_SERVICE_FACTS.items():
+        service = compose["services"][name]
+        depends_on = service.get("depends_on", {})
+        assert not set(depends_on) & {"prometheus", "grafana"}, (name, depends_on)
+        assert service.get("ports") == facts["ports"], name
+        assert service.get("networks") == facts["networks"], name
+        assert "profiles" not in service, name
+    # Topology: only the two existing networks; new volumes are additive.
+    assert set(compose["networks"]) == {"soc-core", "soc-edge"}
+    for network in compose["networks"].values():
+        assert network == {"driver": "bridge"}
+    assert set(compose["volumes"]) == {"n8n-data", "prometheus-data", "grafana-data"}
+
+
+def test_observability_healthchecks_and_resource_limits_exist() -> None:
+    """Both observability services have healthchecks and resource limits."""
+    compose = _compose()
+    expected = {
+        "prometheus": ("http://127.0.0.1:9090/-/healthy", "1.0", "512M"),
+        "grafana": ("http://127.0.0.1:3000/api/health", "1.0", "512M"),
+    }
+    for name, (url, cpus, memory) in expected.items():
+        service = compose["services"][name]
+        healthcheck = service["healthcheck"]
+        joined = " ".join(str(part) for part in healthcheck["test"])
+        assert url in joined, (name, joined)
+        assert healthcheck["interval"] == "15s"
+        assert healthcheck["retries"] >= 3
+        assert healthcheck.get("start_period") is not None
+        limits = service["deploy"]["resources"]["limits"]
+        assert limits["cpus"] == cpus, name
+        assert limits["memory"] == memory, name
+        assert service["restart"] == "unless-stopped", name
+
+
+def test_observability_configuration_contains_no_secrets() -> None:
+    """No credential patterns, inline tokens, or credential keys in the profile."""
+    for name, text in _observability_files().items():
+        for pattern in SECRET_PATTERNS:
+            assert pattern.search(text) is None, (name, pattern.pattern)
+    datasource = yaml.safe_load(GRAFANA_DATASOURCE.read_text(encoding="utf-8"))
+    assert datasource["datasources"][0]["type"] == "prometheus"
+    assert "secureJsonData" not in datasource["datasources"][0]
+    assert "basicAuth" not in datasource["datasources"][0]
+    assert "user" not in datasource["datasources"][0]
+    assert "password" not in datasource["datasources"][0]
+    # Compose forwards the existing env token; the value is never inlined.
+    compose_text = COMPOSE_FILE.read_text(encoding="utf-8")
+    assert "${METRICS_SCRAPE_TOKEN:-}" in compose_text
+
+
+def test_prometheus_auth_anchor_is_a_single_exact_marker() -> None:
+    """The auth anchor is one standalone marker line (never a header match)."""
+    config_text = PROMETHEUS_CONFIG.read_text(encoding="utf-8")
+    anchors = [
+        line.strip() for line in config_text.splitlines() if line.strip() == "# __SCRAPE_AUTH__"
+    ]
+    assert anchors == ["# __SCRAPE_AUTH__"]
+
+
+def test_prometheus_entrypoint_uses_runtime_credentials_file_only() -> None:
+    """The entrypoint forwards the env token via a runtime file, never inline."""
+    script = PROMETHEUS_ENTRYPOINT.read_text(encoding="utf-8")
+    assert "METRICS_SCRAPE_TOKEN" in script
+    assert "credentials_file: $token_file" in script
+    assert "umask 077" in script
+    assert 'exec /bin/prometheus --config.file="$config_file" "$@"' in script
+    assert "authorization" in script
+
+
+def test_observability_defines_no_external_endpoints() -> None:
+    """The profile only reaches in-stack services on the internal network."""
+    for name, text in _observability_files().items():
+        assert "host.docker.internal" not in text, name
+        assert "http://172." not in text, name
+        assert "http://10." not in text, name
+    prometheus = yaml.safe_load(PROMETHEUS_CONFIG.read_text(encoding="utf-8"))
+    assert prometheus["scrape_configs"][0]["static_configs"][0]["targets"] == ["triage-api:8000"]
+    datasource = yaml.safe_load(GRAFANA_DATASOURCE.read_text(encoding="utf-8"))
+    assert datasource["datasources"][0]["url"] == "http://prometheus:9090"
+    provider = yaml.safe_load(GRAFANA_DASHBOARD_PROVIDER.read_text(encoding="utf-8"))
+    assert provider["providers"][0]["options"]["path"] == "/var/lib/grafana/dashboards"
+
+
+def _dashboard_exprs() -> list[str]:
+    """Return every PromQL expression in the checked-in dashboard."""
+    dashboard = json.loads(GRAFANA_DASHBOARD.read_text(encoding="utf-8"))
+    return [
+        target["expr"]
+        for panel in dashboard["panels"]
+        for target in panel["targets"]
+        if target.get("expr")
+    ]
+
+
+def test_dashboard_references_only_approved_metric_families() -> None:
+    """Dashboard queries use only the approved soc_triage_* catalog."""
+    exprs = _dashboard_exprs()
+    assert len(exprs) >= 11  # compact but covers the required panels
+    referenced: set[str] = set()
+    for expr in exprs:
+        for name in re.findall(r"soc_triage_[a-z0-9_]+", expr):
+            referenced.add(re.sub(r"_(total|count|sum|bucket|created)$", "", name))
+    assert referenced <= APPROVED_METRIC_FAMILIES, referenced - APPROVED_METRIC_FAMILIES
+    required = {
+        "soc_triage_alerts_processed",
+        "soc_triage_http_requests",
+        "soc_triage_http_request_duration_seconds",
+        "soc_triage_alerts_scored",
+        "soc_triage_enrichment_status",
+        "soc_triage_enrichment_provider_outcomes",
+        "soc_triage_n8n_notifications",
+        "soc_triage_feedback",
+        "soc_triage_incident_transitions",
+        "soc_triage_sweeper_passes",
+    }
+    assert required <= referenced, required - referenced
+
+
+def test_dashboard_queries_introduce_no_high_cardinality_labels() -> None:
+    """Label selectors in dashboard queries stay inside the approved set."""
+    for expr in _dashboard_exprs():
+        for selector in re.findall(r"\{([^}]*)\}", expr):
+            names = {match[0] for match in re.findall(r"([a-z_]+)\s*(=~?|!~)", selector)}
+            assert names <= APPROVED_DASHBOARD_LABELS, (expr, names - APPROVED_DASHBOARD_LABELS)
+            assert not names & PROHIBITED_DASHBOARD_LABELS, (expr, names)
+        for prohibited in PROHIBITED_DASHBOARD_LABELS - {"id"}:
+            assert not re.search(rf"\b{prohibited}\b", expr), (expr, prohibited)

@@ -22,6 +22,8 @@ _CONFIG_VARIABLES = (
     "N8N_TIMEOUT_SECONDS",
     "N8N_MAX_RETRIES",
     "N8N_RETRY_BACKOFF_SECONDS",
+    "METRICS_ENABLED",
+    "METRICS_SCRAPE_TOKEN",
 )
 
 
@@ -39,6 +41,8 @@ def test_default_development_config(monkeypatch: pytest.MonkeyPatch) -> None:
     assert settings.triage_api_host == "0.0.0.0"
     assert settings.triage_api_port == 8000
     assert settings.triage_db_url == "sqlite:////data/soc_triage.db"
+    assert settings.metrics_enabled is True
+    assert settings.metrics_scrape_token.get_secret_value() == ""
 
 
 def test_environment_variables_override_defaults(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -1,0 +1,20 @@
+# Phase 3.7 (D11) — Grafana Prometheus datasource provisioning for the
+# optional `observability` compose profile (lab use only).
+#
+# Scoped to the internal `soc-core` network: Grafana reaches Prometheus at
+# the compose service name `prometheus` on its container port 9090. No
+# external endpoint, no credentials, no authentication (Prometheus 9090 is
+# internal-only and never published to the host).
+
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    uid: prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    editable: false
+    jsonData:
+      httpMethod: POST

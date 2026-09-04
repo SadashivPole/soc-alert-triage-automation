@@ -64,7 +64,7 @@ from enum import StrEnum
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Path, status
+from fastapi import APIRouter, Path, Request, status
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
@@ -76,6 +76,7 @@ from ..audit import (
 )
 from ..core.errors import error_response
 from ..core.logging import get_logger
+from ..core.metrics import resolve_metrics
 from ..db.session import session_scope
 from ..models.incident import Incident, IncidentStatus, can_transition
 from ..models.repositories import (
@@ -197,7 +198,7 @@ def _sync_incident_with_feedback(
     verdict: FeedbackVerdict,
     actor: str,
     occurred_at: datetime,
-) -> None:
+) -> tuple[str, str] | None:
     """Synchronize the linked incident with a just-persisted verdict.
 
     Called inside the same unit of work as the feedback persistence, so the
@@ -205,6 +206,10 @@ def _sync_incident_with_feedback(
     transition commit or roll back atomically. Never raises for a missing or
     terminal incident state — a verdict without a legal incident transition
     still counts as recorded feedback (existing contract).
+
+    Returns ``(before, after)`` status values when an actual incident
+    transition was applied, else ``None``. The caller records the
+    ``incident.transitions`` metric only after the transaction commits.
     """
     audit_repo = AuditRepository(session)
     if verdict is FeedbackVerdict.CONTAIN_REQUESTED:
@@ -226,7 +231,7 @@ def _sync_incident_with_feedback(
             alert_id=str(alert_id),
             actor=actor,
         )
-        return
+        return None
 
     target = plan_incident_sync(incident, verdict)
     if target is None:
@@ -239,7 +244,7 @@ def _sync_incident_with_feedback(
             incident_status=incident.status.value,
             reason="no_valid_transition",
         )
-        return
+        return None
 
     updated = IncidentRepository(session).update_status(
         incident.incident_id,
@@ -264,6 +269,7 @@ def _sync_incident_with_feedback(
         after=updated.status.value,
         actor=actor,
     )
+    return incident.status.value, updated.status.value
 
 
 @router.post(
@@ -277,12 +283,21 @@ def _sync_incident_with_feedback(
     ),
 )
 async def submit_feedback(
+    request: Request,
     session_factory: SessionFactoryDependency,
     alert_id: Annotated[UUID, Path(description="Alert ID")],
     body: FeedbackRequest,
     _: None = RequireN8NToken,
 ) -> JSONResponse:
     received_at = _utc_now()
+    # Phase 3.7 (D9): app-scoped metrics; resolve_metrics returns None when
+    # metrics are disabled, so instrumentation is skipped without affecting
+    # the endpoint (ADR-9).
+    feedback_metrics = resolve_metrics(request.app)
+    #: ``(before, after)`` statuses when this verdict applied a real incident
+    #: transition; ``None`` when no incident is linked or no transition is
+    #: legal (unchanged state must never emit a transition metric).
+    incident_transition: tuple[str, str] | None = None
 
     # Verify alert exists
     try:
@@ -328,13 +343,26 @@ async def submit_feedback(
             # simply skipped — the feedback contract is unchanged.
             linked_incident = IncidentRepository(session).for_alert(alert_id)
             if linked_incident is not None:
-                _sync_incident_with_feedback(
+                incident_transition = _sync_incident_with_feedback(
                     session,
                     incident=linked_incident,
                     alert_id=alert_id,
                     verdict=body.verdict,
                     actor=actor,
                     occurred_at=received_at,
+                )
+
+        # --- Phase 3.7 (D9): feedback + incident-sync metrics ---
+        # Recorded only after the transaction above committed, so they
+        # mirror the persisted outcome exactly. ``incident_transition`` is
+        # non-None only when the verdict applied an actual lifecycle change
+        # (never for unchanged / illegal / contain-requested paths).
+        if feedback_metrics is not None:
+            feedback_metrics.record_feedback(body.verdict.value)
+            if incident_transition is not None:
+                feedback_metrics.record_incident_transition(
+                    from_status=incident_transition[0],
+                    to_status=incident_transition[1],
                 )
 
         logger.info(

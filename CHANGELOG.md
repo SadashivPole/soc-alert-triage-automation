@@ -6,6 +6,73 @@ semantic (`v0.1.0` targeted at the end of Phase 1).
 
 ## [Unreleased]
 
+### Added — Phase 3.7: Prometheus `/metrics` + optional observability profile (D2–D11)
+
+- **Metrics core (D2–D3).** New `app/src/soc_triage/core/metrics.py`: an app-scoped
+  `MetricsRegistry` owning its own `CollectorRegistry` (the process-global
+  `prometheus_client.REGISTRY` is never touched), a bounded 17-family `soc_triage_*`
+  catalog, and non-raising record helpers (failures logged by type only). One runtime
+  dependency (`prometheus-client`, upper-bounded range); new `METRICS_ENABLED` and
+  `METRICS_SCRAPE_TOKEN` settings with `.env.example` documentation.
+- **Endpoint & middleware (D4–D5).** `GET /metrics` — Prometheus text exposition
+  (`text/plain; version=0.0.4; charset=utf-8`), hidden from OpenAPI, mounted only when
+  `METRICS_ENABLED=true` (`false` → route absent / 404, nothing recorded); optional
+  Bearer auth via the dedicated `METRICS_SCRAPE_TOKEN` (empty = disabled, constant-time
+  compare, never logged). HTTP middleware records request counters + latency histograms
+  using route templates (raw paths → `unmatched`) and never recurses on `/metrics`.
+- **Pipeline instrumentation (D6–D9).** Counters/histograms at existing decision points
+  only — ingest rejections and dedupe outcomes, scoring/decision distribution,
+  enrichment status + per-provider outcomes, n8n notifications + duration, feedback
+  verdicts, incident transitions and auto-close, sweeper passes — semantically
+  non-load-bearing and never exposing identifiers, IOCs, or free text.
+- **Security & cardinality guards (D10).** New guard suites: static metric
+  contract/cardinality allowlists, no-secret canary exposition (synthetic secrets and
+  IOCs never appear in `/metrics`), registry isolation, scrape write/IO safety, and
+  forced recorder/render failure isolation.
+- **Optional Docker observability profile (D11).** `observability` compose profile adds
+  Prometheus (`prom/prometheus:v3.5.0`; internal 15 s scrape of
+  `http://triage-api:8000/metrics`, port 9090 never published) and Grafana
+  (`grafana/grafana:12.1.0`; port 3000 lab only) on `soc-core`, with provisioning, a
+  13-panel `soc-triage-observability` dashboard built only from the approved catalog,
+  healthchecks, resource limits, and a runtime-only bearer credential injection wrapper
+  (`deploy/prometheus/entrypoint.sh`). No secrets in any checked-in file; default stack
+  unchanged.
+- **Validation:** full Python gates, ruff, format, mypy, and secret scan all pass;
+  Docker runtime validation completed on Windows Docker Desktop (triage-api `/health`,
+  `/ready`, and `/metrics` healthy; Prometheus healthy with `triage-api:8000/metrics` UP
+  on a 15 s scrape and port 9090 not host-published; Grafana healthy on localhost:3000
+  with the Phase 3.7 dashboard loading and metrics populated from a real synthetic
+  alert). No production deployment or readiness claims are made.
+
+### Added — Phase 3.7 specification & architecture docs (docs-first task D1)
+
+- **Phase specification.** New
+  `docs/specs/phase-3.7-prometheus-observability.md` (Spec Kit: Specify → Plan → Tasks →
+  Implement) covering the Phase 3.7 Prometheus `/metrics` + optional Grafana profile:
+  WHY, MUST HAVE / MUST NOT HAVE, the full bounded metric catalog, security and
+  cardinality rules, architectural impact, implementation plan, ordered task list (D1–D13),
+  risks, acceptance criteria, and the approved maintainer decisions (D1 optional
+  `METRICS_SCRAPE_TOKEN` bearer auth; D2 optional `observability` compose profile with
+  Prometheus internal scrape + Grafana port 3000; D3 DB-aggregate gauges deferred to
+  Phase 3.8). No production code is changed.
+- **ARCHITECTURE.md.** §12 tree notes the planned `core/metrics.py` and `api/metrics.py`
+  modules plus the non-load-bearing instrumentation layering rule; §13 gains the
+  `observability` profile definition (Prometheus internal scrape, Grafana 3000 for the
+  lab, no host publish on 9090, default stack unchanged); §15 documents the metric
+  namespace (`soc_triage_`), bounded-label/cardinality rules, the metric catalog, the
+  cheap-only DB health/migration checks (no DB aggregates until Phase 3.8), and the
+  dedicated scrape token; §20 adds ADR-9 (Prometheus `/metrics` + optional self-hosted
+  observability profile vs. SaaS, instrumentator wrapper, and premature DB-aggregate
+  gauges).
+- **deploy/README.md.** Refreshed to the actual state: default compose services are
+  implemented and the Phase 3.7 `observability` profile is specified (Prometheus +
+  Grafana); document `docker compose --profile observability up` usage, the
+  `prometheus/` + `grafana/` layout, and that no secrets are permitted in checked-in
+  configuration.
+- **Effects:** documentation only. No scoring, deduplication, normalization, decision,
+  audit, API, Docker, CI, or dependency changes in this task; existing tests and gates
+  are unaffected and remain green per the previous Phase 3.6 merge.
+
 ### Added — Phase 3.4: Incident auto-close TTL sweeper
 
 - **Configurable auto-close TTL.** New settings (env-driven, validated):

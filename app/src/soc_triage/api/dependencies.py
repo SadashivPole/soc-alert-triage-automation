@@ -9,6 +9,7 @@ from sqlalchemy import Engine
 from sqlalchemy.orm import sessionmaker
 
 from ..core.config import Settings
+from ..core.metrics import MetricsRegistry
 from ..decisions import DecisionEngine
 from ..enrichment import EnrichmentChain
 from ..ingest.deduplication import Deduplicator
@@ -71,6 +72,16 @@ def get_n8n_client(request: Request) -> N8NWebhookClient:
     return client
 
 
+def get_metrics_registry(request: Request) -> MetricsRegistry:
+    """Return the app-scoped metrics registry bound to the application.
+
+    Only reachable when the metrics surface is enabled (the /metrics route is
+    not mounted otherwise), so ``app.state.metrics`` is always present here.
+    """
+    metrics: MetricsRegistry = request.app.state.metrics
+    return metrics
+
+
 SettingsDependency = Annotated[Settings, Depends(get_app_settings)]
 DeduplicatorDependency = Annotated[Deduplicator, Depends(get_deduplicator)]
 EnrichmentChainDependency = Annotated[EnrichmentChain, Depends(get_enrichment_chain)]
@@ -79,6 +90,7 @@ SessionFactoryDependency = Annotated[sessionmaker, Depends(get_session_factory)]
 ScorerDependency = Annotated[RiskScorer, Depends(get_scorer)]
 DeciderDependency = Annotated[DecisionEngine, Depends(get_decider)]
 N8NClientDependency = Annotated[N8NWebhookClient, Depends(get_n8n_client)]
+MetricsDependency = Annotated[MetricsRegistry, Depends(get_metrics_registry)]
 
 
 __all__ = [
@@ -86,6 +98,7 @@ __all__ = [
     "DeciderDependency",
     "DeduplicatorDependency",
     "EnrichmentChainDependency",
+    "MetricsDependency",
     "N8NClientDependency",
     "ScorerDependency",
     "SessionFactoryDependency",
@@ -95,6 +108,7 @@ __all__ = [
     "get_decider",
     "get_deduplicator",
     "get_enrichment_chain",
+    "get_metrics_registry",
     "get_n8n_client",
     "get_scorer",
     "get_session_factory",

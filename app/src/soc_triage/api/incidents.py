@@ -32,13 +32,14 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Annotated
 
-from fastapi import APIRouter, Path, Query, status
+from fastapi import APIRouter, Path, Query, Request, status
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from ..audit import audit_entries_for_incident_status
 from ..core.errors import error_response
 from ..core.logging import get_logger
+from ..core.metrics import resolve_metrics
 from ..db.session import session_scope
 from ..models.assessment import DecisionSeverity
 from ..models.incident import (
@@ -275,6 +276,7 @@ async def get_incident_timeline(
     ),
 )
 async def update_incident_status(
+    request: Request,
     session_factory: SessionFactoryDependency,
     incident_id: Annotated[str, Path(description="Incident ID (INC-YYYY-MM-DD-NNNN)")],
     body: IncidentStatusUpdateRequest,
@@ -294,6 +296,9 @@ async def update_incident_status(
     notes = body.notes.strip() if body.notes else None
     if notes and len(notes) > 2000:
         notes = notes[:2000]
+    # Phase 3.7 (D9): app-scoped metrics; non-raising (ADR-9) and skipped
+    # entirely when metrics are disabled.
+    lifecycle_metrics = resolve_metrics(request.app)
 
     try:
         with session_scope(session_factory) as session:
@@ -333,6 +338,16 @@ async def update_incident_status(
                     notes=notes,
                 ),
                 occurred_at=occurred_at,
+            )
+        # --- Phase 3.7 (D9): incident transition metric ---
+        # Recorded only after the transaction above committed and only for a
+        # real state change: illegal / unchanged requests return inside the
+        # with-block (409) and can never reach this line. The before/after
+        # states are the exact ones the lifecycle logic and the audit row use.
+        if lifecycle_metrics is not None:
+            lifecycle_metrics.record_incident_transition(
+                from_status=current.status.value,
+                to_status=updated.status.value,
             )
         response = JSONResponse(
             status_code=status.HTTP_200_OK,
