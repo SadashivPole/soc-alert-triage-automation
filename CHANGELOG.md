@@ -37,10 +37,12 @@ semantic (`v0.1.0` targeted at the end of Phase 1).
   healthchecks, resource limits, and a runtime-only bearer credential injection wrapper
   (`deploy/prometheus/entrypoint.sh`). No secrets in any checked-in file; default stack
   unchanged.
-- **Validation:** static/config-level only (config parsing + extended compose test suite
-  + full Python gates). Docker runtime smoke validation was **not** performed in the
-  development sandbox (Docker unavailable) and is not claimed. No production deployment
-  or readiness claims are made.
+- **Validation:** full Python gates, ruff, format, mypy, and secret scan all pass;
+  Docker runtime validation completed on Windows Docker Desktop (triage-api `/health`,
+  `/ready`, and `/metrics` healthy; Prometheus healthy with `triage-api:8000/metrics` UP
+  on a 15 s scrape and port 9090 not host-published; Grafana healthy on localhost:3000
+  with the Phase 3.7 dashboard loading and metrics populated from a real synthetic
+  alert). No production deployment or readiness claims are made.
 
 ### Added — Phase 3.7 specification & architecture docs (docs-first task D1)
 

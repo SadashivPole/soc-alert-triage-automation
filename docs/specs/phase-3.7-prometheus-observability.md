@@ -331,9 +331,11 @@ verified against 0.26.0. It has no additional runtime dependencies.
    checked-in `prometheus.yml` is auth-free by default; the wrapper injects a
    `credentials_file` block only when the env token is set.
 3. The dependency is version-ranged rather than exact-pinned (see above).
-4. **Validation caveat:** Docker was unavailable in the Arena sandbox, so `docker compose
-   config` and runtime smoke validation (container health, actual scrape, port checks)
-   were **not** executed. Phase 3.7 validation so far is static/config-level: YAML/JSON
-   parsing, the extended static compose test suite, a stubbed behavioral run of the
-   Prometheus entrypoint, and the full Python test suite. Execute the runtime checklist in
-   a Docker-capable environment before any deploy (D13 gates).
+4. **Validation caveat (resolved at D13):** Docker was unavailable in the Arena sandbox,
+   so `docker compose config` and runtime smoke validation (container health, actual
+   scrape, port checks) were **not** executed during D1–D12. That gap was closed at D13:
+   the stack was runtime-validated on Windows Docker Desktop — triage-api `/health`,
+   `/ready`, and `/metrics` healthy; Prometheus healthy with `triage-api:8000/metrics` UP
+   on a 15 s scrape and port 9090 not host-published; Grafana healthy on localhost:3000
+   with the Phase 3.7 dashboard loading and metrics populated from a real synthetic alert.
+   No production deployment or readiness claims are made.

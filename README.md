@@ -309,10 +309,11 @@ docker compose --profile observability up -d  # + Prometheus + Grafana (lab)
   committed, never inlined). See [deploy/README.md](deploy/README.md) and
   [ARCHITECTURE.md §13](ARCHITECTURE.md#13-docker--deployment-architecture).
 
-> **Validation note:** the observability profile is validated statically (config parsing
-> and the compose/config test suite). Docker was unavailable in the environment where
-> this work was developed, so the containers were **not** runtime-smoke-tested here —
-> bring the stack up in a Docker-capable environment before relying on it.
+> **Validation note:** the observability profile was runtime-validated on Windows Docker
+> Desktop — `triage-api` (`/health`, `/ready`, `/metrics` all 200), Prometheus
+> (`triage-api:8000/metrics` UP, 15 s scrape, port 9090 not host-published), and Grafana
+> (localhost:3000, Phase 3.7 dashboard loading with metrics populated) all verified
+> healthy.
 
 ## Documentation Index
 
