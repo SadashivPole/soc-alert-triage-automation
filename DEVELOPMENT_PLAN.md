@@ -120,8 +120,9 @@ FP verdict via form → tuning suggestion in next digest. All actions audit-logg
 
 **Goal:** production-shaped ingestion from an actual Wazuh manager; safe response actions.
 
-- 4.1 `full` compose profile with `wazuh-manager` · 4.2 custom `integrator` script
-  (`wazuh/integrator/`) reading env for URL/key, with local buffering · 4.3 custom
+- 4.1 `full` compose profile with `wazuh-manager` ✅ (this milestone) · 4.2 custom
+  `integrator` script (`wazuh/integrator/`) reading env for URL/key, with local
+  buffering ✅ (this milestone) · 4.3 custom
   rules/decoders showcase (SSH, FIM, web) · 4.4 agent enrollment docs (lab agents) ·
   4.5 human-approved containment runbook (Wazuh active-response *proposal* requiring
   explicit analyst approval; audited) · 4.6 optional TheHive CE case export (CE only) ·
