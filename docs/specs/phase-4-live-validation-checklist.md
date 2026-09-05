@@ -42,6 +42,10 @@ Set in `.env`: `TRIAGE_INGEST_API_KEY`, `N8N_ENCRYPTION_KEY`,
 
 - [ ] `docker compose logs wazuh-manager | grep triage-integration` shows the
       install hook ran
+- [ ] `ls -ld /var/ossec/integrations` → `drwxr-x--- root wazuh` (the pinned
+      image ships it as `root:root 0750`; the hook now enforces ownership at
+      startup — without this, `wazuh` cannot traverse the directory and
+      custom-triage fails)
 - [ ] `ls -l /var/ossec/integrations/custom-triage` → `-rwxr-x--- root wazuh`
 - [ ] `custom-triage.py` present alongside it, same ownership
 - [ ] `grep -A3 custom-triage /var/ossec/etc/ossec.conf` shows the block in the

@@ -14,6 +14,11 @@
 #     A subdirectory or symlink into a :ro mount is not the documented layout.
 #   * Wazuh requires integration scripts to be owned root:wazuh with mode 750;
 #     a bind mount carries the host's ownership, which is usually wrong.
+#   * The pinned wazuh-manager:4.9.2 image ships /var/ossec/integrations
+#     pre-existing as root:root 0750, and `install -d` does NOT re-own an
+#     existing directory. integratord runs as the wazuh user, which cannot
+#     traverse a root:root 0750 directory, so startup explicitly enforces
+#     root:wazuh 0750 on the directory itself on every boot.
 #
 # Copying at startup keeps this repository the source of truth (the mount stays
 # read-only) while giving Wazuh exactly the file/ownership/mode it expects.
@@ -43,6 +48,14 @@ done
 
 install -d -m 750 "$DEST_DIR"
 
+# The pinned image ships this directory pre-existing as root:root 0750, and
+# `install -d` only applies its mode at creation time — it does not correct
+# ownership (or mode) of an existing directory. integratord runs as the wazuh
+# user and must be able to traverse the directory to exec the integrator, so
+# explicitly enforce the documented root:wazuh 0750 contract at every startup.
+chown root:wazuh "$DEST_DIR"
+chmod 750 "$DEST_DIR"
+
 # Wazuh's documented contract for integration scripts: root:wazuh, mode 750.
 install -m 750 -o root -g wazuh "${SRC_DIR}/custom-triage" "${DEST_DIR}/custom-triage"
 install -m 750 -o root -g wazuh "${SRC_DIR}/custom-triage.py" "${DEST_DIR}/custom-triage.py"
@@ -58,4 +71,4 @@ chmod 660 "$LOG_FILE"
 SPOOL_DIR=${WAZUH_INTEGRATOR_SPOOL_DIR:-/var/ossec/logs/triage-spool}
 install -d -m 700 -o wazuh -g wazuh "$SPOOL_DIR"
 
-log "installed custom-triage (root:wazuh 750), spool=${SPOOL_DIR}"
+log "installed custom-triage (root:wazuh 750), dir=${DEST_DIR} (root:wazuh 750), spool=${SPOOL_DIR}"

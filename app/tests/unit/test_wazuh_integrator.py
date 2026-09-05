@@ -760,6 +760,25 @@ def test_install_script_places_integrator_where_integratord_looks() -> None:
     assert "exit 0" in script
 
 
+def test_install_script_enforces_integrations_dir_ownership_and_mode() -> None:
+    """Regression: the pinned 4.9.2 image ships /var/ossec/integrations as
+    root:root 0750, and `install -d` does not re-own an existing directory.
+
+    integratord runs as the wazuh user and cannot traverse a root:root 0750
+    directory, so startup must explicitly chown/chmod the directory itself —
+    not merely rely on the install-time mkdir mode.
+    """
+    script = INSTALL_SCRIPT.read_text(encoding="utf-8")
+    assert 'chown root:wazuh "$DEST_DIR"' in script
+    assert 'chmod 750 "$DEST_DIR"' in script
+    # The enforcement must run at startup, after the directory is guaranteed
+    # to exist — a correction of whatever the image or a previous run left.
+    assert 'install -d -m 750 "$DEST_DIR"' in script
+    assert script.index('chown root:wazuh "$DEST_DIR"') > script.index(
+        'install -d -m 750 "$DEST_DIR"'
+    )
+
+
 def test_install_script_has_no_containment_capability() -> None:
     script = INSTALL_SCRIPT.read_text(encoding="utf-8")
     for banned in ("active-response", "iptables", "firewall-drop", "curl ", "wget "):
