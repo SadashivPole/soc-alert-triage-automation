@@ -21,6 +21,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import random
+import re
 import sys
 from collections.abc import Mapping
 from pathlib import Path
@@ -33,7 +34,8 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 INTEGRATOR_DIR = REPO_ROOT / "wazuh" / "integrator"
 INTEGRATOR_PY = INTEGRATOR_DIR / "custom-triage.py"
 INTEGRATOR_SH = INTEGRATOR_DIR / "custom-triage"
-OSSEC_FRAGMENT = REPO_ROOT / "wazuh" / "config" / "ossec.conf.integrator.xml"
+OSSEC_CONF = REPO_ROOT / "wazuh" / "config" / "ossec.conf"
+INSTALL_SCRIPT = REPO_ROOT / "wazuh" / "entrypoint-scripts" / "10-install-triage-integration.sh"
 SAMPLE_ALERTS = REPO_ROOT / "docs" / "sample-alerts"
 
 TEST_API_KEY = "integrator-test-key-not-a-real-secret"
@@ -574,6 +576,39 @@ def test_logs_never_contain_the_api_key_or_alert_body(
         assert not {"api_key", "token", "password", "secret"} & set(record)
 
 
+def test_logs_are_written_to_the_integrations_log_file(tmp_path: Path) -> None:
+    """integratord discards stdout/stderr unless the manager runs in debug.
+
+    ``> /dev/null 2>&1`` is appended to the command (src/os_integrator/
+    integrator.c), so writing only to stderr loses every event in a normal
+    deployment. The log file is the real observability channel.
+    """
+    log_file = tmp_path / "integrations.log"
+    alert_file = write_alert(tmp_path, make_alert())
+    env = make_env(
+        WAZUH_INTEGRATOR_SPOOL_DIR=str(tmp_path / "spool"),
+        WAZUH_INTEGRATOR_LOG_FILE=str(log_file),
+    )
+    integrator.run(["custom-triage", str(alert_file)], env, sender=FakeSender([ok(202)]))
+
+    assert log_file.exists(), "integrator must log to integrations.log"
+    records = [json.loads(line) for line in log_file.read_text().strip().splitlines()]
+    assert any(r["event"] == "alert_forwarded" for r in records)
+    assert TEST_API_KEY not in log_file.read_text()
+
+
+def test_unwritable_log_file_never_costs_an_alert(tmp_path: Path) -> None:
+    """A broken log path must degrade to silence, not a lost detection."""
+    sender = FakeSender([ok(202)])
+    env = make_env(
+        WAZUH_INTEGRATOR_SPOOL_DIR=str(tmp_path / "spool"),
+        WAZUH_INTEGRATOR_LOG_FILE=str(tmp_path / "nonexistent-dir" / "x.log"),
+    )
+    alert_file = write_alert(tmp_path, make_alert())
+    assert integrator.run(["custom-triage", str(alert_file)], env, sender=sender) == 0
+    assert len(sender.calls) == 1
+
+
 def test_log_helper_drops_credential_shaped_fields(capsys: pytest.CaptureFixture[str]) -> None:
     integrator.log("t", api_key="s3cret", token="s3cret", password="s3cret", rule_id="5710")
     record = json.loads(capsys.readouterr().err.strip())
@@ -609,7 +644,7 @@ def test_integrator_uses_only_the_standard_library() -> None:
 
 
 def test_integrator_sources_contain_no_hardcoded_secrets() -> None:
-    for path in (INTEGRATOR_PY, INTEGRATOR_SH, OSSEC_FRAGMENT):
+    for path in (INTEGRATOR_PY, INTEGRATOR_SH, OSSEC_CONF, INSTALL_SCRIPT):
         text = path.read_text(encoding="utf-8")
         assert "change-me-generate" not in text
         # No `KEY = "value"` style literal assignments of credentials.
@@ -636,16 +671,96 @@ def test_integrator_has_no_containment_or_response_capability() -> None:
         assert banned not in source, banned
 
 
-def test_ossec_fragment_is_defensive_and_secret_free() -> None:
+def test_ossec_conf_is_a_complete_config_with_the_integration() -> None:
+    """Wazuh has NO ossec.conf.d include mechanism.
+
+    The manager image copies ``/wazuh-config-mount/etc/ossec.conf`` over
+    ``/var/ossec/etc/ossec.conf`` wholesale, so a partial fragment would
+    silently never load. This asserts we ship a complete configuration whose
+    integration block matches the deployed script name.
+    """
     import xml.etree.ElementTree as ET
 
-    text = OSSEC_FRAGMENT.read_text(encoding="utf-8")
-    root = ET.fromstring(text)
-    assert "active-response" not in text.lower()
-    assert "<command>" not in text.lower()
-    integration = root.find("integration")
-    assert integration is not None
-    assert integration.findtext("name") == "custom-triage"
+    text = OSSEC_CONF.read_text(encoding="utf-8")
+    # Multiple <ossec_config> roots are valid Wazuh config; wrap to parse.
+    root = ET.fromstring(f"<wrapper>{text[text.index('-->') + 3 :]}</wrapper>")
+
+    sections = root.findall("ossec_config")
+    assert sections, "expected at least one <ossec_config> section"
+
+    # A complete config, not a fragment.
+    tags = {child.tag for section in sections for child in section}
+    for required in ("global", "remote", "ruleset", "auth", "syscheck"):
+        assert required in tags, f"ossec.conf is missing <{required}> — is it a fragment?"
+
+    integrations = [i for section in sections for i in section.findall("integration")]
+    assert len(integrations) == 1
+    integration = integrations[0]
+    # Wazuh requires custom integrations to be named custom-*, matching a file
+    # in /var/ossec/integrations/.
+    name = integration.findtext("name")
+    assert name == "custom-triage"
+    assert name.startswith("custom-")
+    assert name == INTEGRATOR_SH.name, "config name must match the installed script"
     assert integration.findtext("alert_format") == "json"
     # The api_key element carries an env reference marker, never a value.
     assert integration.findtext("api_key") == "env:TRIAGE_INGEST_API_KEY"
+
+
+def test_ossec_conf_defines_no_active_response() -> None:
+    """Defensive-only charter (SECURITY.md §1)."""
+    import xml.etree.ElementTree as ET
+
+    text = OSSEC_CONF.read_text(encoding="utf-8")
+    root = ET.fromstring(f"<wrapper>{text[text.index('-->') + 3 :]}</wrapper>")
+    active = [
+        a for section in root.findall("ossec_config") for a in section.findall("active-response")
+    ]
+    assert active == [], "no active-response may be enabled"
+
+
+def test_ossec_conf_disables_the_indexer_we_do_not_run() -> None:
+    """The lab stack has no wazuh-indexer; leaving it enabled spams errors."""
+    import xml.etree.ElementTree as ET
+
+    text = OSSEC_CONF.read_text(encoding="utf-8")
+    root = ET.fromstring(f"<wrapper>{text[text.index('-->') + 3 :]}</wrapper>")
+    sections = root.findall("ossec_config")
+    for tag in ("indexer", "vulnerability-detection"):
+        blocks = [b for section in sections for b in section.findall(tag)]
+        assert blocks, tag
+        for block in blocks:
+            assert block.findtext("enabled") == "no", tag
+
+
+def test_ossec_conf_carries_no_hardcoded_cluster_key() -> None:
+    """Upstream's template ships a literal key; ours uses the substitution marker."""
+    text = OSSEC_CONF.read_text(encoding="utf-8")
+    assert "to_be_replaced_by_cluster_key" in text
+    assert not re.search(r"<key>[0-9a-f]{16,}</key>", text)
+
+
+def test_install_script_places_integrator_where_integratord_looks() -> None:
+    """integratord resolves `integrations/<name>` relative to /var/ossec.
+
+    The script must therefore land at /var/ossec/integrations/custom-triage
+    with Wazuh's required root:wazuh 750 ownership — not in a subdirectory
+    and not with host-derived ownership from a bind mount.
+    """
+    script = INSTALL_SCRIPT.read_text(encoding="utf-8")
+    assert INSTALL_SCRIPT.stat().st_mode & 0o111, "install hook must be executable"
+    assert "DEST_DIR=/var/ossec/integrations" in script
+    assert "-m 750 -o root -g wazuh" in script
+    assert "custom-triage.py" in script
+    # Log file must be writable by the wazuh user integratord runs as.
+    assert "integrations.log" in script
+    # Spool stays owner-only.
+    assert "-d -m 700 -o wazuh -g wazuh" in script
+    # Startup must never be blocked by an integration problem.
+    assert "exit 0" in script
+
+
+def test_install_script_has_no_containment_capability() -> None:
+    script = INSTALL_SCRIPT.read_text(encoding="utf-8")
+    for banned in ("active-response", "iptables", "firewall-drop", "curl ", "wget "):
+        assert banned not in script, banned

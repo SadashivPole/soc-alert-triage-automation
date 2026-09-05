@@ -29,9 +29,40 @@ semantic (`v0.1.0` targeted at the end of Phase 1).
   invocation. Bounded by entry count *and* age; permanent `4xx` rejections are dropped
   rather than replayed forever. The integrator always exits `0`, so triage-side problems
   can never block or crash the Wazuh manager.
-- **Config fragment.** `wazuh/config/ossec.conf.integrator.xml` — a secret-free
-  `<integration>` block (the `api_key` element carries an `env:` marker, not a value),
-  mounted read-only into the manager.
+- **Manager configuration.** `wazuh/config/ossec.conf` — a *complete*, secret-free
+  manager config derived from the official wazuh-docker v4.9.2 single-node template,
+  carrying the `custom-triage` `<integration>` block (the `api_key` element holds an
+  `env:` marker, not a value), with `<indexer>`/`<vulnerability-detection>` disabled
+  (this stack runs no indexer) and upstream's hardcoded cluster key replaced by the
+  entrypoint's substitution marker.
+- **Startup installer.** `wazuh/entrypoint-scripts/10-install-triage-integration.sh`
+  installs the integrator into `/var/ossec/integrations/` as `root:wazuh` mode `750`
+  (Wazuh's documented requirement) and pre-creates the log file and 0700 spool, via
+  the image's supported `/entrypoint-scripts/*.sh` hook.
+
+### Fixed — Phase 4.1/4.2 wiring defects found by auditing the pinned image source
+
+Three defects that would have prevented the integration from working at all were
+found by reading the `wazuh/wazuh-manager:4.9.2` image and Wazuh 4.9.2 sources
+(live Docker validation was not possible in the build environment):
+
+- **`ossec.conf.d` fragment never loaded.** Wazuh has no `ossec.conf.d` include
+  mechanism; the image copies `/wazuh-config-mount/<path>` over `/var/ossec/<path>`,
+  so the fragment was written to a path Wazuh never reads and the integration would
+  have been silently inactive. Now a complete `ossec.conf` is mounted at
+  `/wazuh-config-mount/etc/ossec.conf`.
+- **Integrator installed at an unusable path with wrong ownership.**
+  `wazuh-integratord` resolves `integrations/<name>` relative to `/var/ossec` and
+  requires `root:wazuh` `750`; the previous read-only bind mount at
+  `/var/ossec/integrations/triage` required an undocumented manual symlink and
+  carried host ownership. Now installed by the entrypoint hook.
+- **All integrator logs were discarded.** `wazuh-integratord` appends
+  `> /dev/null 2>&1` to the command unless the manager runs at debug level
+  (`src/os_integrator/integrator.c`), so the stderr-only logger produced no
+  observable output in a normal deployment. The integrator now appends structured
+  JSON to `/var/ossec/logs/integrations.log` (still mirrored to stderr), matching
+  the convention of Wazuh's own shipped integrations, with the same secret-free
+  allow-listed fields. New `WAZUH_INTEGRATOR_LOG_FILE` setting.
 - **Docs.** `wazuh/README.md` rewritten with the integration flow, the full environment
   variable table, buffering/retry semantics, `full`-profile lab setup, Wazuh **agent
   enrollment** instructions, safe test-detection recipes, troubleshooting, and security

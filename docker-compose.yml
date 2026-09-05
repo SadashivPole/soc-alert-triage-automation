@@ -263,11 +263,15 @@ services:
       WAZUH_INTEGRATOR_SPOOL_MAX_ENTRIES: ${WAZUH_INTEGRATOR_SPOOL_MAX_ENTRIES:-1000}
       WAZUH_INTEGRATOR_VERIFY_TLS: ${WAZUH_INTEGRATOR_VERIFY_TLS:-1}
     volumes:
-      # Integrator script + ossec.conf fragment (read-only; source of truth is
-      # this repository, never the container filesystem).
-      - ./wazuh/integrator:/var/ossec/integrations/triage:ro
-      - ./wazuh/config/ossec.conf.integrator.xml:/wazuh-config-mount/etc/ossec.conf.d/triage-integration.xml:ro
-      - ./wazuh/ruleset:/wazuh-config-mount/etc/rules-custom:ro
+      # Complete ossec.conf. The image copies /wazuh-config-mount/<path> over
+      # /var/ossec/<path> at start (cont-init.d/0-wazuh-init). Wazuh has NO
+      # ossec.conf.d include mechanism, so this must be the whole file.
+      - ./wazuh/config/ossec.conf:/wazuh-config-mount/etc/ossec.conf:ro
+      # Integrator sources (read-only; this repo stays the source of truth).
+      # The entrypoint script installs them into /var/ossec/integrations with
+      # the root:wazuh 750 ownership Wazuh requires.
+      - ./wazuh/integrator:/triage-integration:ro
+      - ./wazuh/entrypoint-scripts:/entrypoint-scripts:ro
       - wazuh-manager-etc:/var/ossec/etc
       - wazuh-manager-logs:/var/ossec/logs
       - wazuh-manager-queue:/var/ossec/queue

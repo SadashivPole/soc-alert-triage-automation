@@ -513,7 +513,8 @@ def test_dashboard_queries_introduce_no_high_cardinality_labels() -> None:
 # ---------------------------------------------------------------------------
 
 WAZUH_INTEGRATOR_DIR = REPO_ROOT / "wazuh" / "integrator"
-WAZUH_OSSEC_FRAGMENT = REPO_ROOT / "wazuh" / "config" / "ossec.conf.integrator.xml"
+WAZUH_OSSEC_CONF = REPO_ROOT / "wazuh" / "config" / "ossec.conf"
+WAZUH_INSTALL_HOOK = REPO_ROOT / "wazuh" / "entrypoint-scripts" / "10-install-triage-integration.sh"
 
 
 def _wazuh_service() -> dict:
@@ -585,10 +586,38 @@ def test_full_profile_mounts_are_read_only_and_repo_sourced() -> None:
     }
 
 
+def test_ossec_conf_is_mounted_where_the_image_actually_copies_it() -> None:
+    """The image copies /wazuh-config-mount/<path> -> /var/ossec/<path>.
+
+    Wazuh has no ossec.conf.d include mechanism, so the whole ossec.conf must
+    be mounted at /wazuh-config-mount/etc/ossec.conf or it silently never
+    applies. Regression guard for the original (broken) fragment mount.
+    """
+    volumes = _wazuh_service()["volumes"]
+    targets = [v.split(":")[1] for v in volumes if v.startswith("./")]
+    assert "/wazuh-config-mount/etc/ossec.conf" in targets
+    assert not any("ossec.conf.d" in target for target in targets), (
+        "ossec.conf.d is not a Wazuh feature; the fragment would never load"
+    )
+    assert not any(target.startswith("/var/ossec/integrations") for target in volumes), (
+        "integrations/ must be installed by the entrypoint hook with root:wazuh 750, "
+        "not bind-mounted with host ownership"
+    )
+
+
+def test_full_profile_installs_the_integrator_via_the_entrypoint_hook() -> None:
+    """The image runs /entrypoint-scripts/*.sh before starting Wazuh."""
+    volumes = _wazuh_service()["volumes"]
+    targets = [v.split(":")[1] for v in volumes if v.startswith("./")]
+    assert "/entrypoint-scripts" in targets
+    assert "/triage-integration" in targets
+
+
 def test_full_profile_configuration_contains_no_secrets() -> None:
     files = {
         "docker-compose.yml (wazuh)": COMPOSE_FILE.read_text(encoding="utf-8"),
-        "wazuh/config/ossec.conf.integrator.xml": WAZUH_OSSEC_FRAGMENT.read_text(encoding="utf-8"),
+        "wazuh/config/ossec.conf": WAZUH_OSSEC_CONF.read_text(encoding="utf-8"),
+        "wazuh/entrypoint-scripts/install": WAZUH_INSTALL_HOOK.read_text(encoding="utf-8"),
         "wazuh/integrator/custom-triage": (WAZUH_INTEGRATOR_DIR / "custom-triage").read_text(
             encoding="utf-8"
         ),
@@ -606,3 +635,14 @@ def test_full_profile_declares_no_active_response() -> None:
     text = COMPOSE_FILE.read_text(encoding="utf-8").lower()
     for banned in ("active-response", "active_response", "firewall-drop", "host-deny"):
         assert banned not in text, banned
+
+
+def test_wazuh_healthcheck_targets_a_real_daemon_name() -> None:
+    """`wazuh-control status` prints '<daemon> is running...' per daemon.
+
+    wazuh-analysisd is a non-optional daemon (src/init/wazuh-server.sh
+    DAEMONS), so it is a valid readiness signal.
+    """
+    joined = " ".join(str(p) for p in _wazuh_service()["healthcheck"]["test"])
+    assert "/var/ossec/bin/wazuh-control status" in joined
+    assert "wazuh-analysisd is running" in joined

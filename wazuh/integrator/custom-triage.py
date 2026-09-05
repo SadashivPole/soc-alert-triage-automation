@@ -88,29 +88,77 @@ class ConfigError(ValueError):
 
 
 # ---------------------------------------------------------------------------
-# Logging (structured, secret-free, stderr only)
+# Logging (structured, secret-free)
 # ---------------------------------------------------------------------------
 
 #: Keys that must never reach a log line even if a caller passes them.
 _FORBIDDEN_LOG_KEYS = frozenset({"api_key", "apikey", "key", "token", "password", "secret"})
 
+#: Default log sink, matching the convention used by the integrations Wazuh
+#: ships (slack.py, virustotal.py, ...): ``<ossec>/logs/integrations.log``.
+#:
+#: This is NOT cosmetic. ``wazuh-integratord`` appends ``> /dev/null 2>&1`` to
+#: the command unless the manager runs at debug level (src/os_integrator/
+#: integrator.c), so anything written to stdout/stderr is discarded in a normal
+#: deployment. Writing to the log file directly is the only way these events
+#: are observable in production.
+_DEFAULT_LOG_FILE = "/var/ossec/logs/integrations.log"
+
+
+#: Resolved log destination for this invocation. ``run()`` sets it from the
+#: environment it was handed so tests (and any embedded caller) do not have to
+#: mutate the real ``os.environ``.
+_LOG_FILE: str = ""
+
+
+def _log_path() -> str:
+    if _LOG_FILE:
+        return _LOG_FILE
+    return (
+        os.environ.get("WAZUH_INTEGRATOR_LOG_FILE") or _DEFAULT_LOG_FILE
+    ).strip() or _DEFAULT_LOG_FILE
+
+
+def _set_log_path(env: Mapping[str, str]) -> None:
+    """Pin the log destination for this invocation."""
+    global _LOG_FILE
+    _LOG_FILE = (env.get("WAZUH_INTEGRATOR_LOG_FILE") or _DEFAULT_LOG_FILE).strip()
+
 
 def log(event: str, **fields: object) -> None:
-    """Emit one structured JSON log line to stderr.
+    """Emit one structured JSON log line.
 
     Only allow-listed, non-sensitive metadata should be passed. Any key that
     looks like a credential is dropped defensively rather than redacted, so a
     future caller mistake cannot leak a value.
+
+    The line is appended to ``integrations.log`` (see :data:`_DEFAULT_LOG_FILE`)
+    and also mirrored to stderr, which the manager surfaces when running at
+    debug level. Logging never raises: an unwritable log file must not cost us
+    an alert.
     """
     payload: dict[str, object] = {"component": "wazuh_integrator", "event": event}
     for name, value in fields.items():
         if name.lower() in _FORBIDDEN_LOG_KEYS:
             continue
         payload[name] = value
+
     try:
-        sys.stderr.write(json.dumps(payload, sort_keys=True, default=str) + "\n")
+        line = json.dumps(payload, sort_keys=True, default=str)
+    except Exception:  # pragma: no cover - logging must never raise
+        return
+
+    try:
+        sys.stderr.write(line + "\n")
         sys.stderr.flush()
     except Exception:  # pragma: no cover - logging must never raise
+        pass
+
+    try:
+        with open(_log_path(), "a", encoding="utf-8") as handle:
+            handle.write(line + "\n")
+    except OSError:
+        # No log file (e.g. running outside the manager) is not fatal.
         pass
 
 
@@ -610,6 +658,8 @@ def run(
     rng: random.Random | None = None,
 ) -> int:
     """Execute one integrator invocation. Always returns an exit code."""
+    _set_log_path(os.environ if env is None else env)
+
     if len(argv) < 2:
         log("usage_error", reason="missing_alert_file_argument")
         return EXIT_CONFIG_ERROR

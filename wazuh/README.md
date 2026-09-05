@@ -5,9 +5,18 @@ the `integrator` script that forwards manager alerts to the Triage API, plus the
 custom rules/decoders that generate them. Design:
 [ARCHITECTURE.md](../ARCHITECTURE.md#13-docker--deployment-architecture), ADR-6.
 
-**Status: Phase 4.1 + 4.2 delivered** — the `full` profile and the
-`custom-triage` integrator are implemented. Custom rules/decoders (4.3) and the
-human-approved containment runbook (4.5) are still pending. The default `sim`
+**Status: Phase 4.1 + 4.2 implemented — NOT yet validated against a live manager.**
+The `full` profile and the `custom-triage` integrator are complete and covered by
+static/mocked tests, and the wiring has been audited line-by-line against the
+pinned `wazuh/wazuh-manager:4.9.2` image and Wazuh 4.9.2 sources (that audit found
+and fixed three defects that would have broken the integration entirely — see
+CHANGELOG). **However, no real Wazuh manager or agent has been run against it yet**:
+`docker compose --profile full up`, agent enrollment, and the live
+agent → manager → integrator → API path (Phase 4.4 acceptance) remain **unverified**.
+Treat the lab steps below as untested-in-anger until someone completes them on a
+machine with Docker; the outstanding items are tracked in
+[docs/specs/phase-4-live-validation-checklist.md](../docs/specs/phase-4-live-validation-checklist.md). Custom rules/decoders (4.3) and the human-approved containment
+runbook (4.5) are still pending. The default `sim`
 mode is unchanged: with the profile disabled the pipeline runs entirely on the
 synthetic payloads in [docs/sample-alerts](../docs/sample-alerts/README.md), so
 the zero-external fallback still holds.
@@ -15,12 +24,31 @@ the zero-external fallback still holds.
 ```
 wazuh/
 ├── config/
-│   └── ossec.conf.integrator.xml   # <integration> fragment (no secrets)
+│   └── ossec.conf                  # COMPLETE manager config (no secrets)
+├── entrypoint-scripts/
+│   └── 10-install-triage-integration.sh   # installs the integrator at startup
 ├── integrator/
 │   ├── custom-triage               # shell wrapper executed by integratord
 │   └── custom-triage.py            # forwarder: filter → POST → buffer/retry
 └── ruleset/                        # custom rules, decoders, syscheck policies (4.3)
 ```
+
+### Why a complete `ossec.conf` and a startup hook
+
+Two Wazuh facts drive this layout — both verified against the pinned
+`wazuh/wazuh-manager:4.9.2` image source:
+
+* **Wazuh has no `ossec.conf.d` include mechanism.** The manager image copies
+  `/wazuh-config-mount/<path>` over `/var/ossec/<path>` wholesale
+  (`cont-init.d/0-wazuh-init`, `mount_files`). A partial fragment would be
+  copied to a path Wazuh never reads and would *silently* never apply, so we
+  ship the whole file, derived from the official v4.9.2 single-node template.
+* **`wazuh-integratord` resolves the script as `integrations/<name>` relative
+  to `/var/ossec`**, and Wazuh requires it to be owned `root:wazuh` with mode
+  `750`. A bind mount would carry host ownership, so
+  `entrypoint-scripts/10-install-triage-integration.sh` installs it with the
+  correct ownership before `wazuh-control start`. The repo mount stays
+  read-only and remains the source of truth.
 
 ## How the integration works
 
@@ -62,6 +90,7 @@ the `full` compose profile.
 | `WAZUH_INTEGRATOR_SPOOL_MAX_AGE_SECONDS` | `604800` | Stale entries are pruned |
 | `WAZUH_INTEGRATOR_SPOOL_FLUSH_BATCH` | `25` | Max backlog entries drained per invocation |
 | `WAZUH_INTEGRATOR_VERIFY_TLS` | `1` | TLS verification for https ingest URLs |
+| `WAZUH_INTEGRATOR_LOG_FILE` | `/var/ossec/logs/integrations.log` | Structured log sink |
 
 ### Buffering & retry semantics
 
@@ -103,24 +132,28 @@ Prerequisites: the default stack already works in `sim` mode, and `.env` exists.
 
    First start takes a few minutes (`start_period` is 120 s).
 
-3. **Enable the integration.** The fragment in `wazuh/config/` is mounted to
-   `/wazuh-config-mount/etc/ossec.conf.d/triage-integration.xml`. If your image
-   revision does not auto-merge `ossec.conf.d`, append the `<integration>` block
-   into `/var/ossec/etc/ossec.conf` and restart:
+3. **Confirm the integration installed itself.** No manual step is required:
+   the entrypoint hook installs the script and the mounted `ossec.conf`
+   carries the `<integration>` block. Verify both:
 
    ```bash
-   docker compose exec wazuh-manager sh -lc \
-     "cat /wazuh-config-mount/etc/ossec.conf.d/triage-integration.xml"
-   docker compose exec wazuh-manager /var/ossec/bin/wazuh-control restart
+   # Startup hook output
+   docker compose logs wazuh-manager | grep triage-integration
+   # Script present with Wazuh's required ownership/mode
+   docker compose exec wazuh-manager ls -l /var/ossec/integrations/custom-triage
+   # Expected: -rwxr-x--- 1 root wazuh
+   # Integration block active in the running config
+   docker compose exec wazuh-manager grep -A3 custom-triage /var/ossec/etc/ossec.conf
+   # integratord must be running (it is an OPTIONAL daemon: it only starts
+   # when at least one <integration> block is configured)
+   docker compose exec wazuh-manager /var/ossec/bin/wazuh-control status \
+     | grep integratord
    ```
 
-4. **Link the integrator** into the manager's integrations directory (the repo
-   copy is mounted read-only at `/var/ossec/integrations/triage`):
-
-   ```bash
-   docker compose exec wazuh-manager sh -lc \
-     "ln -sf /var/ossec/integrations/triage/custom-triage /var/ossec/integrations/custom-triage"
-   ```
+4. **Note on the first start.** `/var/ossec/etc` is a named volume. The image
+   only seeds it when empty, and the mounted `ossec.conf` is copied on every
+   start — but if you change `wazuh/config/ossec.conf` after the volume exists,
+   restart the container to re-copy it.
 
 5. **Verify** end to end — trigger a detection (below) and watch:
 
@@ -171,7 +204,9 @@ ports; the Wazuh API on 55000 stays internal to `soc-core`).
 
 | Symptom | Check |
 | --- | --- |
-| Nothing in `integrations.log` | Is `custom-triage` symlinked and executable? Is the `<integration>` block merged? |
+| Nothing in `integrations.log` | `ls -l /var/ossec/integrations/custom-triage` (must be `root:wazuh`, `750`); is `wazuh-integratord` running? |
+| `integratord` not running | It is an optional daemon — it only starts when an `<integration>` block exists in the *running* `ossec.conf` |
+| Integration block missing from running config | The `/var/ossec/etc` volume predates the config change; restart (or recreate) the container |
 | `config_error` log lines | A required env var is missing or still a `change-me*` placeholder |
 | `alert_rejected status=401` | `TRIAGE_INGEST_API_KEY` differs between the manager and the API |
 | `alert_buffered` growing | API unreachable — check `docker compose ps triage-api`; entries replay automatically |
@@ -187,7 +222,10 @@ ports; the Wazuh API on 55000 stays internal to `soc-core`).
   bypass one.
 * **Nothing sensitive is logged.** Log lines carry rule id/level, agent id, HTTP
   status and attempt counts only — never the API key, never the alert body,
-  never a URL with embedded credentials. The integrator emits **no Prometheus
+  never a URL with embedded credentials. Events go to
+  `/var/ossec/logs/integrations.log` (mode 660 `root:wazuh`): `integratord`
+  appends `> /dev/null 2>&1` to the command unless the manager runs at debug
+  level, so stderr alone would be discarded. The integrator emits **no Prometheus
   metrics**, so the metrics surface is unchanged.
 * **Defensive scope.** Everything here is detection/forwarding configuration.
   The integrator spawns no processes and executes no commands; there is no
