@@ -1,12 +1,30 @@
 # Phase 4.1/4.2 — live validation checklist
 
-**Status: OUTSTANDING.** Every item below is **unverified**. The build
-environment used for Phase 4.1/4.2 had no Docker daemon, no Docker CLI, and no
-reachable container registry, so none of this could be executed. The wiring was
-instead audited against the pinned `wazuh/wazuh-manager:4.9.2` image source and
-the Wazuh 4.9.2 sources; that audit found and fixed three defects (see
-CHANGELOG → *Fixed — Phase 4.1/4.2 wiring defects*), but **source review is not
-a substitute for running it**.
+**Status: PARTIALLY VERIFIED through source audit.** The three wiring defects
+that would have made the integration silently non-functional were identified by
+auditing against the `wazuh/wazuh-manager:4.9.2` image source and the Wazuh 4.9.2
+sources, then fixed in commit `4262ce1`. Source review is not a substitute for
+running it on a machine with Docker — items 5-7 below still require a live
+run. The build environment used for Phase 4.1/4.2 had no Docker daemon, no Docker
+CLI, and no reachable container registry, so the live validation described here
+could not be executed automatically.
+
+Three defects found and fixed (see CHANGELOG → *Fixed — Phase 4.1/4.2 wiring
+defects*):
+
+1. **ossec.conf.d fragment never loaded** — now ships a complete ossec.conf
+   derived from the official v4.9.2 single-node template, with indexer/vulnerability-detection
+   disabled and the hardcoded cluster key replaced by the substitution marker.
+
+2. **Integrator unreachable by integratord** — `10-install-triage-integration.sh`
+   now installs the integrator at `/var/ossec/integrations/` with `root:wazuh 0750`
+   ownership via `chown root:wazuh "$DEST_DIR"` and `chmod 0750 "$DEST_DIR"`,
+   instead of relying on a bind mount with wrong ownership.
+
+3. **All integrator logs discarded** — `integratord` appends `> /dev/null 2>&1`
+   unless the manager runs at debug level; now appends structured JSON to
+   `/var/ossec/logs/integrations.log` (still mirrored to stderr), matching
+   Wazuh's own shipped integrations.
 
 Run this on a machine with Docker Desktop and record the result of each step.
 Phase 4.4 acceptance requires §5 to pass with a real agent.

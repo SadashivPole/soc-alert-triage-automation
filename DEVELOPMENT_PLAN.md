@@ -186,7 +186,19 @@ correlation IDs · error paths handled per ARCHITECTURE §16 · CHANGELOG entry.
 
 ---
 
-## Milestones & Versioning
+| Alert-flood sample replays skew dedupe/scoring state | confusing demos | simulator resets DB or uses distinct agents per scenario (`--fresh` flag) |
+| Scope creep toward offensive tooling | policy violation | CONTRIBUTING explicitly rejects offensive capabilities; review checklist item |
+
+## Phase 4 Validation Status (2026-09-06)
+
+- **4.1/4.2 wiring defects**: Three defects identified by source audit against Wazuh 4.9.2 image and fixed in commit `4262ce1`. Code changes committed to `arena/01a07520-soc-alert-triage-automation`:
+  - `wazuh/entrypoint-scripts/10-install-triage-integration.sh`: added `chown root:wazuh "$DEST_DIR"` and `chmod 0750 "$DEST_DIR"` to fix integrations directory ownership
+  - `.gitattributes`: added `text eol=lf` for `wazuh/integrator/*`, `wazuh/entrypoint-scripts/*`, `*.py` to prevent CRLF rewrites on Windows checkouts
+  - `app/tests/unit/test_wazuh_integrator.py`: added `test_wazuh_scripts_have_no_crlf` regression test asserting LF-only bytes in executable Wazuh scripts
+- **4.3-4.7**: Items remain unverified without a live Docker/Wazuh environment. See `docs/specs/phase-4-live-validation-checklist.md` §5-7 for the full E2E validation scope.
+- **Live validation**: The wiring was audited against the pinned `wazuh/wazuh-manager:4.9.2` image source and Wazuh 4.9.2 sources; three defects were found and fixed. Live run verification requires Docker Desktop with `docker compose --profile full up -d`.
+
+---\n\n## Milestones & Versioning
 
 - Semantic versioning from `v0.1.0`; tags cut only at phase completion with all gates green.
 - `CHANGELOG.md` starts in Phase 1.
