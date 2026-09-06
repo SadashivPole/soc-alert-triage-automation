@@ -763,6 +763,27 @@ def test_install_script_places_integrator_where_integratord_looks() -> None:
     assert "exit 0" in script
 
 
+def test_wazuh_scripts_have_no_crlf() -> None:
+    """Integratord cannot execute scripts with CRLF line endings.
+
+    Wazuh integratord resolves integrations/<name> relative to /var/ossec
+    and runs scripts as the `wazuh` user. CRLF scripts cause silent
+    failures (the ^M character breaks #! line parsing and command
+    execution). This test asserts all checked-in executable Wazuh scripts
+    contain LF only.
+    """
+    import pathlib
+    scripts = [
+        Path("wazuh/integrator/custom-triage"),
+        Path("wazuh/integrator/custom-triage.py"),
+        Path("wazuh/entrypoint-scripts/10-install-triage-integration.sh"),
+    ]
+    for script_path in scripts:
+        data = script_path.read_bytes()
+        assert b"\r\n" not in data, f"{script_path} contains CRLF"
+        assert b"\r" not in data, f"{script_path} contains lone CR"
+
+
 def test_install_script_has_no_containment_capability() -> None:
     script = INSTALL_SCRIPT.read_text(encoding="utf-8")
     for banned in ("active-response", "iptables", "firewall-drop", "curl ", "wget "):
