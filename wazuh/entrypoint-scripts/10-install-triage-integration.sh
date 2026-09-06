@@ -42,6 +42,8 @@ for name in custom-triage custom-triage.py; do
 done
 
 install -d -m 750 "$DEST_DIR"
+chown root:wazuh "$DEST_DIR"
+chmod 0750 "$DEST_DIR"
 
 # Wazuh's documented contract for integration scripts: root:wazuh, mode 750.
 install -m 750 -o root -g wazuh "${SRC_DIR}/custom-triage" "${DEST_DIR}/custom-triage"

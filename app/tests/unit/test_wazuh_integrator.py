@@ -756,6 +756,9 @@ def test_install_script_places_integrator_where_integratord_looks() -> None:
     assert "integrations.log" in script
     # Spool stays owner-only.
     assert "-d -m 700 -o wazuh -g wazuh" in script
+    # Parent integrations directory must be root:wazuh 0750 explicitly.
+    assert 'chown root:wazuh "$DEST_DIR"' in script
+    assert 'chmod 0750 "$DEST_DIR"' in script
     # Startup must never be blocked by an integration problem.
     assert "exit 0" in script
 
