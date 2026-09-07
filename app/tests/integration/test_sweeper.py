@@ -85,7 +85,11 @@ def _ingest_incident(
 
 def _patch_status(client: TestClient, incident_id: str, target: str, **kwargs: Any) -> Any:
     body: dict[str, Any] = {"status": target, **kwargs}
-    return client.patch(f"/api/v1/incidents/{incident_id}/status", json=body, headers=TOKEN_HEADERS)
+    return client.patch(
+        f"/api/v1/incidents/{incident_id}/status",
+        json=body,
+        headers=TOKEN_HEADERS,
+    )
 
 
 def _incident(client: TestClient, incident_id: str) -> Any:
@@ -133,7 +137,10 @@ def _set_incident_updated_at(
 
 
 def _sweeper_settings(
-    db_url: str, *, ttl: int = TEST_TTL_SECONDS, interval: int = TEST_INTERVAL_SECONDS
+    db_url: str,
+    *,
+    ttl: int = TEST_TTL_SECONDS,
+    interval: int = TEST_INTERVAL_SECONDS,
 ) -> Settings:
     return Settings(
         soc_env="test",
@@ -143,12 +150,19 @@ def _sweeper_settings(
         triage_db_url=db_url,
         triage_ingest_api_key=TEST_INGEST_KEY,
         n8n_callback_token=TEST_CALLBACK_TOKEN,
+        n8n_webhook_token="",
+        n8n_webhook_url="",
         incident_auto_close_ttl_seconds=ttl,
         incident_sweeper_interval_seconds=interval,
     )
 
 
-def _app_client(db_url: str, *, ttl: int = TEST_TTL_SECONDS, interval: int = TEST_INTERVAL_SECONDS):
+def _app_client(
+    db_url: str,
+    *,
+    ttl: int = TEST_TTL_SECONDS,
+    interval: int = TEST_INTERVAL_SECONDS,
+) -> TestClient:
     return TestClient(create_app(settings=_sweeper_settings(db_url, ttl=ttl, interval=interval)))
 
 
@@ -159,7 +173,11 @@ def client(db_url: str) -> TestClient:  # type: ignore[override]
         yield c
 
 
-def _run_sweep(client: TestClient, *, as_of: datetime | None = None) -> dict[str, int]:
+def _run_sweep(
+    client: TestClient,
+    *,
+    as_of: datetime | None = None,
+) -> dict[str, int]:
     """Run one deterministic sweep using the client app's session factory."""
     return sweeper_mod.sweep_once(
         client.app.state.session_factory,
@@ -179,6 +197,7 @@ def test_default_ttl_and_interval_load() -> None:
         soc_env="test",
         triage_ingest_api_key=TEST_INGEST_KEY,
         n8n_callback_token=TEST_CALLBACK_TOKEN,
+        n8n_webhook_token="",
     )
     # 7 days default TTL; 5 minute default interval.
     assert s.incident_auto_close_ttl_seconds == 7 * 24 * 3600
@@ -192,6 +211,7 @@ def test_environment_override_works(monkeypatch: pytest.MonkeyPatch) -> None:
         soc_env="test",
         triage_ingest_api_key=TEST_INGEST_KEY,
         n8n_callback_token=TEST_CALLBACK_TOKEN,
+        n8n_webhook_token="",
     )
     assert s.incident_auto_close_ttl_seconds == 3600
     assert s.incident_sweeper_interval_seconds == 60
@@ -206,13 +226,16 @@ def test_non_positive_ttl_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
             soc_env="test",
             triage_ingest_api_key=TEST_INGEST_KEY,
             n8n_callback_token=TEST_CALLBACK_TOKEN,
+            n8n_webhook_token="",
         )
+
     monkeypatch.setenv("INCIDENT_AUTO_CLOSE_TTL_SECONDS", "-5")
     with pytest.raises(ValidationError):
         Settings(
             soc_env="test",
             triage_ingest_api_key=TEST_INGEST_KEY,
             n8n_callback_token=TEST_CALLBACK_TOKEN,
+            n8n_webhook_token="",
         )
 
 
@@ -224,11 +247,16 @@ def test_non_positive_ttl_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_open_incident_older_than_ttl_is_eligible_and_closes(client: TestClient) -> None:
     body = _ingest_incident(client)
     iid = body["incident_id"]
+
     # Age it past the TTL.
     _set_incident_updated_at(
-        client, iid, datetime.now(UTC) - timedelta(seconds=TEST_TTL_SECONDS + 1)
+        client,
+        iid,
+        datetime.now(UTC) - timedelta(seconds=TEST_TTL_SECONDS + 1),
     )
+
     stats = _run_sweep(client)
+
     assert stats["candidates"] == 1
     assert stats["closed"] == 1
     assert _incident(client, iid).status == IncidentStatus.RESOLVED
@@ -237,11 +265,17 @@ def test_open_incident_older_than_ttl_is_eligible_and_closes(client: TestClient)
 def test_investigating_incident_older_than_ttl_is_eligible(client: TestClient) -> None:
     body = _ingest_incident(client)
     iid = body["incident_id"]
+
     assert _patch_status(client, iid, "investigating").status_code == 200
+
     _set_incident_updated_at(
-        client, iid, datetime.now(UTC) - timedelta(seconds=TEST_TTL_SECONDS + 1)
+        client,
+        iid,
+        datetime.now(UTC) - timedelta(seconds=TEST_TTL_SECONDS + 1),
     )
+
     stats = _run_sweep(client)
+
     assert stats["closed"] == 1
     assert _incident(client, iid).status == IncidentStatus.RESOLVED
 
@@ -249,15 +283,23 @@ def test_investigating_incident_older_than_ttl_is_eligible(client: TestClient) -
 def test_acknowledged_incident_older_than_ttl_is_eligible(client: TestClient) -> None:
     body = _ingest_incident(client)
     iid = body["incident_id"]
+
     assert _patch_status(client, iid, "investigating").status_code == 200
     assert _patch_status(client, iid, "acknowledged").status_code == 200
+
     _set_incident_updated_at(
-        client, iid, datetime.now(UTC) - timedelta(seconds=TEST_TTL_SECONDS + 1)
+        client,
+        iid,
+        datetime.now(UTC) - timedelta(seconds=TEST_TTL_SECONDS + 1),
     )
+
     stats = _run_sweep(client)
+
     assert stats["closed"] == 1
+
     incident = _incident(client, iid)
     assert incident.status == IncidentStatus.RESOLVED
+
     # acknowledged_at must be preserved.
     assert incident.acknowledged_at is not None
 
@@ -265,11 +307,17 @@ def test_acknowledged_incident_older_than_ttl_is_eligible(client: TestClient) ->
 def test_escalated_incident_older_than_ttl_is_eligible(client: TestClient) -> None:
     body = _ingest_incident(client)
     iid = body["incident_id"]
+
     assert _patch_status(client, iid, "escalated").status_code == 200
+
     _set_incident_updated_at(
-        client, iid, datetime.now(UTC) - timedelta(seconds=TEST_TTL_SECONDS + 1)
+        client,
+        iid,
+        datetime.now(UTC) - timedelta(seconds=TEST_TTL_SECONDS + 1),
     )
+
     stats = _run_sweep(client)
+
     assert stats["closed"] == 1
     assert _incident(client, iid).status == IncidentStatus.RESOLVED
 
@@ -277,8 +325,10 @@ def test_escalated_incident_older_than_ttl_is_eligible(client: TestClient) -> No
 def test_recently_updated_incident_is_not_eligible(client: TestClient) -> None:
     body = _ingest_incident(client)
     iid = body["incident_id"]
+
     # updated_at is "now" — well within the TTL.
     stats = _run_sweep(client)
+
     assert stats["candidates"] == 0
     assert stats["closed"] == 0
     assert _incident(client, iid).status == IncidentStatus.OPEN
@@ -287,25 +337,44 @@ def test_recently_updated_incident_is_not_eligible(client: TestClient) -> None:
 def test_resolved_incident_is_not_eligible(client: TestClient) -> None:
     body = _ingest_incident(client)
     iid = body["incident_id"]
+
     assert _patch_status(client, iid, "investigating").status_code == 200
     assert _patch_status(client, iid, "resolved").status_code == 200
+
     # Even if updated_at is aged, terminal states are excluded.
-    _set_incident_updated_at(client, iid, datetime.now(UTC) - timedelta(days=365))
+    _set_incident_updated_at(
+        client,
+        iid,
+        datetime.now(UTC) - timedelta(days=365),
+    )
+
     stats = _run_sweep(client)
+
     assert stats["candidates"] == 0
     assert stats["closed"] == 0
+
     # resolved_at unchanged by sweeper.
     resolved_at_before = _incident(client, iid).resolved_at
+
     _run_sweep(client)
+
     assert _incident(client, iid).resolved_at == resolved_at_before
 
 
 def test_false_positive_is_not_eligible(client: TestClient) -> None:
     body = _ingest_incident(client)
     iid = body["incident_id"]
+
     assert _patch_status(client, iid, "false_positive").status_code == 200
-    _set_incident_updated_at(client, iid, datetime.now(UTC) - timedelta(days=365))
+
+    _set_incident_updated_at(
+        client,
+        iid,
+        datetime.now(UTC) - timedelta(days=365),
+    )
+
     stats = _run_sweep(client)
+
     assert stats["candidates"] == 0
     assert stats["closed"] == 0
     assert _incident(client, iid).status == IncidentStatus.FALSE_POSITIVE
@@ -316,10 +385,18 @@ def test_exact_ttl_boundary_is_deterministic(client: TestClient) -> None:
     (the cutoff is <= as_of - ttl_seconds)."""
     body = _ingest_incident(client)
     iid = body["incident_id"]
+
     now = datetime.now(UTC)
+
     # Exactly at the boundary: updated_at == now - TTL -> should be selected.
-    _set_incident_updated_at(client, iid, now - timedelta(seconds=TEST_TTL_SECONDS))
+    _set_incident_updated_at(
+        client,
+        iid,
+        now - timedelta(seconds=TEST_TTL_SECONDS),
+    )
+
     stats = _run_sweep(client, as_of=now)
+
     assert stats["candidates"] == 1
     assert stats["closed"] == 1
 
@@ -328,9 +405,17 @@ def test_just_inside_ttl_is_not_eligible(client: TestClient) -> None:
     """One second inside the window -> not eligible."""
     body = _ingest_incident(client)
     iid = body["incident_id"]
+
     now = datetime.now(UTC)
-    _set_incident_updated_at(client, iid, now - timedelta(seconds=TEST_TTL_SECONDS - 1))
+
+    _set_incident_updated_at(
+        client,
+        iid,
+        now - timedelta(seconds=TEST_TTL_SECONDS - 1),
+    )
+
     stats = _run_sweep(client, as_of=now)
+
     assert stats["candidates"] == 0
     assert stats["closed"] == 0
 
@@ -343,41 +428,69 @@ def test_just_inside_ttl_is_not_eligible(client: TestClient) -> None:
 def test_eligible_incident_becomes_resolved(client: TestClient) -> None:
     body = _ingest_incident(client)
     iid = body["incident_id"]
+
     _set_incident_updated_at(
-        client, iid, datetime.now(UTC) - timedelta(seconds=TEST_TTL_SECONDS + 10)
+        client,
+        iid,
+        datetime.now(UTC) - timedelta(seconds=TEST_TTL_SECONDS + 10),
     )
+
     _run_sweep(client)
+
     incident = _incident(client, iid)
+
     assert incident.status == IncidentStatus.RESOLVED
 
 
 def test_resolved_at_populated_once(client: TestClient) -> None:
     body = _ingest_incident(client)
     iid = body["incident_id"]
+
     _set_incident_updated_at(
-        client, iid, datetime.now(UTC) - timedelta(seconds=TEST_TTL_SECONDS + 10)
+        client,
+        iid,
+        datetime.now(UTC) - timedelta(seconds=TEST_TTL_SECONDS + 10),
     )
+
     _run_sweep(client)
+
     incident = _incident(client, iid)
+
     assert incident.resolved_at is not None
+
     resolved_at_first = incident.resolved_at
+
     # A second sweep must not change resolved_at.
-    _set_incident_updated_at(client, iid, datetime.now(UTC) - timedelta(days=365))
+    _set_incident_updated_at(
+        client,
+        iid,
+        datetime.now(UTC) - timedelta(days=365),
+    )
+
     _run_sweep(client)
+
     assert _incident(client, iid).resolved_at == resolved_at_first
 
 
 def test_acknowledged_at_preserved(client: TestClient) -> None:
     body = _ingest_incident(client)
     iid = body["incident_id"]
+
     assert _patch_status(client, iid, "acknowledged").status_code == 200
+
     ack_at = _incident(client, iid).acknowledged_at
     assert ack_at is not None
+
     _set_incident_updated_at(
-        client, iid, datetime.now(UTC) - timedelta(seconds=TEST_TTL_SECONDS + 10)
+        client,
+        iid,
+        datetime.now(UTC) - timedelta(seconds=TEST_TTL_SECONDS + 10),
     )
+
     _run_sweep(client)
+
     closed = _incident(client, iid)
+
     assert closed.acknowledged_at == ack_at
     assert closed.status == IncidentStatus.RESOLVED
 
@@ -385,17 +498,25 @@ def test_acknowledged_at_preserved(client: TestClient) -> None:
 def test_updated_at_changes_on_auto_close(client: TestClient) -> None:
     body = _ingest_incident(client)
     iid = body["incident_id"]
+
     old_time = datetime.now(UTC) - timedelta(seconds=TEST_TTL_SECONDS + 100)
+
     _set_incident_updated_at(client, iid, old_time)
+
     before = _incident(client, iid)
+
     assert (
         before.updated_at.replace(tzinfo=UTC)
         if before.updated_at.tzinfo is None
         else before.updated_at
     )
+
     sweep_time = datetime.now(UTC)
+
     _run_sweep(client, as_of=sweep_time)
+
     after = _incident(client, iid)
+
     # updated_at must have been refreshed to sweep_time (exact, within ms).
     assert after.updated_at >= sweep_time - timedelta(seconds=1)
     assert after.updated_at > old_time
@@ -404,11 +525,17 @@ def test_updated_at_changes_on_auto_close(client: TestClient) -> None:
 def test_actor_is_system_sweeper(client: TestClient) -> None:
     body = _ingest_incident(client)
     iid = body["incident_id"]
+
     _set_incident_updated_at(
-        client, iid, datetime.now(UTC) - timedelta(seconds=TEST_TTL_SECONDS + 10)
+        client,
+        iid,
+        datetime.now(UTC) - timedelta(seconds=TEST_TTL_SECONDS + 10),
     )
+
     _run_sweep(client)
+
     events = _auto_close_events(client)
+
     assert len(events) == 1
     assert events[0].actor == ACTOR_SWEEPER
     assert events[0].after["actor"] == ACTOR_SWEEPER
@@ -417,13 +544,21 @@ def test_actor_is_system_sweeper(client: TestClient) -> None:
 def test_auto_close_creates_one_audit_row(client: TestClient) -> None:
     body = _ingest_incident(client)
     iid = body["incident_id"]
+
     _set_incident_updated_at(
-        client, iid, datetime.now(UTC) - timedelta(seconds=TEST_TTL_SECONDS + 10)
+        client,
+        iid,
+        datetime.now(UTC) - timedelta(seconds=TEST_TTL_SECONDS + 10),
     )
+
     _run_sweep(client)
+
     events = _auto_close_events(client)
+
     assert len(events) == 1
+
     entry = events[0]
+
     assert entry.action == ACTION_INCIDENT_AUTO_CLOSED
     assert entry.entity_type == "incident"
     assert entry.entity_id == iid
@@ -435,6 +570,7 @@ def test_auto_close_creates_one_audit_row(client: TestClient) -> None:
     assert entry.after["ttl_seconds"] == TEST_TTL_SECONDS
     assert entry.after["idle_seconds"] >= TEST_TTL_SECONDS
     assert entry.after["actor"] == ACTOR_SWEEPER
+
     # resolved_at populated in after snapshot.
     assert entry.after["resolved_at"] is not None
 
@@ -442,16 +578,22 @@ def test_auto_close_creates_one_audit_row(client: TestClient) -> None:
 def test_repeat_sweep_is_idempotent(client: TestClient) -> None:
     body = _ingest_incident(client)
     iid = body["incident_id"]
+
     _set_incident_updated_at(
-        client, iid, datetime.now(UTC) - timedelta(seconds=TEST_TTL_SECONDS + 10)
+        client,
+        iid,
+        datetime.now(UTC) - timedelta(seconds=TEST_TTL_SECONDS + 10),
     )
+
     assert _run_sweep(client)["closed"] == 1
+
     # Subsequent sweeps must find no candidates (terminal) and add no new
     # audit rows.
     for _ in range(3):
         stats = _run_sweep(client)
         assert stats["candidates"] == 0
         assert stats["closed"] == 0
+
     assert len(_auto_close_events(client)) == 1
 
 
@@ -460,14 +602,21 @@ def test_unrelated_incidents_remain_unchanged(client: TestClient) -> None:
     # dedupe groups) instead of attaching to the same open incident.
     body_a = _ingest_incident(client, event_id="ev-1", agent_id="901")
     body_b = _ingest_incident(client, event_id="ev-2", agent_id="902")
+
     iid_old = body_a["incident_id"]
     iid_new = body_b["incident_id"]
+
     assert iid_old != iid_new
+
     # Only age incident A.
     _set_incident_updated_at(
-        client, iid_old, datetime.now(UTC) - timedelta(seconds=TEST_TTL_SECONDS + 10)
+        client,
+        iid_old,
+        datetime.now(UTC) - timedelta(seconds=TEST_TTL_SECONDS + 10),
     )
+
     stats = _run_sweep(client)
+
     assert stats["candidates"] == 1
     assert stats["closed"] == 1
     assert _incident(client, iid_old).status == IncidentStatus.RESOLVED
@@ -487,7 +636,9 @@ def test_manual_update_after_candidate_selection_prevents_stale_close(
     the manual change must win (no overwrite)."""
     body = _ingest_incident(client)
     iid = body["incident_id"]
+
     old_time = datetime.now(UTC) - timedelta(seconds=TEST_TTL_SECONDS + 100)
+
     _set_incident_updated_at(client, iid, old_time)
 
     # Simulate the scenario: run candidate SELECT inside a transaction,
@@ -504,13 +655,20 @@ def test_manual_update_after_candidate_selection_prevents_stale_close(
             as_of=datetime.now(UTC),
             limit=100,
         )
+
     assert len(candidates) == 1
     candidate = candidates[0]
 
     # 2) Manual PATCH lands between SELECT and UPDATE: simulates an analyst
     # acknowledging the incident (this bumps updated_at and changes status).
     assert (
-        _patch_status(client, iid, "investigating", actor="analyst@example.com").status_code == 200
+        _patch_status(
+            client,
+            iid,
+            "investigating",
+            actor="analyst@example.com",
+        ).status_code
+        == 200
     )
 
     # 3) Now run the per-incident conditional update with the *stale*
@@ -523,7 +681,9 @@ def test_manual_update_after_candidate_selection_prevents_stale_close(
             expected_previous_updated_at=candidate.updated_at,
             expected_previous_status=candidate.status.value,
         )
+
         assert closed is None
+
         # No audit entry appended (we deliberately don't append here).
 
     # The manual "investigating" state survived, no auto-close happened.
@@ -534,11 +694,16 @@ def test_manual_update_after_candidate_selection_prevents_stale_close(
 def test_two_sweep_passes_do_not_double_close_or_double_audit(client: TestClient) -> None:
     body = _ingest_incident(client)
     iid = body["incident_id"]
+
     _set_incident_updated_at(
-        client, iid, datetime.now(UTC) - timedelta(seconds=TEST_TTL_SECONDS + 10)
+        client,
+        iid,
+        datetime.now(UTC) - timedelta(seconds=TEST_TTL_SECONDS + 10),
     )
+
     _run_sweep(client)
     _run_sweep(client)
+
     assert _incident(client, iid).status == IncidentStatus.RESOLVED
     assert len(_auto_close_events(client)) == 1
 
@@ -552,19 +717,26 @@ def test_auto_closed_state_persists_across_app_restart(db_url: str) -> None:
     with _app_client(db_url) as client_a:
         body = _ingest_incident(client_a)
         iid = body["incident_id"]
+
         _set_incident_updated_at(
-            client_a, iid, datetime.now(UTC) - timedelta(seconds=TEST_TTL_SECONDS + 10)
+            client_a,
+            iid,
+            datetime.now(UTC) - timedelta(seconds=TEST_TTL_SECONDS + 10),
         )
+
         assert _run_sweep(client_a)["closed"] == 1
         assert _incident(client_a, iid).status == IncidentStatus.RESOLVED
 
     with _app_client(db_url) as client_b:
         incident = _incident(client_b, iid)
+
         assert incident is not None
         assert incident.status == IncidentStatus.RESOLVED
         assert incident.resolved_at is not None
+
         # Exactly one auto_closed audit row survived the restart.
         assert len(_auto_close_events(client_b)) == 1
+
         # Sweep-after-restart is a no-op.
         assert _run_sweep(client_b)["closed"] == 0
         assert len(_auto_close_events(client_b)) == 1
@@ -574,8 +746,10 @@ def test_sweeper_starts_and_stops_cleanly_with_lifespan(db_url: str) -> None:
     """The background task is created at startup and cancelled at shutdown."""
     with _app_client(db_url, interval=1) as client:
         task = client.app.state.sweeper_task
+
         assert task is not None
         assert not task.done()
+
     # After the TestClient context exits, lifespan has run its finally
     # block; the task should be done (cancelled).
     assert task.done()
@@ -591,12 +765,17 @@ def test_sweeper_starts_and_stops_cleanly_with_lifespan(db_url: str) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_terminal_states_remain_protected_from_manual_transitions(client: TestClient) -> None:
+def test_terminal_states_remain_protected_from_manual_transitions(
+    client: TestClient,
+) -> None:
     body = _ingest_incident(client)
     iid = body["incident_id"]
+
     assert _patch_status(client, iid, "false_positive").status_code == 200
+
     # Attempting to transition out of false_positive must still be 409.
     response = _patch_status(client, iid, "investigating")
+
     assert response.status_code == 409
     assert _incident(client, iid).status == IncidentStatus.FALSE_POSITIVE
 
@@ -605,33 +784,57 @@ def test_sweeper_uses_system_sweeper_actor_not_analyst(client: TestClient) -> No
     """Guard: the auto_closed audit must use ACTOR_SWEEPER, never 'analyst'."""
     body = _ingest_incident(client)
     iid = body["incident_id"]
+
     _set_incident_updated_at(
-        client, iid, datetime.now(UTC) - timedelta(seconds=TEST_TTL_SECONDS + 10)
+        client,
+        iid,
+        datetime.now(UTC) - timedelta(seconds=TEST_TTL_SECONDS + 10),
     )
+
     _run_sweep(client)
+
     events = _auto_close_events(client)
+
     assert len(events) == 1
     assert events[0].actor == sweeper_mod.SWEEPER_ACTOR
     assert events[0].actor.startswith("system:")
 
 
-def test_sweeper_per_incident_error_does_not_stop_later_candidates(client: TestClient) -> None:
+def test_sweeper_per_incident_error_does_not_stop_later_candidates(
+    client: TestClient,
+) -> None:
     """A failure on one incident must not abort the whole sweep pass.
 
     We simulate a per-incident failure by monkey-patching
     auto_close_if_stale to raise on the first candidate id; the second
     (aged) incident must still close successfully.
     """
-    body_a = _ingest_incident(client, event_id="err-1", agent_id="701")
-    body_b = _ingest_incident(client, event_id="err-2", agent_id="702")
+    body_a = _ingest_incident(
+        client,
+        event_id="err-1",
+        agent_id="701",
+    )
+    body_b = _ingest_incident(
+        client,
+        event_id="err-2",
+        agent_id="702",
+    )
+
     iid_a = body_a["incident_id"]
     iid_b = body_b["incident_id"]
+
     assert iid_a != iid_b
+
     _set_incident_updated_at(
-        client, iid_a, datetime.now(UTC) - timedelta(seconds=TEST_TTL_SECONDS + 10)
+        client,
+        iid_a,
+        datetime.now(UTC) - timedelta(seconds=TEST_TTL_SECONDS + 10),
     )
+
     _set_incident_updated_at(
-        client, iid_b, datetime.now(UTC) - timedelta(seconds=TEST_TTL_SECONDS + 10)
+        client,
+        iid_b,
+        datetime.now(UTC) - timedelta(seconds=TEST_TTL_SECONDS + 10),
     )
 
     factory = client.app.state.session_factory
@@ -642,13 +845,19 @@ def test_sweeper_per_incident_error_does_not_stop_later_candidates(client: TestC
 
     def flaky(self, incident_id, **kwargs):  # type: ignore[no-untyped-def]
         call_count["n"] += 1
+
         if call_count["n"] == 1:
             raise RuntimeError("simulated per-incident failure")
+
         return original(self, incident_id, **kwargs)
 
     IncidentRepository.auto_close_if_stale = flaky  # type: ignore[method-assign]
+
     try:
-        stats = sweeper_mod.sweep_once(factory, ttl_seconds=ttl)
+        stats = sweeper_mod.sweep_once(
+            factory,
+            ttl_seconds=ttl,
+        )
     finally:
         IncidentRepository.auto_close_if_stale = original  # type: ignore[method-assign]
 
@@ -657,7 +866,15 @@ def test_sweeper_per_incident_error_does_not_stop_later_candidates(client: TestC
     assert stats["errors"] == 1
     assert stats["closed"] == 1
     assert stats["candidates"] == 2
+
     # Exactly one of the two is now resolved (the non-failing one), the
     # failing candidate was rolled back and stayed OPEN.
-    statuses = {_incident(client, iid_a).status, _incident(client, iid_b).status}
-    assert statuses == {IncidentStatus.OPEN, IncidentStatus.RESOLVED}
+    statuses = {
+        _incident(client, iid_a).status,
+        _incident(client, iid_b).status,
+    }
+
+    assert statuses == {
+        IncidentStatus.OPEN,
+        IncidentStatus.RESOLVED,
+    }

@@ -143,6 +143,7 @@ def _app_client(db_url: str):
         triage_db_url=db_url,
         triage_ingest_api_key=TEST_INGEST_KEY,
         n8n_callback_token=TEST_CALLBACK_TOKEN,
+        n8n_webhook_token="",
     )
     return TestClient(create_app(settings=settings))
 

@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import random
 import re
 import sys
@@ -65,7 +66,11 @@ def make_env(**overrides: str) -> dict[str, str]:
     return env
 
 
-def make_alert(level: int = 10, rule_id: str = "5710", groups: list[str] | None = None) -> dict:
+def make_alert(
+    level: int = 10,
+    rule_id: str = "5710",
+    groups: list[str] | None = None,
+) -> dict:
     return {
         "timestamp": "2026-08-29T10:15:29.000+0000",
         "rule": {
@@ -128,7 +133,10 @@ def write_alert(tmp_path: Path, alert: dict, name: str = "alert.json") -> Path:
 
 
 def make_config(tmp_path: Path, **overrides: str) -> Any:
-    env = make_env(WAZUH_INTEGRATOR_SPOOL_DIR=str(tmp_path / "spool"), **overrides)
+    env = make_env(
+        WAZUH_INTEGRATOR_SPOOL_DIR=str(tmp_path / "spool"),
+        **overrides,
+    )
     return integrator.load_config(env)
 
 
@@ -146,7 +154,10 @@ def test_config_is_built_from_environment_only() -> None:
 
 
 def test_config_accepts_the_triage_api_url_compatibility_alias() -> None:
-    env = {"TRIAGE_API_URL": "http://triage-api:8000", "TRIAGE_INGEST_API_KEY": TEST_API_KEY}
+    env = {
+        "TRIAGE_API_URL": "http://triage-api:8000",
+        "TRIAGE_INGEST_API_KEY": TEST_API_KEY,
+    }
     assert integrator.load_config(env).ingest_url.endswith("/api/v1/alerts/ingest")
 
 
@@ -155,9 +166,18 @@ def test_config_accepts_the_triage_api_url_compatibility_alias() -> None:
     [
         {"TRIAGE_INGEST_API_KEY": TEST_API_KEY},  # no base URL
         {"TRIAGE_API_BASE_URL": "http://triage-api:8000"},  # no key
-        {"TRIAGE_API_BASE_URL": "not-a-url", "TRIAGE_INGEST_API_KEY": TEST_API_KEY},
-        {"TRIAGE_API_BASE_URL": "ftp://x/y", "TRIAGE_INGEST_API_KEY": TEST_API_KEY},
-        {"TRIAGE_API_BASE_URL": "http://triage-api:8000", "TRIAGE_INGEST_API_KEY": "   "},
+        {
+            "TRIAGE_API_BASE_URL": "not-a-url",
+            "TRIAGE_INGEST_API_KEY": TEST_API_KEY,
+        },
+        {
+            "TRIAGE_API_BASE_URL": "ftp://x/y",
+            "TRIAGE_INGEST_API_KEY": TEST_API_KEY,
+        },
+        {
+            "TRIAGE_API_BASE_URL": "http://triage-api:8000",
+            "TRIAGE_INGEST_API_KEY": "   ",
+        },
     ],
 )
 def test_config_rejects_missing_or_malformed_values(env: dict[str, str]) -> None:
@@ -221,7 +241,7 @@ def test_delivery_targets_the_documented_ingest_path(tmp_path: Path) -> None:
     config = make_config(tmp_path)
     sender = FakeSender([ok()])
     integrator.deliver(b"{}", config, sender=sender, sleep=lambda _: None)
-    assert sender.calls[0]["url"] == "http://triage-api:8000/api/v1/alerts/ingest"
+    assert sender.calls[0]["url"] == ("http://triage-api:8000/api/v1/alerts/ingest")
     assert sender.calls[0]["headers"]["X-API-Key"] == TEST_API_KEY
 
 
@@ -247,14 +267,20 @@ def test_forwarding_filter_excludes_rule_ids_and_groups() -> None:
     )
     assert integrator.should_forward(make_alert(rule_id="5710"), config)[1] == "excluded_rule_id"
     assert (
-        integrator.should_forward(make_alert(rule_id="9999", groups=["noisy"]), config)[1]
+        integrator.should_forward(
+            make_alert(rule_id="9999", groups=["noisy"]),
+            config,
+        )[1]
         == "excluded_group"
     )
     assert integrator.should_forward(make_alert(rule_id="9999"), config)[0] is True
 
 
-@pytest.mark.parametrize("alert", [{}, {"rule": "nope"}, {"rule": {"id": "1", "level": "high"}}])
-def test_forwarding_filter_rejects_malformed_alerts(alert: dict) -> None:
+@pytest.mark.parametrize(
+    "alert",
+    [{}, {"rule": "nope"}, {"rule": {"id": "1", "level": "high"}}],
+)
+def test_forwarding_filter_rejects_malformed_alert(alert: dict) -> None:
     config = integrator.load_config(make_env())
     assert integrator.should_forward(alert, config)[0] is False
 
@@ -286,7 +312,12 @@ def test_default_filter_matches_the_repository_sample_corpus() -> None:
 
 def test_successful_delivery_stops_after_one_attempt(tmp_path: Path) -> None:
     sender = FakeSender([ok(202)])
-    outcome = integrator.deliver(b"{}", make_config(tmp_path), sender=sender, sleep=lambda _: None)
+    outcome = integrator.deliver(
+        b"{}",
+        make_config(tmp_path),
+        sender=sender,
+        sleep=lambda _: None,
+    )
     assert outcome.delivered is True
     assert outcome.attempts == 1
 
@@ -294,7 +325,11 @@ def test_successful_delivery_stops_after_one_attempt(tmp_path: Path) -> None:
 def test_transient_failure_then_success_is_retried(tmp_path: Path) -> None:
     sender = FakeSender([transient(503), network_error(), ok(202)])
     outcome = integrator.deliver(
-        b"{}", make_config(tmp_path), sender=sender, sleep=lambda _: None, rng=random.Random(7)
+        b"{}",
+        make_config(tmp_path),
+        sender=sender,
+        sleep=lambda _: None,
+        rng=random.Random(7),
     )
     assert outcome.delivered is True
     assert outcome.attempts == 3
@@ -305,7 +340,10 @@ def test_permanent_failure_is_not_retried(tmp_path: Path) -> None:
     for status in (400, 401, 403, 413, 422):
         sender = FakeSender([integrator.SenderResponse(status=status)])
         outcome = integrator.deliver(
-            b"{}", make_config(tmp_path), sender=sender, sleep=lambda _: None
+            b"{}",
+            make_config(tmp_path),
+            sender=sender,
+            sleep=lambda _: None,
         )
         assert outcome.delivered is False
         assert outcome.retryable is False
@@ -316,7 +354,11 @@ def test_retry_budget_is_bounded(tmp_path: Path) -> None:
     sender = FakeSender([transient(503)])
     config = make_config(tmp_path, WAZUH_INTEGRATOR_MAX_ATTEMPTS="4")
     outcome = integrator.deliver(
-        b"{}", config, sender=sender, sleep=lambda _: None, rng=random.Random(1)
+        b"{}",
+        config,
+        sender=sender,
+        sleep=lambda _: None,
+        rng=random.Random(1),
     )
     assert outcome.delivered is False
     assert outcome.retryable is True
@@ -326,7 +368,9 @@ def test_retry_budget_is_bounded(tmp_path: Path) -> None:
 def test_transport_exception_never_escapes(tmp_path: Path) -> None:
     sender = FakeSender([RuntimeError("boom")])
     outcome = integrator.deliver(
-        b"{}", make_config(tmp_path, WAZUH_INTEGRATOR_MAX_ATTEMPTS="1"), sender=sender
+        b"{}",
+        make_config(tmp_path, WAZUH_INTEGRATOR_MAX_ATTEMPTS="1"),
+        sender=sender,
     )
     assert outcome.delivered is False
     assert outcome.retryable is True
@@ -337,9 +381,17 @@ def test_backoff_is_bounded_and_increasing(tmp_path: Path) -> None:
     delays: list[float] = []
     sender = FakeSender([transient(503)])
     config = make_config(
-        tmp_path, WAZUH_INTEGRATOR_MAX_ATTEMPTS="4", WAZUH_INTEGRATOR_BACKOFF_SECONDS="1"
+        tmp_path,
+        WAZUH_INTEGRATOR_MAX_ATTEMPTS="4",
+        WAZUH_INTEGRATOR_BACKOFF_SECONDS="1",
     )
-    integrator.deliver(b"{}", config, sender=sender, sleep=delays.append, rng=random.Random(11))
+    integrator.deliver(
+        b"{}",
+        config,
+        sender=sender,
+        sleep=delays.append,
+        rng=random.Random(11),
+    )
     assert len(delays) == 3
     assert all(0 < d <= 4.0 for d in delays)
 
@@ -353,10 +405,14 @@ def test_alert_is_buffered_when_the_api_is_unreachable(tmp_path: Path) -> None:
     alert_file = write_alert(tmp_path, make_alert())
     sender = FakeSender([network_error()])
     env = make_env(
-        WAZUH_INTEGRATOR_SPOOL_DIR=str(tmp_path / "spool"), WAZUH_INTEGRATOR_MAX_ATTEMPTS="2"
+        WAZUH_INTEGRATOR_SPOOL_DIR=str(tmp_path / "spool"),
+        WAZUH_INTEGRATOR_MAX_ATTEMPTS="2",
     )
     code = integrator.run(
-        ["custom-triage", str(alert_file)], env, sender=sender, sleep=lambda _: None
+        ["custom-triage", str(alert_file)],
+        env,
+        sender=sender,
+        sleep=lambda _: None,
     )
     assert code == 0  # never fails the manager
     spooled = list((tmp_path / "spool").glob("*.json"))
@@ -366,7 +422,8 @@ def test_alert_is_buffered_when_the_api_is_unreachable(tmp_path: Path) -> None:
 
 def test_buffered_alerts_are_replayed_on_the_next_invocation(tmp_path: Path) -> None:
     env = make_env(
-        WAZUH_INTEGRATOR_SPOOL_DIR=str(tmp_path / "spool"), WAZUH_INTEGRATOR_MAX_ATTEMPTS="1"
+        WAZUH_INTEGRATOR_SPOOL_DIR=str(tmp_path / "spool"),
+        WAZUH_INTEGRATOR_MAX_ATTEMPTS="1",
     )
     first = write_alert(tmp_path, make_alert(rule_id="1111"), "a.json")
     integrator.run(
@@ -380,7 +437,12 @@ def test_buffered_alerts_are_replayed_on_the_next_invocation(tmp_path: Path) -> 
     # API recovered: the buffered alert flushes before the new one.
     second = write_alert(tmp_path, make_alert(rule_id="2222"), "b.json")
     sender = FakeSender([ok(202)])
-    integrator.run(["custom-triage", str(second)], env, sender=sender, sleep=lambda _: None)
+    integrator.run(
+        ["custom-triage", str(second)],
+        env,
+        sender=sender,
+        sleep=lambda _: None,
+    )
 
     sent = [json.loads(call["body"])["rule"]["id"] for call in sender.calls]
     assert sent == ["1111", "2222"]
@@ -394,7 +456,10 @@ def test_spool_flush_preserves_chronological_order(tmp_path: Path) -> None:
         spool.enqueue(json.dumps({"n": index}).encode())
     sender = FakeSender([ok(202)])
     delivered, remaining = integrator.flush_spool(
-        spool, config, sender=sender, sleep=lambda _: None
+        spool,
+        config,
+        sender=sender,
+        sleep=lambda _: None,
     )
     assert delivered == 5
     assert remaining == 0
@@ -409,7 +474,10 @@ def test_spool_flush_stops_at_the_first_transient_failure(tmp_path: Path) -> Non
         spool.enqueue(json.dumps({"n": index}).encode())
     sender = FakeSender([ok(202), transient(503)])
     delivered, remaining = integrator.flush_spool(
-        spool, config, sender=sender, sleep=lambda _: None
+        spool,
+        config,
+        sender=sender,
+        sleep=lambda _: None,
     )
     assert delivered == 1
     assert remaining == 3
@@ -422,7 +490,10 @@ def test_spool_flush_discards_permanently_rejected_entries(tmp_path: Path) -> No
     spool.enqueue(b'{"bad": true}')
     sender = FakeSender([integrator.SenderResponse(status=422)])
     delivered, remaining = integrator.flush_spool(
-        spool, config, sender=sender, sleep=lambda _: None
+        spool,
+        config,
+        sender=sender,
+        sleep=lambda _: None,
     )
     assert (delivered, remaining) == (0, 0)
 
@@ -439,17 +510,19 @@ def test_spool_is_bounded_and_drops_oldest_entries(tmp_path: Path) -> None:
 def test_spool_prunes_entries_past_the_age_limit(tmp_path: Path) -> None:
     clock = {"now": 1_000_000.0}
     spool = integrator.Spool(
-        tmp_path / "spool", max_entries=10, max_age_seconds=60, now=lambda: clock["now"]
+        tmp_path / "spool",
+        max_entries=10,
+        max_age_seconds=60,
+        now=lambda: clock["now"],
     )
     spool.enqueue(b"{}")
     old = spool.entries()[0]
-    import os
-
     os.utime(old, (clock["now"] - 600, clock["now"] - 600))
     assert spool.prune() == 1
     assert spool.entries() == []
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="Unix permission bits are POSIX-specific")
 def test_spool_directory_and_files_are_owner_only(tmp_path: Path) -> None:
     """Spooled alert bodies must not be world-readable."""
     spool = integrator.Spool(tmp_path / "spool")
@@ -477,7 +550,14 @@ def test_run_forwards_a_real_sample_alert(tmp_path: Path) -> None:
     alert_file = write_alert(tmp_path, sample)
     sender = FakeSender([ok(202)])
     env = make_env(WAZUH_INTEGRATOR_SPOOL_DIR=str(tmp_path / "spool"))
-    assert integrator.run(["custom-triage", str(alert_file)], env, sender=sender) == 0
+    assert (
+        integrator.run(
+            ["custom-triage", str(alert_file)],
+            env,
+            sender=sender,
+        )
+        == 0
+    )
     assert json.loads(sender.calls[0]["body"]) == sample
 
 
@@ -487,7 +567,12 @@ def test_run_ignores_positional_key_and_url_arguments(tmp_path: Path) -> None:
     sender = FakeSender([ok(202)])
     env = make_env(WAZUH_INTEGRATOR_SPOOL_DIR=str(tmp_path / "spool"))
     integrator.run(
-        ["custom-triage", str(alert_file), "argv-key-should-be-ignored", "http://evil.invalid/x"],
+        [
+            "custom-triage",
+            str(alert_file),
+            "argv-key-should-be-ignored",
+            "http://evil.invalid/x",
+        ],
         env,
         sender=sender,
     )
@@ -498,7 +583,11 @@ def test_run_ignores_positional_key_and_url_arguments(tmp_path: Path) -> None:
 def test_run_returns_config_error_code_without_sending(tmp_path: Path) -> None:
     alert_file = write_alert(tmp_path, make_alert())
     sender = FakeSender([ok(202)])
-    code = integrator.run(["custom-triage", str(alert_file)], {}, sender=sender)
+    code = integrator.run(
+        ["custom-triage", str(alert_file)],
+        {},
+        sender=sender,
+    )
     assert code == integrator.EXIT_CONFIG_ERROR
     assert sender.calls == []
 
@@ -508,12 +597,22 @@ def test_run_requires_an_alert_file_argument() -> None:
 
 
 @pytest.mark.parametrize("content", ["not json", "[1,2,3]", ""])
-def test_run_survives_unreadable_alert_payloads(tmp_path: Path, content: str) -> None:
+def test_run_survives_unreadable_alert_payloads(
+    tmp_path: Path,
+    content: str,
+) -> None:
     path = tmp_path / "bad.json"
     path.write_text(content, encoding="utf-8")
     sender = FakeSender([ok(202)])
     env = make_env(WAZUH_INTEGRATOR_SPOOL_DIR=str(tmp_path / "spool"))
-    assert integrator.run(["custom-triage", str(path)], env, sender=sender) == 0
+    assert (
+        integrator.run(
+            ["custom-triage", str(path)],
+            env,
+            sender=sender,
+        )
+        == 0
+    )
     assert sender.calls == []
 
 
@@ -522,7 +621,14 @@ def test_run_rejects_oversized_alert_files(tmp_path: Path) -> None:
     path.write_bytes(b"{" + b"a" * (integrator.MAX_ALERT_BYTES + 10) + b"}")
     sender = FakeSender([ok(202)])
     env = make_env(WAZUH_INTEGRATOR_SPOOL_DIR=str(tmp_path / "spool"))
-    assert integrator.run(["custom-triage", str(path)], env, sender=sender) == 0
+    assert (
+        integrator.run(
+            ["custom-triage", str(path)],
+            env,
+            sender=sender,
+        )
+        == 0
+    )
     assert sender.calls == []
 
 
@@ -530,7 +636,14 @@ def test_run_does_not_forward_filtered_alerts(tmp_path: Path) -> None:
     alert_file = write_alert(tmp_path, make_alert(level=2))
     sender = FakeSender([ok(202)])
     env = make_env(WAZUH_INTEGRATOR_SPOOL_DIR=str(tmp_path / "spool"))
-    assert integrator.run(["custom-triage", str(alert_file)], env, sender=sender) == 0
+    assert (
+        integrator.run(
+            ["custom-triage", str(alert_file)],
+            env,
+            sender=sender,
+        )
+        == 0
+    )
     assert sender.calls == []
     assert list((tmp_path / "spool").glob("*.json")) == []
 
@@ -540,7 +653,14 @@ def test_run_always_exits_zero_on_permanent_rejection(tmp_path: Path) -> None:
     alert_file = write_alert(tmp_path, make_alert())
     sender = FakeSender([integrator.SenderResponse(status=401)])
     env = make_env(WAZUH_INTEGRATOR_SPOOL_DIR=str(tmp_path / "spool"))
-    assert integrator.run(["custom-triage", str(alert_file)], env, sender=sender) == 0
+    assert (
+        integrator.run(
+            ["custom-triage", str(alert_file)],
+            env,
+            sender=sender,
+        )
+        == 0
+    )
     assert list((tmp_path / "spool").glob("*.json")) == []
 
 
@@ -550,14 +670,19 @@ def test_run_always_exits_zero_on_permanent_rejection(tmp_path: Path) -> None:
 
 
 def test_logs_never_contain_the_api_key_or_alert_body(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     alert = make_alert()
     alert["full_log"] = "Failed password for root from 203.0.113.42 port 4444 ssh2"
     alert_file = write_alert(tmp_path, alert)
     env = make_env(WAZUH_INTEGRATOR_SPOOL_DIR=str(tmp_path / "spool"))
 
-    integrator.run(["custom-triage", str(alert_file)], env, sender=FakeSender([ok(202)]))
+    integrator.run(
+        ["custom-triage", str(alert_file)],
+        env,
+        sender=FakeSender([ok(202)]),
+    )
     integrator.run(
         ["custom-triage", str(alert_file)],
         env,
@@ -589,7 +714,11 @@ def test_logs_are_written_to_the_integrations_log_file(tmp_path: Path) -> None:
         WAZUH_INTEGRATOR_SPOOL_DIR=str(tmp_path / "spool"),
         WAZUH_INTEGRATOR_LOG_FILE=str(log_file),
     )
-    integrator.run(["custom-triage", str(alert_file)], env, sender=FakeSender([ok(202)]))
+    integrator.run(
+        ["custom-triage", str(alert_file)],
+        env,
+        sender=FakeSender([ok(202)]),
+    )
 
     assert log_file.exists(), "integrator must log to integrations.log"
     records = [json.loads(line) for line in log_file.read_text().strip().splitlines()]
@@ -605,20 +734,46 @@ def test_unwritable_log_file_never_costs_an_alert(tmp_path: Path) -> None:
         WAZUH_INTEGRATOR_LOG_FILE=str(tmp_path / "nonexistent-dir" / "x.log"),
     )
     alert_file = write_alert(tmp_path, make_alert())
-    assert integrator.run(["custom-triage", str(alert_file)], env, sender=sender) == 0
+    assert (
+        integrator.run(
+            ["custom-triage", str(alert_file)],
+            env,
+            sender=sender,
+        )
+        == 0
+    )
     assert len(sender.calls) == 1
 
 
-def test_log_helper_drops_credential_shaped_fields(capsys: pytest.CaptureFixture[str]) -> None:
-    integrator.log("t", api_key="s3cret", token="s3cret", password="s3cret", rule_id="5710")
+def test_log_helper_drops_credential_shaped_fields(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    integrator.log(
+        "t",
+        api_key="s3cret",
+        token="s3cret",
+        password="s3cret",
+        rule_id="5710",
+    )
     record = json.loads(capsys.readouterr().err.strip())
-    assert record == {"component": "wazuh_integrator", "event": "t", "rule_id": "5710"}
+    assert record == {
+        "component": "wazuh_integrator",
+        "event": "t",
+        "rule_id": "5710",
+    }
 
 
-def test_logged_endpoint_is_sanitized(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+def test_logged_endpoint_is_sanitized(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
     alert_file = write_alert(tmp_path, make_alert())
     env = make_env(WAZUH_INTEGRATOR_SPOOL_DIR=str(tmp_path / "spool"))
-    integrator.run(["custom-triage", str(alert_file)], env, sender=FakeSender([ok(202)]))
+    integrator.run(
+        ["custom-triage", str(alert_file)],
+        env,
+        sender=FakeSender([ok(202)]),
+    )
     err = capsys.readouterr().err
     assert "http://triage-api:8000/api/v1/alerts/ingest" in err
     assert "@" not in err
@@ -629,6 +784,7 @@ def test_logged_endpoint_is_sanitized(tmp_path: Path, capsys: pytest.CaptureFixt
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="Unix permission bits are POSIX-specific")
 def test_integrator_files_exist_and_wrapper_is_executable() -> None:
     assert INTEGRATOR_PY.is_file()
     assert INTEGRATOR_SH.is_file()
@@ -639,7 +795,12 @@ def test_integrator_files_exist_and_wrapper_is_executable() -> None:
 def test_integrator_uses_only_the_standard_library() -> None:
     """The Wazuh image has no project dependencies installed."""
     source = INTEGRATOR_PY.read_text(encoding="utf-8")
-    for banned in ("import httpx", "import requests", "import pydantic", "from soc_triage"):
+    for banned in (
+        "import httpx",
+        "import requests",
+        "import pydantic",
+        "from soc_triage",
+    ):
         assert banned not in source
 
 
@@ -650,7 +811,12 @@ def test_integrator_sources_contain_no_hardcoded_secrets() -> None:
         # No `KEY = "value"` style literal assignments of credentials.
         assert not any(
             marker in text.lower()
-            for marker in ('api_key = "', "api_key = '", 'password = "', 'token = "')
+            for marker in (
+                'api_key = "',
+                "api_key = '",
+                'password = "',
+                'token = "',
+            )
         )
 
 
@@ -693,7 +859,9 @@ def test_ossec_conf_is_a_complete_config_with_the_integration() -> None:
     for required in ("global", "remote", "ruleset", "auth", "syscheck"):
         assert required in tags, f"ossec.conf is missing <{required}> — is it a fragment?"
 
-    integrations = [i for section in sections for i in section.findall("integration")]
+    integrations = [
+        integration for section in sections for integration in section.findall("integration")
+    ]
     assert len(integrations) == 1
     integration = integrations[0]
     # Wazuh requires custom integrations to be named custom-*, matching a file
@@ -714,7 +882,9 @@ def test_ossec_conf_defines_no_active_response() -> None:
     text = OSSEC_CONF.read_text(encoding="utf-8")
     root = ET.fromstring(f"<wrapper>{text[text.index('-->') + 3 :]}</wrapper>")
     active = [
-        a for section in root.findall("ossec_config") for a in section.findall("active-response")
+        action
+        for section in root.findall("ossec_config")
+        for action in section.findall("active-response")
     ]
     assert active == [], "no active-response may be enabled"
 
@@ -727,7 +897,7 @@ def test_ossec_conf_disables_the_indexer_we_do_not_run() -> None:
     root = ET.fromstring(f"<wrapper>{text[text.index('-->') + 3 :]}</wrapper>")
     sections = root.findall("ossec_config")
     for tag in ("indexer", "vulnerability-detection"):
-        blocks = [b for section in sections for b in section.findall(tag)]
+        blocks = [block for section in sections for block in section.findall(tag)]
         assert blocks, tag
         for block in blocks:
             assert block.findtext("enabled") == "no", tag
@@ -740,6 +910,7 @@ def test_ossec_conf_carries_no_hardcoded_cluster_key() -> None:
     assert not re.search(r"<key>[0-9a-f]{16,}</key>", text)
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="Unix permission bits are POSIX-specific")
 def test_install_script_places_integrator_where_integratord_looks() -> None:
     """integratord resolves `integrations/<name>` relative to /var/ossec.
 
@@ -772,12 +943,12 @@ def test_wazuh_scripts_have_no_crlf() -> None:
     execution). This test asserts all checked-in executable Wazuh scripts
     contain LF only.
     """
-    import pathlib
     scripts = [
         Path("wazuh/integrator/custom-triage"),
         Path("wazuh/integrator/custom-triage.py"),
         Path("wazuh/entrypoint-scripts/10-install-triage-integration.sh"),
     ]
+
     for script_path in scripts:
         data = script_path.read_bytes()
         assert b"\r\n" not in data, f"{script_path} contains CRLF"

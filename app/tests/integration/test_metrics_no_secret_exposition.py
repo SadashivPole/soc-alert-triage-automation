@@ -1,4 +1,4 @@
-"""Phase 3.7 Task D10 — no-secret exposition guards (synthetic canaries).
+"""Phase 3.7 Task D10 â€” no-secret exposition guards (synthetic canaries).
 
 The security guard for the approved Phase 3.7 metrics surface. Synthetic
 secret canaries in realistic locations (environment/config values, API-key
@@ -6,8 +6,8 @@ like, N8N token like, metrics scrape token, DB URL/password-like, webhook
 URL-like) plus synthetic alert data canaries (alert/incident/wazuh IDs,
 IPv4, domain, URL, MD5/SHA1/SHA256, email, username, file path, full_log,
 provenance, provider exception/error text) are pushed through the real
-pipeline — ingest, duplicate/repeated ingest, enrichment, scoring/decision,
-notification, feedback, incident transition, sweeper — and through repeated
+pipeline â€” ingest, duplicate/repeated ingest, enrichment, scoring/decision,
+notification, feedback, incident transition, sweeper â€” and through repeated
 ``GET /metrics`` scrapes. The guard asserts that none of the sensitive
 values ever reaches the exposition, the registry label sets, or an
 unexpected family.
@@ -138,7 +138,7 @@ def _canary_payload(base: dict[str, Any], *, event_id: str) -> dict[str, Any]:
     payload["data"]["file_path"] = FILE_PATH_CANARY
     payload["data"]["provenance"] = PROVENANCE_CANARY
     payload["full_log"] = FULL_LOG_CANARY
-    # Extra (schema allow) fields — extractor never sees them as labels.
+    # Extra (schema allow) fields â€” extractor never sees them as labels.
     payload["d10_provenance"] = PROVENANCE_CANARY
     payload["d10_provider_context"] = {"trace": PROVIDER_ERROR_CANARY}
     return payload
@@ -166,7 +166,7 @@ class _FakeProvider:
         context: EnrichmentContext,  # noqa: ARG002 - part of the provider contract
     ) -> ProviderEnrichment:
         if self._fail:
-            # Realistic provider failure text — must never become a label.
+            # Realistic provider failure text â€” must never become a label.
             raise RuntimeError(PROVIDER_ERROR_CANARY)
         return ProviderEnrichment(
             provider=self._name,
@@ -211,6 +211,7 @@ def _canary_app(tmp_path: Path) -> Any:
             triage_db_url=(f"sqlite:///{tmp_path / 'd10.db'}?password={DB_PASSWORD_CANARY}"),
             triage_ingest_api_key=API_KEY_CANARY,
             n8n_callback_token=CALLBACK_TOKEN_CANARY,
+            n8n_webhook_token="",
             metrics_scrape_token=FETCH_TOKEN_CANARY,
             virustotal_api_key=VT_KEY_CANARY,
             n8n_webhook_url=WEBHOOK_URL_CANARY,
@@ -229,7 +230,7 @@ def _ingest(client: TestClient, payload: dict[str, Any], **kwargs: Any):
 
 
 def _samples(registry) -> dict[str, dict[tuple[str, tuple[tuple[str, str], ...]], float]]:
-    """Map family → {(sample name, sorted label pairs): value} for a registry."""
+    """Map family -> {(sample name, sorted label pairs): value} for a registry."""
     collected: dict[str, dict[tuple[str, tuple[tuple[str, str], ...]], float]] = {}
     for collector in registry.collect():
         samples: dict[tuple[str, tuple[tuple[str, str], ...]], float] = {}
@@ -252,7 +253,7 @@ def _run_canary_pipeline(client: TestClient) -> str:
     assert duplicate.status_code == 200
     assert duplicate.json()["duplicate"] is True
 
-    # High alert → incident → transition → feedback → auto-close.
+    # High alert -> incident -> transition -> feedback -> auto-close.
     high_payload = _canary_payload(
         _load_sample("04_wazuh_malware_hash_virustotal.json"),
         event_id="1770000000.900004",
@@ -352,7 +353,7 @@ def _assert_canary_free(body: str, context: str) -> None:
 
 
 # ---------------------------------------------------------------------------
-# A. No-secret exposition — full pipeline with canaries, authenticated scrape
+# A. No-secret exposition â€” full pipeline with canaries, authenticated scrape
 # ---------------------------------------------------------------------------
 
 

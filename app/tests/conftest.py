@@ -56,6 +56,7 @@ def make_canonical_alert(
     blocks for the "missing optional fields" contract.
     """
     now = received_at or datetime(2026, 8, 29, 10, 15, 0, tzinfo=UTC)
+
     dedupe = None
     if with_dedupe:
         dedupe = CanonicalDedupe(
@@ -65,9 +66,15 @@ def make_canonical_alert(
             last_seen=now + timedelta(seconds=span_seconds),
             event_identity=f"wazuh:test:{rule_id}:001",
         )
+
     asset = None
     if with_asset:
-        asset = CanonicalAsset(name="host-001", tier=asset_tier, owner=asset_owner)
+        asset = CanonicalAsset(
+            name="host-001",
+            tier=asset_tier,
+            owner=asset_owner,
+        )
+
     return CanonicalAlert(
         alert_id=alert_id or uuid4(),
         source="wazuh",
@@ -80,7 +87,11 @@ def make_canonical_alert(
                 groups=list(groups),
                 mitre=mitre or {},
             ),
-            agent=CanonicalAgent(id="001", name="host-001", ip="10.0.1.10"),
+            agent=CanonicalAgent(
+                id="001",
+                name="host-001",
+                ip="10.0.1.10",
+            ),
             location="/var/log/auth.log",
         ),
         dedupe=dedupe,
@@ -90,12 +101,23 @@ def make_canonical_alert(
     )
 
 
-def make_ioc(value: str, *, type: IOCType = IOCType.IPV4, allowlisted: bool = False) -> IOC:
+def make_ioc(
+    value: str,
+    *,
+    type: IOCType = IOCType.IPV4,
+    allowlisted: bool = False,
+) -> IOC:
     """Build an indicator, optionally marked allowlisted."""
     enrichment: dict = {}
+
     if allowlisted:
         enrichment = {"allowlist": {"matched": True}}
-    return IOC(type=type, value=value, enrichment=enrichment)
+
+    return IOC(
+        type=type,
+        value=value,
+        enrichment=enrichment,
+    )
 
 
 @pytest.fixture
@@ -115,6 +137,8 @@ def settings(db_url: str) -> Settings:
         triage_db_url=db_url,
         triage_ingest_api_key=TEST_INGEST_KEY,
         n8n_callback_token=TEST_CALLBACK_TOKEN,
+        n8n_webhook_token="",
+        n8n_webhook_url="",
     )
 
 

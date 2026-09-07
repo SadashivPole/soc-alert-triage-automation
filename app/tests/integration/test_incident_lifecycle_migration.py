@@ -161,6 +161,9 @@ def _settings(db_url: str) -> Settings:
         triage_db_url=db_url,
         triage_ingest_api_key=TEST_INGEST_KEY,
         n8n_callback_token=TEST_CALLBACK_TOKEN,
+        n8n_webhook_token="",
+        n8n_webhook_url="",
+        incident_auto_close_ttl_seconds=3650 * 24 * 3600,
     )
 
 
