@@ -108,6 +108,7 @@ class FakeSender:
                 "verify_tls": verify_tls,
             }
         )
+
         response = self._responses[min(len(self.calls) - 1, len(self._responses) - 1)]
         if isinstance(response, Exception):
             raise response
@@ -683,6 +684,7 @@ def test_logs_never_contain_the_api_key_or_alert_body(
         env,
         sender=FakeSender([ok(202)]),
     )
+
     integrator.run(
         ["custom-triage", str(alert_file)],
         env,
@@ -944,9 +946,9 @@ def test_wazuh_scripts_have_no_crlf() -> None:
     contain LF only.
     """
     scripts = [
-        Path("wazuh/integrator/custom-triage"),
-        Path("wazuh/integrator/custom-triage.py"),
-        Path("wazuh/entrypoint-scripts/10-install-triage-integration.sh"),
+        REPO_ROOT / "wazuh" / "integrator" / "custom-triage",
+        REPO_ROOT / "wazuh" / "integrator" / "custom-triage.py",
+        REPO_ROOT / "wazuh" / "entrypoint-scripts" / "10-install-triage-integration.sh",
     ]
 
     for script_path in scripts:
