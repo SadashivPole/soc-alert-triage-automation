@@ -223,6 +223,81 @@ services:
           cpus: "1.0"
           memory: 512M
 
+  # ---------------------------------------------------------------------------
+  # Phase 4.1 — optional `full` profile: the real Wazuh manager.
+  #
+  # `docker compose --profile full up` adds ONLY wazuh-manager. It is strictly
+  # additive: no default service depends on it, and with the profile disabled
+  # the stack keeps running in `sim` mode against docs/sample-alerts/
+  # (zero-external fallback preserved, ARCHITECTURE.md §13).
+  #
+  # Defensive-only: the manager is a detection/forwarding source. No
+  # containment/response configuration is mounted here (SECURITY.md 1).
+  # ---------------------------------------------------------------------------
+  wazuh-manager:
+    image: wazuh/wazuh-manager:4.9.2
+    container_name: soc-wazuh-manager
+    restart: unless-stopped
+    profiles: ["full"]
+    ports:
+      # Agent enrollment/reporting only (ARCHITECTURE.md §13 table).
+      # The Wazuh API (55000) is NOT published: it stays internal to soc-core.
+      - "1514:1514/tcp"
+      - "1515:1515/tcp"
+    environment:
+      # Wazuh's own bootstrap credentials — no defaults, no committed values.
+      INDEXER_URL: ${WAZUH_INDEXER_URL:-}
+      API_USERNAME: ${WAZUH_API_USERNAME:?Set WAZUH_API_USERNAME in .env}
+      API_PASSWORD: ${WAZUH_API_PASSWORD:?Set WAZUH_API_PASSWORD in .env}
+      # Consumed by wazuh/integrator/custom-triage: the ingest contract is the
+      # existing X-API-Key header, and the key only ever exists in the
+      # environment (never in ossec.conf, never in the image).
+      TRIAGE_API_BASE_URL: ${TRIAGE_API_BASE_URL:-http://triage-api:8000}
+      TRIAGE_INGEST_API_KEY: ${TRIAGE_INGEST_API_KEY:?Set TRIAGE_INGEST_API_KEY in .env}
+      WAZUH_INTEGRATOR_MIN_LEVEL: ${WAZUH_INTEGRATOR_MIN_LEVEL:-5}
+      WAZUH_INTEGRATOR_EXCLUDED_RULE_IDS: ${WAZUH_INTEGRATOR_EXCLUDED_RULE_IDS:-}
+      WAZUH_INTEGRATOR_EXCLUDED_GROUPS: ${WAZUH_INTEGRATOR_EXCLUDED_GROUPS:-}
+      WAZUH_INTEGRATOR_TIMEOUT_SECONDS: ${WAZUH_INTEGRATOR_TIMEOUT_SECONDS:-5}
+      WAZUH_INTEGRATOR_MAX_ATTEMPTS: ${WAZUH_INTEGRATOR_MAX_ATTEMPTS:-3}
+      WAZUH_INTEGRATOR_SPOOL_DIR: ${WAZUH_INTEGRATOR_SPOOL_DIR:-/var/ossec/logs/triage-spool}
+      WAZUH_INTEGRATOR_SPOOL_MAX_ENTRIES: ${WAZUH_INTEGRATOR_SPOOL_MAX_ENTRIES:-1000}
+      WAZUH_INTEGRATOR_VERIFY_TLS: ${WAZUH_INTEGRATOR_VERIFY_TLS:-1}
+    volumes:
+      # Complete ossec.conf. The image copies /wazuh-config-mount/<path> over
+      # /var/ossec/<path> at start (cont-init.d/0-wazuh-init). Wazuh has NO
+      # ossec.conf.d include mechanism, so this must be the whole file.
+      - ./wazuh/config/ossec.conf:/wazuh-config-mount/etc/ossec.conf:ro
+      # Integrator sources (read-only; this repo stays the source of truth).
+      # The entrypoint script installs them into /var/ossec/integrations with
+      # the root:wazuh 750 ownership Wazuh requires.
+      - ./wazuh/integrator:/triage-integration:ro
+      - ./wazuh/entrypoint-scripts:/entrypoint-scripts:ro
+      - wazuh-manager-etc:/var/ossec/etc
+      - wazuh-manager-logs:/var/ossec/logs
+      - wazuh-manager-queue:/var/ossec/queue
+    networks:
+      # soc-core only: reaches triage-api:8000 internally. Not on soc-edge —
+      # the Wazuh API is never host-visible.
+      - soc-core
+    healthcheck:
+      test: ["CMD-SHELL", "/var/ossec/bin/wazuh-control status | grep -q 'wazuh-analysisd is running'"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+    security_opt:
+      - no-new-privileges:true
+    ulimits:
+      memlock: -1
+      nofile:
+        soft: 655360
+        hard: 655360
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 2G
+
 networks:
   soc-core:
     driver: bridge
@@ -237,4 +312,12 @@ volumes:
   prometheus-data:
     driver: local
   grafana-data:
+    driver: local
+  # Phase 4.1 — `full` profile state only (additive; never required by the
+  # default `sim` stack).
+  wazuh-manager-etc:
+    driver: local
+  wazuh-manager-logs:
+    driver: local
+  wazuh-manager-queue:
     driver: local

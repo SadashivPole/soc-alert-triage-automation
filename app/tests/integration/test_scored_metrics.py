@@ -205,6 +205,8 @@ def _twin_app(tmp_path: Path, *, metrics_enabled: bool):
         triage_db_url=f"sqlite:///{tmp_path / 'twin.db'}",
         triage_ingest_api_key=TEST_INGEST_KEY,
         n8n_callback_token="test-callback-token-not-a-real-secret",
+        n8n_webhook_token="",
+        n8n_webhook_url="",
         metrics_enabled=metrics_enabled,
     )
     return create_app(settings=settings)

@@ -6,6 +6,81 @@ semantic (`v0.1.0` targeted at the end of Phase 1).
 
 ## [Unreleased]
 
+### Added — Phase 4.1/4.2: real Wazuh integration (`full` profile + `custom-triage` integrator)
+
+- **`full` compose profile (4.1).** New optional `wazuh-manager` service
+  (`wazuh/wazuh-manager:4.9.2`, pinned) on `soc-core` only, publishing **1514/1515 for
+  agent enrollment/reporting only** (the Wazuh API on 55000 is never host-visible).
+  Strictly additive: no default service depends on it, `sim` mode and the zero-external
+  fallback are unchanged. Credentials come from `${VAR:?}` env references with no
+  committed defaults; repo-sourced mounts are read-only; `no-new-privileges`,
+  healthcheck, and 2 CPU / 2 GB limits applied. No active-response configuration exists
+  in the profile.
+- **`wazuh/integrator/custom-triage` (4.2).** Standard-library-only forwarder
+  (`custom-triage` shell wrapper + `custom-triage.py`) that filters alerts by rule level
+  and optional rule-id/group exclusions, then POSTs the *unmodified* Wazuh alert JSON to
+  the existing `POST /api/v1/alerts/ingest` endpoint using the unchanged `X-API-Key`
+  contract. All URLs and credentials are read from the environment — the positional
+  `api_key`/`hook_url` arguments Wazuh passes are ignored as a secret source because
+  `ossec.conf` is world-readable in the container.
+- **Local buffering & retry.** Transient failures (network errors, `408/429/5xx`) retry
+  with capped exponential backoff + jitter, then spool to a bounded on-disk FIFO
+  (0700 directory, 0600 write-then-rename entries) drained oldest-first on the next
+  invocation. Bounded by entry count *and* age; permanent `4xx` rejections are dropped
+  rather than replayed forever. The integrator always exits `0`, so triage-side problems
+  can never block or crash the Wazuh manager.
+- **Manager configuration.** `wazuh/config/ossec.conf` — a *complete*, secret-free
+  manager config derived from the official wazuh-docker v4.9.2 single-node template,
+  carrying the `custom-triage` `<integration>` block (the `api_key` element holds an
+  `env:` marker, not a value), with `<indexer>`/`<vulnerability-detection>` disabled
+  (this stack runs no indexer) and upstream's hardcoded cluster key replaced by the
+  entrypoint's substitution marker.
+- **Startup installer.** `wazuh/entrypoint-scripts/10-install-triage-integration.sh`
+  installs the integrator into `/var/ossec/integrations/` as `root:wazuh` mode `750`
+  (Wazuh's documented requirement) and pre-creates the log file and 0700 spool, via
+  the image's supported `/entrypoint-scripts/*.sh` hook.
+
+### Fixed — Phase 4.1/4.2 wiring defects found by auditing the pinned image source
+
+Three defects that would have prevented the integration from working at all were
+found by reading the `wazuh/wazuh-manager:4.9.2` image and Wazuh 4.9.2 sources
+(live Docker validation was not possible in the build environment):
+
+- **`ossec.conf.d` fragment never loaded.** Wazuh has no `ossec.conf.d` include
+  mechanism; the image copies `/wazuh-config-mount/<path>` over `/var/ossec/<path>`,
+  so the fragment was written to a path Wazuh never reads and the integration would
+  have been silently inactive. Now a complete `ossec.conf` is mounted at
+  `/wazuh-config-mount/etc/ossec.conf`.
+- **Integrator installed at an unusable path with wrong ownership.**
+  `wazuh-integratord` resolves `integrations/<name>` relative to `/var/ossec` and
+  requires `root:wazuh` `750`; the previous read-only bind mount at
+  `/var/ossec/integrations/triage` required an undocumented manual symlink and
+  carried host ownership. Now installed by the entrypoint hook.
+- **All integrator logs were discarded.** `wazuh-integratord` appends
+  `> /dev/null 2>&1` to the command unless the manager runs at debug level
+  (`src/os_integrator/integrator.c`), so the stderr-only logger produced no
+  observable output in a normal deployment. The integrator now appends structured
+  JSON to `/var/ossec/logs/integrations.log` (still mirrored to stderr), matching
+  the convention of Wazuh's own shipped integrations, with the same secret-free
+  allow-listed fields. New `WAZUH_INTEGRATOR_LOG_FILE` setting.
+- **Docs.** `wazuh/README.md` rewritten with the integration flow, the full environment
+  variable table, buffering/retry semantics, `full`-profile lab setup, Wazuh **agent
+  enrollment** instructions, safe test-detection recipes, troubleshooting, and security
+  notes. `ARCHITECTURE.md` §13 documents the `full` profile and integrator design;
+  `.env.example` documents every new `WAZUH_INTEGRATOR_*` variable (placeholders only).
+- **Tests (fakes only — no live Wazuh, no network).** New
+  `app/tests/unit/test_wazuh_integrator.py` (59 tests: env-only config and validation,
+  auth contract, filters, retry vs permanent-failure semantics, spool bounding/ordering/
+  permissions/pruning, entrypoint resilience, log hygiene, defensive-scope guards) and
+  `app/tests/integration/test_wazuh_integrator_pipeline.py` (integrator driven against
+  the real FastAPI ingest route: acceptance, 401 rejection, idempotent duplicates,
+  outage→buffer→replay with no loss, payload fidelity). `test_docker_lab_config.py`
+  extended with `full`-profile guards (pinning, gating, port exposure, env-only
+  credentials, read-only mounts, no secrets, no active-response).
+- **Security posture unchanged:** no autonomous containment, no destructive response, no
+  secrets committed, no weakening of auth/CORS/audit/rate limits/validation, and no new
+  Prometheus metrics or sensitive log fields.
+
 ### Added — Phase 3.7: Prometheus `/metrics` + optional observability profile (D2–D11)
 
 - **Metrics core (D2–D3).** New `app/src/soc_triage/core/metrics.py`: an app-scoped

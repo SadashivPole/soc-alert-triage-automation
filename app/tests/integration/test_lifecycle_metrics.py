@@ -128,6 +128,7 @@ def _twin_app(tmp_path: Path, *, metrics_enabled: bool):
         triage_db_url=f"sqlite:///{tmp_path / 'twin.db'}",
         triage_ingest_api_key=TEST_INGEST_KEY,
         n8n_callback_token=TEST_CALLBACK_TOKEN,
+        n8n_webhook_token="",
         metrics_enabled=metrics_enabled,
     )
     return create_app(settings=settings)
@@ -556,6 +557,7 @@ def test_sweeper_pass_completed_recorded_exactly_once_per_pass(client) -> None:
         soc_env="test",
         triage_ingest_api_key=TEST_INGEST_KEY,
         n8n_callback_token=TEST_CALLBACK_TOKEN,
+        n8n_webhook_token="",
         incident_sweeper_interval_seconds=1,
         incident_auto_close_ttl_seconds=60,
     )
@@ -573,6 +575,7 @@ def test_sweeper_pass_failed_recorded_exactly_once_per_pass() -> None:
             soc_env="test",
             triage_ingest_api_key=TEST_INGEST_KEY,
             n8n_callback_token=TEST_CALLBACK_TOKEN,
+            n8n_webhook_token="",
             incident_sweeper_interval_seconds=1,
             incident_auto_close_ttl_seconds=60,
         )

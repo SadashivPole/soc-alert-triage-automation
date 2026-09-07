@@ -297,9 +297,18 @@ def _observability_files() -> dict[str, str]:
 def test_observability_profile_gates_only_the_two_new_services() -> None:
     """prometheus/grafana are profile-gated; default services are not."""
     compose = _compose()
-    assert set(compose["services"]) == {"triage-api", "n8n", "mailpit", "prometheus", "grafana"}
+    assert set(compose["services"]) == {
+        "triage-api",
+        "n8n",
+        "mailpit",
+        "prometheus",
+        "grafana",
+        # Phase 4.1: the `full` profile is separately gated and asserted below.
+        "wazuh-manager",
+    }
     for name in ("prometheus", "grafana"):
         assert compose["services"][name].get("profiles") == ["observability"], name
+    assert compose["services"]["wazuh-manager"].get("profiles") == ["full"]
     for name in ("triage-api", "n8n", "mailpit"):
         assert "profiles" not in compose["services"][name], name
 
@@ -365,7 +374,7 @@ def test_observability_services_are_not_required_dependencies() -> None:
     for name, facts in DEFAULT_SERVICE_FACTS.items():
         service = compose["services"][name]
         depends_on = service.get("depends_on", {})
-        assert not set(depends_on) & {"prometheus", "grafana"}, (name, depends_on)
+        assert not set(depends_on) & {"prometheus", "grafana", "wazuh-manager"}, (name, depends_on)
         assert service.get("ports") == facts["ports"], name
         assert service.get("networks") == facts["networks"], name
         assert "profiles" not in service, name
@@ -373,7 +382,14 @@ def test_observability_services_are_not_required_dependencies() -> None:
     assert set(compose["networks"]) == {"soc-core", "soc-edge"}
     for network in compose["networks"].values():
         assert network == {"driver": "bridge"}
-    assert set(compose["volumes"]) == {"n8n-data", "prometheus-data", "grafana-data"}
+    assert set(compose["volumes"]) == {
+        "n8n-data",
+        "prometheus-data",
+        "grafana-data",
+        "wazuh-manager-etc",
+        "wazuh-manager-logs",
+        "wazuh-manager-queue",
+    }
 
 
 def test_observability_healthchecks_and_resource_limits_exist() -> None:
@@ -490,3 +506,143 @@ def test_dashboard_queries_introduce_no_high_cardinality_labels() -> None:
             assert not names & PROHIBITED_DASHBOARD_LABELS, (expr, names)
         for prohibited in PROHIBITED_DASHBOARD_LABELS - {"id"}:
             assert not re.search(rf"\b{prohibited}\b", expr), (expr, prohibited)
+
+
+# ---------------------------------------------------------------------------
+# Phase 4.1 — optional `full` profile (real Wazuh manager)
+# ---------------------------------------------------------------------------
+
+WAZUH_INTEGRATOR_DIR = REPO_ROOT / "wazuh" / "integrator"
+WAZUH_OSSEC_CONF = REPO_ROOT / "wazuh" / "config" / "ossec.conf"
+WAZUH_INSTALL_HOOK = REPO_ROOT / "wazuh" / "entrypoint-scripts" / "10-install-triage-integration.sh"
+
+
+def _wazuh_service() -> dict:
+    return _compose()["services"]["wazuh-manager"]
+
+
+def test_wazuh_manager_is_profile_gated_and_pinned() -> None:
+    """The manager only runs under `--profile full`, on a pinned 4.x tag."""
+    service = _wazuh_service()
+    assert service["profiles"] == ["full"]
+    image = service["image"]
+    assert image.startswith("wazuh/wazuh-manager:4.")
+    assert ":latest" not in image
+    assert re.match(r"^wazuh/wazuh-manager:4\.[0-9]+\.[0-9]+$", image), image
+
+
+def test_wazuh_manager_is_never_a_dependency_of_the_default_stack() -> None:
+    """Zero-external fallback: `sim` mode must still work with no Wazuh."""
+    compose = _compose()
+    for name in DEFAULT_SERVICE_FACTS:
+        depends_on = compose["services"][name].get("depends_on", {})
+        assert "wazuh-manager" not in set(depends_on), name
+
+
+def test_wazuh_manager_publishes_only_agent_enrollment_ports() -> None:
+    """1514/1515 for agents; the Wazuh API (55000) is never host-visible."""
+    ports = _wazuh_service().get("ports", [])
+    assert ports == ["1514:1514/tcp", "1515:1515/tcp"]
+    assert all("55000" not in str(port) for port in ports)
+
+
+def test_wazuh_manager_stays_on_the_internal_network() -> None:
+    assert _wazuh_service().get("networks") == ["soc-core"]
+
+
+def test_wazuh_manager_has_healthcheck_and_resource_limits() -> None:
+    service = _wazuh_service()
+    assert service["restart"] == "unless-stopped"
+    assert service["healthcheck"]["retries"] >= 3
+    assert service["healthcheck"].get("start_period") is not None
+    limits = service["deploy"]["resources"]["limits"]
+    assert limits["cpus"] == "2.0"
+    assert limits["memory"] == "2G"
+    assert service["security_opt"] == ["no-new-privileges:true"]
+
+
+def test_wazuh_manager_takes_all_credentials_from_the_environment() -> None:
+    """No credential literal is committed; required secrets fail fast."""
+    env = _wazuh_service()["environment"]
+    for name in ("API_USERNAME", "API_PASSWORD", "TRIAGE_INGEST_API_KEY"):
+        value = str(env[name])
+        assert value.startswith("${") and ":?" in value, (name, value)
+        assert ":-" not in value, f"{name} must not carry a default credential"
+    assert env["TRIAGE_API_BASE_URL"] == "${TRIAGE_API_BASE_URL:-http://triage-api:8000}"
+
+
+def test_full_profile_mounts_are_read_only_and_repo_sourced() -> None:
+    """Config/scripts come from this repo, read-only; only state is writable."""
+    volumes = _wazuh_service()["volumes"]
+    read_only = [v for v in volumes if v.startswith("./")]
+    assert read_only, "integrator/config must be mounted from the repository"
+    for mount in read_only:
+        assert mount.endswith(":ro"), mount
+    named = [v for v in volumes if not v.startswith("./")]
+    assert {v.split(":")[0] for v in named} == {
+        "wazuh-manager-etc",
+        "wazuh-manager-logs",
+        "wazuh-manager-queue",
+    }
+
+
+def test_ossec_conf_is_mounted_where_the_image_actually_copies_it() -> None:
+    """The image copies /wazuh-config-mount/<path> -> /var/ossec/<path>.
+
+    Wazuh has no ossec.conf.d include mechanism, so the whole ossec.conf must
+    be mounted at /wazuh-config-mount/etc/ossec.conf or it silently never
+    applies. Regression guard for the original (broken) fragment mount.
+    """
+    volumes = _wazuh_service()["volumes"]
+    targets = [v.split(":")[1] for v in volumes if v.startswith("./")]
+    assert "/wazuh-config-mount/etc/ossec.conf" in targets
+    assert not any("ossec.conf.d" in target for target in targets), (
+        "ossec.conf.d is not a Wazuh feature; the fragment would never load"
+    )
+    assert not any(target.startswith("/var/ossec/integrations") for target in volumes), (
+        "integrations/ must be installed by the entrypoint hook with root:wazuh 750, "
+        "not bind-mounted with host ownership"
+    )
+
+
+def test_full_profile_installs_the_integrator_via_the_entrypoint_hook() -> None:
+    """The image runs /entrypoint-scripts/*.sh before starting Wazuh."""
+    volumes = _wazuh_service()["volumes"]
+    targets = [v.split(":")[1] for v in volumes if v.startswith("./")]
+    assert "/entrypoint-scripts" in targets
+    assert "/triage-integration" in targets
+
+
+def test_full_profile_configuration_contains_no_secrets() -> None:
+    files = {
+        "docker-compose.yml (wazuh)": COMPOSE_FILE.read_text(encoding="utf-8"),
+        "wazuh/config/ossec.conf": WAZUH_OSSEC_CONF.read_text(encoding="utf-8"),
+        "wazuh/entrypoint-scripts/install": WAZUH_INSTALL_HOOK.read_text(encoding="utf-8"),
+        "wazuh/integrator/custom-triage": (WAZUH_INTEGRATOR_DIR / "custom-triage").read_text(
+            encoding="utf-8"
+        ),
+        "wazuh/integrator/custom-triage.py": (WAZUH_INTEGRATOR_DIR / "custom-triage.py").read_text(
+            encoding="utf-8"
+        ),
+    }
+    for name, text in files.items():
+        for pattern in SECRET_PATTERNS:
+            assert pattern.search(text) is None, (name, pattern.pattern)
+
+
+def test_full_profile_declares_no_active_response() -> None:
+    """Defensive-only charter (SECURITY.md §1): no containment anywhere."""
+    text = COMPOSE_FILE.read_text(encoding="utf-8").lower()
+    for banned in ("active-response", "active_response", "firewall-drop", "host-deny"):
+        assert banned not in text, banned
+
+
+def test_wazuh_healthcheck_targets_a_real_daemon_name() -> None:
+    """`wazuh-control status` prints '<daemon> is running...' per daemon.
+
+    wazuh-analysisd is a non-optional daemon (src/init/wazuh-server.sh
+    DAEMONS), so it is a valid readiness signal.
+    """
+    joined = " ".join(str(p) for p in _wazuh_service()["healthcheck"]["test"])
+    assert "/var/ossec/bin/wazuh-control status" in joined
+    assert "wazuh-analysisd is running" in joined

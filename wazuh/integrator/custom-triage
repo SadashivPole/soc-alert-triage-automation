@@ -1,0 +1,25 @@
+#!/bin/sh
+# =============================================================================
+# custom-triage — Wazuh integrator shell wrapper (Phase 4.2)
+#
+# `integratord` executes /var/ossec/integrations/custom-<name>; the conventional
+# Wazuh layout is a tiny shell wrapper that execs the real Python script with
+# the same arguments. Keeping the wrapper separate means the Python module stays
+# importable (and unit-testable) without a shebang-only entrypoint.
+#
+# Arguments (Wazuh contract): $1 = alert file, $2 = api key, $3 = hook url.
+# $2/$3 are IGNORED as a secret source: all configuration, including
+# TRIAGE_INGEST_API_KEY, is read from the environment (ARCHITECTURE.md §14,
+# SECURITY.md §3) so no credential ever lives in ossec.conf.
+#
+# Defensive-only: this path forwards detections only. No containment, no
+# response action.
+# =============================================================================
+set -eu
+
+WPYTHON=${WAZUH_INTEGRATOR_PYTHON:-/var/ossec/framework/python/bin/python3}
+[ -x "$WPYTHON" ] || WPYTHON=$(command -v python3)
+
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+
+exec "$WPYTHON" "${SCRIPT_DIR}/custom-triage.py" "$@"

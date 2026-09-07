@@ -32,6 +32,7 @@ from typing import Any
 
 from fastapi.testclient import TestClient
 from sqlalchemy import text
+from tests.conftest import TEST_INGEST_KEY
 
 from soc_triage.core.config import Settings
 from soc_triage.core.metrics import (
@@ -50,7 +51,6 @@ from soc_triage.models.assessment import DecisionAction, RiskTier
 from soc_triage.models.ioc import IOC
 
 FIXTURES_DIR = Path(__file__).parent.parent / "fixtures"
-from tests.conftest import TEST_INGEST_KEY  # noqa: E402
 
 
 def _load_sample(name: str) -> dict[str, Any]:
@@ -66,7 +66,11 @@ def _auth() -> dict[str, str]:
 
 def _ingest(client: TestClient, payload: dict[str, Any]):
     """Post one ingest payload and return the raw response."""
-    return client.post("/api/v1/alerts/ingest", json=payload, headers=_auth())
+    return client.post(
+        "/api/v1/alerts/ingest",
+        json=payload,
+        headers=_auth(),
+    )
 
 
 def _enrichment_series(registry) -> dict[str, float]:
@@ -129,7 +133,13 @@ class _FakeProvider:
     unregistered name deliberately pass one to prove fallback behavior.
     """
 
-    def __init__(self, name: str, status: EnrichmentStatus, *, fail: bool = False) -> None:
+    def __init__(
+        self,
+        name: str,
+        status: EnrichmentStatus,
+        *,
+        fail: bool = False,
+    ) -> None:
         self._name = name
         self._status = status
         self._fail = fail
@@ -150,6 +160,7 @@ class _FakeProvider:
     ) -> ProviderEnrichment:
         if self._fail:
             raise RuntimeError("injected provider failure")
+
         return ProviderEnrichment(
             provider=self._name,
             status=self._status,
@@ -173,6 +184,8 @@ def _twin_app(tmp_path: Path, *, metrics_enabled: bool):
         triage_db_url=f"sqlite:///{tmp_path / 'twin.db'}",
         triage_ingest_api_key=TEST_INGEST_KEY,
         n8n_callback_token="test-callback-token-not-a-real-secret",
+        n8n_webhook_token="",
+        n8n_webhook_url="",
         metrics_enabled=metrics_enabled,
     )
     return create_app(settings=settings)
@@ -185,8 +198,16 @@ def _twin_app(tmp_path: Path, *, metrics_enabled: bool):
 
 def test_complete_enrichment_increments_exactly_once(client, app) -> None:
     """Every provider answers → alert-level complete, one increment only."""
-    _install_chain(client, [_FakeProvider("virustotal", EnrichmentStatus.COMPLETE)])
-    response = _ingest(client, _load_sample("04_wazuh_malware_hash_virustotal.json"))
+    _install_chain(
+        client,
+        [_FakeProvider("virustotal", EnrichmentStatus.COMPLETE)],
+    )
+
+    response = _ingest(
+        client,
+        _load_sample("04_wazuh_malware_hash_virustotal.json"),
+    )
+
     assert response.status_code == 202
     assert response.json()["enrichment_status"] == "complete"
     assert _enrichment_series(app.state.metrics.registry) == {"complete": 1.0}
@@ -201,7 +222,12 @@ def test_partial_enrichment_increments_exactly_once(client, app) -> None:
             _FakeProvider("misp", EnrichmentStatus.FAILED, fail=True),
         ],
     )
-    response = _ingest(client, _load_sample("04_wazuh_malware_hash_virustotal.json"))
+
+    response = _ingest(
+        client,
+        _load_sample("04_wazuh_malware_hash_virustotal.json"),
+    )
+
     assert response.status_code == 202
     assert response.json()["enrichment_status"] == "partial"
     assert _enrichment_series(app.state.metrics.registry) == {"partial": 1.0}
@@ -209,8 +235,16 @@ def test_partial_enrichment_increments_exactly_once(client, app) -> None:
 
 def test_failed_enrichment_increments_exactly_once(client, app) -> None:
     """Every enabled provider fails → alert-level failed, one increment only."""
-    _install_chain(client, [_FakeProvider("misp", EnrichmentStatus.FAILED, fail=True)])
-    response = _ingest(client, _load_sample("04_wazuh_malware_hash_virustotal.json"))
+    _install_chain(
+        client,
+        [_FakeProvider("misp", EnrichmentStatus.FAILED, fail=True)],
+    )
+
+    response = _ingest(
+        client,
+        _load_sample("04_wazuh_malware_hash_virustotal.json"),
+    )
+
     assert response.status_code == 202
     assert response.json()["enrichment_status"] == "failed"
     assert _enrichment_series(app.state.metrics.registry) == {"failed": 1.0}
@@ -218,7 +252,11 @@ def test_failed_enrichment_increments_exactly_once(client, app) -> None:
 
 def test_skipped_enrichment_increments_exactly_once(client, app) -> None:
     """Default (all providers disabled) → alert-level skipped, one increment."""
-    response = _ingest(client, _load_sample("01_wazuh_ssh_brute_force.json"))
+    response = _ingest(
+        client,
+        _load_sample("01_wazuh_ssh_brute_force.json"),
+    )
+
     assert response.status_code == 202
     assert response.json()["enrichment_status"] == "skipped"
     assert _enrichment_series(app.state.metrics.registry) == {"skipped": 1.0}
@@ -233,9 +271,16 @@ def test_no_duplicate_alert_level_increment_within_one_attempt(client, app) -> N
             _FakeProvider("misp", EnrichmentStatus.FAILED, fail=True),
         ],
     )
-    response = _ingest(client, _load_sample("04_wazuh_malware_hash_virustotal.json"))
+
+    response = _ingest(
+        client,
+        _load_sample("04_wazuh_malware_hash_virustotal.json"),
+    )
+
     assert response.status_code == 202
+
     series = _enrichment_series(app.state.metrics.registry)
+
     assert series == {"partial": 1.0}
     assert sum(series.values()) == 1.0
 
@@ -245,7 +290,10 @@ def test_no_duplicate_alert_level_increment_within_one_attempt(client, app) -> N
 # ---------------------------------------------------------------------------
 
 
-def test_each_registered_provider_emits_exactly_one_expected_outcome(client, app) -> None:
+def test_each_registered_provider_emits_exactly_one_expected_outcome(
+    client,
+    app,
+) -> None:
     """Two registered providers → two provider outcome increments."""
     _install_chain(
         client,
@@ -254,7 +302,12 @@ def test_each_registered_provider_emits_exactly_one_expected_outcome(client, app
             _FakeProvider("misp", EnrichmentStatus.COMPLETE),
         ],
     )
-    response = _ingest(client, _load_sample("04_wazuh_malware_hash_virustotal.json"))
+
+    response = _ingest(
+        client,
+        _load_sample("04_wazuh_malware_hash_virustotal.json"),
+    )
+
     assert response.status_code == 202
     assert _provider_series(app.state.metrics.registry) == {
         ("virustotal", "complete"): 1.0,
@@ -271,7 +324,12 @@ def test_multiple_providers_create_expected_bounded_series(client, app) -> None:
             _FakeProvider("misp", EnrichmentStatus.FAILED, fail=True),
         ],
     )
-    response = _ingest(client, _load_sample("04_wazuh_malware_hash_virustotal.json"))
+
+    response = _ingest(
+        client,
+        _load_sample("04_wazuh_malware_hash_virustotal.json"),
+    )
+
     assert response.status_code == 202
     assert response.json()["enrichment_status"] == "partial"
     assert _provider_series(app.state.metrics.registry) == {
@@ -280,14 +338,28 @@ def test_multiple_providers_create_expected_bounded_series(client, app) -> None:
     }
 
 
-def test_unknown_provider_names_cannot_create_arbitrary_series(client, app) -> None:
+def test_unknown_provider_names_cannot_create_arbitrary_series(
+    client,
+    app,
+) -> None:
     """Unregistered provider names collapse to the fixed fallback series."""
     hostile_name = "attacker-controlled-provider-7f2a"
-    _install_chain(client, [_FakeProvider(hostile_name, EnrichmentStatus.COMPLETE)])
-    response = _ingest(client, _load_sample("01_wazuh_ssh_brute_force.json"))
+
+    _install_chain(
+        client,
+        [_FakeProvider(hostile_name, EnrichmentStatus.COMPLETE)],
+    )
+
+    response = _ingest(
+        client,
+        _load_sample("01_wazuh_ssh_brute_force.json"),
+    )
+
     assert response.status_code == 202
     assert response.json()["enrichment_status"] == "complete"
+
     series = _provider_series(app.state.metrics.registry)
+
     # Bounded fallback series only; no series for the hostile name.
     assert series == {(UNKNOWN, "complete"): 1.0}
     assert hostile_name not in app.state.metrics.render_text()
@@ -296,13 +368,18 @@ def test_unknown_provider_names_cannot_create_arbitrary_series(client, app) -> N
 def test_provider_status_values_remain_bounded() -> None:
     """Hostile status values collapse to the fixed fallback at the registry."""
     registry = MetricsRegistry(provider_names=("virustotal",))
+
     registry.record_enrichment_provider_outcome(
         provider="virustotal",
         status="not-a-status; rm -rf /",
     )
+
     series = _provider_series(registry.registry)
+
     assert series == {("virustotal", UNKNOWN): 1.0}
+
     exposition = registry.render_text()
+
     assert "not-a-status" not in exposition
 
 
@@ -311,15 +388,24 @@ def test_provider_status_values_remain_bounded() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_disabled_chain_records_skipped_status_and_provider_outcomes(client, app) -> None:
+def test_disabled_chain_records_skipped_status_and_provider_outcomes(
+    client,
+    app,
+) -> None:
     """Zero-external mode: skipped alert status + one skipped per provider."""
     assert {p.name for p in app.state.enrichment_chain.providers if p.enabled} == set()
-    response = _ingest(client, _load_sample("01_wazuh_ssh_brute_force.json"))
+
+    response = _ingest(
+        client,
+        _load_sample("01_wazuh_ssh_brute_force.json"),
+    )
+
     assert response.status_code == 202
     assert response.json()["enrichment_status"] == "skipped"
     assert _enrichment_series(app.state.metrics.registry) == {"skipped": 1.0}
-    # The chain returns one ProviderOutcome per registered provider (disabled
-    # providers are represented as skipped by the existing chain).
+
+    # The chain returns one ProviderOutcome per registered provider
+    # (disabled providers are represented as skipped by the existing chain).
     assert _provider_series(app.state.metrics.registry) == {
         ("noop", "skipped"): 1.0,
         ("virustotal", "skipped"): 1.0,
@@ -330,12 +416,18 @@ def test_disabled_chain_records_skipped_status_and_provider_outcomes(client, app
 def test_metrics_disabled_mode_behaves_exactly_as_before(tmp_path) -> None:
     """A metrics-disabled app with the default chain: identical result, no state."""
     payload = _load_sample("01_wazuh_ssh_brute_force.json")
+
     with TestClient(_twin_app(tmp_path, metrics_enabled=False)) as twin:
         response = twin.post(
-            "/api/v1/alerts/ingest", json=payload, headers={"X-API-Key": TEST_INGEST_KEY}
+            "/api/v1/alerts/ingest",
+            json=payload,
+            headers={"X-API-Key": TEST_INGEST_KEY},
         )
+
         assert response.status_code == 202
+
         body = response.json()
+
         assert body["enrichment_status"] == "skipped"
         assert body["risk"]["score"] == 43
         assert body["risk"]["tier"] == RiskTier.LOW.value
@@ -348,10 +440,21 @@ def test_metrics_disabled_mode_behaves_exactly_as_before(tmp_path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_provider_failure_increments_proper_provider_and_status(client, app) -> None:
+def test_provider_failure_increments_proper_provider_and_status(
+    client,
+    app,
+) -> None:
     """A raising provider → failed status for that provider; never a raise."""
-    _install_chain(client, [_FakeProvider("misp", EnrichmentStatus.FAILED, fail=True)])
-    response = _ingest(client, _load_sample("04_wazuh_malware_hash_virustotal.json"))
+    _install_chain(
+        client,
+        [_FakeProvider("misp", EnrichmentStatus.FAILED, fail=True)],
+    )
+
+    response = _ingest(
+        client,
+        _load_sample("04_wazuh_malware_hash_virustotal.json"),
+    )
+
     assert response.status_code == 202
     assert response.json()["enrichment_status"] == "failed"
     assert _provider_series(app.state.metrics.registry) == {("misp", "failed"): 1.0}
@@ -366,13 +469,21 @@ def test_partial_enrichment_flows_to_scoring_and_decisions(client, app) -> None:
             _FakeProvider("misp", EnrichmentStatus.FAILED, fail=True),
         ],
     )
-    response = _ingest(client, _load_sample("04_wazuh_malware_hash_virustotal.json"))
+
+    response = _ingest(
+        client,
+        _load_sample("04_wazuh_malware_hash_virustotal.json"),
+    )
+
     assert response.status_code == 202
+
     body = response.json()
+
     assert body["enrichment_status"] == "partial"
     assert body["risk"]["tier"] == RiskTier.HIGH.value
     assert body["decision"]["action"] == DecisionAction.OPEN_INCIDENT.value
     assert _enrichment_series(app.state.metrics.registry) == {"partial": 1.0}
+
     assert _provider_series(app.state.metrics.registry) == {
         ("virustotal", "complete"): 1.0,
         ("misp", "failed"): 1.0,
@@ -392,11 +503,21 @@ def test_exception_messages_never_become_metric_values(client, app) -> None:
         ) -> ProviderEnrichment:
             raise RuntimeError(sentinel)
 
-    _install_chain(client, [_ErrorProvider("misp", EnrichmentStatus.FAILED)])
-    response = _ingest(client, _load_sample("04_wazuh_malware_hash_virustotal.json"))
+    _install_chain(
+        client,
+        [_ErrorProvider("misp", EnrichmentStatus.FAILED)],
+    )
+
+    response = _ingest(
+        client,
+        _load_sample("04_wazuh_malware_hash_virustotal.json"),
+    )
+
     assert response.status_code == 202
     assert response.json()["enrichment_status"] == "failed"
+
     exposition = app.state.metrics.render_text()
+
     assert sentinel not in exposition
     assert _provider_series(app.state.metrics.registry) == {("misp", "failed"): 1.0}
 
@@ -415,7 +536,12 @@ def test_metrics_never_expose_identifiers_iocs_or_urls(client, app) -> None:
             _FakeProvider("misp", EnrichmentStatus.FAILED, fail=True),
         ],
     )
-    first = _ingest(client, _load_sample("04_wazuh_malware_hash_virustotal.json"))
+
+    first = _ingest(
+        client,
+        _load_sample("04_wazuh_malware_hash_virustotal.json"),
+    )
+
     assert first.status_code == 202
     assert first.json()["enrichment_status"] == "partial"
 
@@ -428,27 +554,34 @@ def test_metrics_never_expose_identifiers_iocs_or_urls(client, app) -> None:
             _FakeProvider("misp", EnrichmentStatus.COMPLETE),
         ],
     )
-    second = _ingest(client, _load_sample("01_wazuh_ssh_brute_force.json"))
+
+    second = _ingest(
+        client,
+        _load_sample("01_wazuh_ssh_brute_force.json"),
+    )
+
     assert second.status_code == 202
 
     exposition = app.state.metrics.render_text()
+
     dynamic_values = [
         first.json()["alert_id"],
         second.json()["alert_id"],
         first.json()["incident_id"],
-        "87105",  # rule id
-        "003",  # agent id
-        "001",  # agent id (sample 01)
-        "203.0.113.50",  # IOC IPv4
-        "bc478d7a48bfab117da4b9bdcb5aee36",  # IOC md5
-        "87c151c211facd64c46da2004bccfc31f52128bd",  # IOC sha1
-        "23b3c5642480341d8bb98c40b6edb136f59088a7ae4e57ef6518789908769f0f",  # IOC sha256
+        "87105",
+        "003",
+        "001",
+        "203.0.113.50",
+        "bc478d7a48bfab117da4b9bdcb5aee36",
+        "87c151c211facd64c46da2004bccfc31f52128bd",
+        "23b3c5642480341d8bb98c40b6edb136f59088a7ae4e57ef6518789908769f0f",
         "https://www.virustotal.com/gui/file/"
         "23b3c5642480341d8bb98c40b6edb136f59088a7ae4e57ef6518789908769f0f/detection",
-        "C:\\Users\\jdoe-lab\\Downloads\\invoice_tracker.exe",  # IOC file path
-        "attacker-controlled-provider-7f2a",  # hostile provider name
+        r"C:\Users\jdoe-lab\Downloads\invoice_tracker.exe",
+        "attacker-controlled-provider-7f2a",
         "not-registered-zyx",
     ]
+
     # Label values are always quoted in the text exposition, so quoting avoids
     # false positives against numeric ``*_created`` timestamps.
     for value in dynamic_values:
@@ -457,10 +590,18 @@ def test_metrics_never_expose_identifiers_iocs_or_urls(client, app) -> None:
     # Structure: every provider label is in the registered allowlist (+ the
     # single bounded fallback) and every status label is in the enum.
     provider_series = _provider_series(app.state.metrics.registry)
-    allowed_providers = {"noop", "virustotal", "misp", UNKNOWN}
+
+    allowed_providers = {
+        "noop",
+        "virustotal",
+        "misp",
+        UNKNOWN,
+    }
+
     for provider, status in provider_series:
         assert provider in allowed_providers, provider
         assert status in ENRICHMENT_STATUSES, status
+
     assert provider_series == {
         ("virustotal", "complete"): 1.0,
         ("misp", "failed"): 1.0,
@@ -474,48 +615,80 @@ def test_metrics_never_expose_identifiers_iocs_or_urls(client, app) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_enrichment_pipeline_identical_with_and_without_metrics(tmp_path, client, app) -> None:
+def test_enrichment_pipeline_identical_with_and_without_metrics(
+    tmp_path,
+    client,
+    app,
+) -> None:
     """Same enabled enrichment chain on both twins: identical everything."""
     payload = _load_sample("04_wazuh_malware_hash_virustotal.json")
+
     with TestClient(_twin_app(tmp_path, metrics_enabled=False)) as twin:
         # Install the same partial-outcome chain into both apps.
         providers = [
             _FakeProvider("virustotal", EnrichmentStatus.COMPLETE),
             _FakeProvider("misp", EnrichmentStatus.FAILED, fail=True),
         ]
+
         _install_chain(client, providers)
         twin.app.state.enrichment_chain = EnrichmentChain(providers)
 
         ours = _ingest(client, payload)
+
         theirs = twin.post(
-            "/api/v1/alerts/ingest", json=payload, headers={"X-API-Key": TEST_INGEST_KEY}
+            "/api/v1/alerts/ingest",
+            json=payload,
+            headers={"X-API-Key": TEST_INGEST_KEY},
         )
+
         assert ours.status_code == theirs.status_code == 202
         assert _fingerprint(ours.json()) == _fingerprint(theirs.json())
         assert ours.json()["risk"] == theirs.json()["risk"]
+
         ours_decision = dict(ours.json()["decision"])
         theirs_decision = dict(theirs.json()["decision"])
+
         ours_decision.pop("decided_at", None)
         theirs_decision.pop("decided_at", None)
+
         assert ours_decision == theirs_decision
 
         # Same persisted alert state (risk/decision), dedupe and audit counts.
         ours_risk, ours_decision = _persisted_risk_decision(app)
         theirs_risk, theirs_decision = _persisted_risk_decision(twin.app)
+
         assert ours_risk == theirs_risk
+
         ours_decision.pop("decided_at", None)
         theirs_decision.pop("decided_at", None)
+
         assert ours_decision == theirs_decision
-        for table in ("alerts", "alert_events", "alert_dedupe_groups", "audit_log"):
-            assert _rows(app, f"SELECT COUNT(*) FROM {table}") == _rows(
-                twin.app, f"SELECT COUNT(*) FROM {table}"
+
+        for table in (
+            "alerts",
+            "alert_events",
+            "alert_dedupe_groups",
+            "audit_log",
+        ):
+            assert _rows(
+                app,
+                f"SELECT COUNT(*) FROM {table}",
+            ) == _rows(
+                twin.app,
+                f"SELECT COUNT(*) FROM {table}",
             ), table
-        assert _rows(app, "SELECT actor, action FROM audit_log ORDER BY id") == _rows(
-            twin.app, "SELECT actor, action FROM audit_log ORDER BY id"
+
+        assert _rows(
+            app,
+            "SELECT actor, action FROM audit_log ORDER BY id",
+        ) == _rows(
+            twin.app,
+            "SELECT actor, action FROM audit_log ORDER BY id",
         )
 
         # Only the metrics surface differs.
         assert _enrichment_series(app.state.metrics.registry) == {"partial": 1.0}
+
         assert not hasattr(twin.app.state, "metrics")
 
 
@@ -524,13 +697,21 @@ def test_enrichment_pipeline_identical_with_and_without_metrics(tmp_path, client
 # ---------------------------------------------------------------------------
 
 
-def test_forced_recorder_failure_never_breaks_enrichment(client, app, monkeypatch) -> None:
+def test_forced_recorder_failure_never_breaks_enrichment(
+    client,
+    app,
+    monkeypatch,
+) -> None:
     """A raising metrics recorder cannot alter enrichment or its results."""
 
     def boom(*_args: object, **_kwargs: object) -> None:
         raise RuntimeError("injected enrichment metrics failure")
 
-    monkeypatch.setattr(MetricsRegistry, "_increment", boom)
+    monkeypatch.setattr(
+        MetricsRegistry,
+        "_increment",
+        boom,
+    )
 
     _install_chain(
         client,
@@ -539,21 +720,43 @@ def test_forced_recorder_failure_never_breaks_enrichment(client, app, monkeypatc
             _FakeProvider("misp", EnrichmentStatus.FAILED, fail=True),
         ],
     )
-    response = _ingest(client, _load_sample("04_wazuh_malware_hash_virustotal.json"))
+
+    response = _ingest(
+        client,
+        _load_sample("04_wazuh_malware_hash_virustotal.json"),
+    )
+
     assert response.status_code == 202
+
     body = response.json()
+
     assert body["enrichment_status"] == "partial"
     assert body["risk"]["tier"] == RiskTier.HIGH.value
     assert body["decision"]["action"] == DecisionAction.OPEN_INCIDENT.value
+
     risk, decision = _persisted_risk_decision(app)
+
     assert risk["tier"] == RiskTier.HIGH.value
     assert decision["action"] == DecisionAction.OPEN_INCIDENT.value
-    actions = {row[0] for row in _rows(app, "SELECT action FROM audit_log")}
+
+    actions = {
+        row[0]
+        for row in _rows(
+            app,
+            "SELECT action FROM audit_log",
+        )
+    }
+
     assert {"alert.scored", "alert.decided"} <= actions
 
     # The zero-external fallback path is equally intact under a forced failure.
     _install_chain(client, [])
-    fallback = _ingest(client, _load_sample("01_wazuh_ssh_brute_force.json"))
+
+    fallback = _ingest(
+        client,
+        _load_sample("01_wazuh_ssh_brute_force.json"),
+    )
+
     assert fallback.status_code == 202
     assert fallback.json()["enrichment_status"] == "skipped"
     assert fallback.json()["risk"]["score"] == 43

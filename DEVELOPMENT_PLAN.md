@@ -120,8 +120,10 @@ FP verdict via form → tuning suggestion in next digest. All actions audit-logg
 
 **Goal:** production-shaped ingestion from an actual Wazuh manager; safe response actions.
 
-- 4.1 `full` compose profile with `wazuh-manager` · 4.2 custom `integrator` script
-  (`wazuh/integrator/`) reading env for URL/key, with local buffering · 4.3 custom
+- 4.1 `full` compose profile with `wazuh-manager` ⚠️ implemented, **live-unvalidated**
+  · 4.2 custom `integrator` script (`wazuh/integrator/`) reading env for URL/key, with
+  local buffering ⚠️ implemented, **live-unvalidated** (both audited against the pinned
+  4.9.2 image source; no live manager/agent run yet — 4.4 acceptance NOT met) · 4.3 custom
   rules/decoders showcase (SSH, FIM, web) · 4.4 agent enrollment docs (lab agents) ·
   4.5 human-approved containment runbook (Wazuh active-response *proposal* requiring
   explicit analyst approval; audited) · 4.6 optional TheHive CE case export (CE only) ·
@@ -184,7 +186,46 @@ correlation IDs · error paths handled per ARCHITECTURE §16 · CHANGELOG entry.
 
 ---
 
-## Milestones & Versioning
+| Alert-flood sample replays skew dedupe/scoring state | confusing demos | simulator resets DB or uses distinct agents per scenario (`--fresh` flag) |
+| Scope creep toward offensive tooling | policy violation | CONTRIBUTING explicitly rejects offensive capabilities; review checklist item |
+
+## Phase 4 Validation Status (2026-09-06)
+
+### A. Source-audit validation performed by Arena (completed 2026-09-05, commit 4262ce1)
+Three wiring defects were identified by auditing against the `wazuh/wazuh-manager:4.9.2` image source and the Wazuh 4.9.2 sources, then fixed. These code changes are committed to `arena/01a07520-soc-alert-triage-automation`:
+
+- **4.1/4.2 wiring defects**: Three defects identified by source audit and fixed in commit `4262ce1`:
+  - `wazuh/entrypoint-scripts/10-install-triage-integration.sh`: added `chown root:wazuh "$DEST_DIR"` and `chmod 0750 "$DEST_DIR"` to fix integrations directory ownership (`root:wazuh 0750`)
+  - `.gitattributes`: added `text eol=lf` for `wazuh/integrator/*`, `wazuh/entrypoint-scripts/*`, `*.py` to prevent CRLF rewrites on Windows checkouts
+  - `app/tests/unit/test_wazuh_integrator.py`: added `test_wazuh_scripts_have_no_crlf` regression test asserting LF-only bytes in executable Wazuh scripts
+
+### B. Live runtime validation performed by the user on 2026-09-06
+The full Phase 4.1/4.2 pipeline was live-validated on the user's Windows/Docker Desktop environment with a real Windows Wazuh agent (007) connected and active. The following checks were verified:
+
+- **4.1** Agent enrolled and active (Windows Wazuh agent 007 listed as Active)
+- **4.2** Real Windows Application ERROR event generated (Source=Phase4Test, Event ID=200) → Wazuh rule 60602, level 9
+- **4.3** `/var/ossec/integrations/custom-triage` and `/var/ossec/integrations/custom-triage.py` present in running container
+- **4.4** Container shebangs verified LF-only: `#!/bin/sh`, `#!/usr/bin/env python3` with no `^M`
+- **4.5** Integration directory ownership/permissions: `root:wazuh 750` on `/var/ossec/integrations`
+- **4.6** Wazuh `4.9.2` manager running; `wazuh-integratord` running as user `wazuh`
+- **4.6** Integration log: `/var/ossec/logs/integrations.log` contains `{"agent_id":"007","attempts":1,"component":"wazuh_integrator","endpoint":"http://triage-api:8000/api/v1/alerts/ingest","event":"alert_forwarded","rule_id":"60602","rule_level":9,"status":202}`
+- **4.7** Triage API logged: `POST /api/v1/alerts/ingest HTTP/1.1 202 Accepted`
+- **4.8** Triage processing: `alert_scored`, `score=38`, `tier=low`, `decision=monitor`, `degraded=false`
+- **4.9** IOC extraction logged successfully with `ioc_count=0` and `enrichment_status=skipped`
+- **4.10** n8n notification delivery returned HTTP 200
+- **4.11** Wazuh alert present in `alerts.json` and the dated alert log
+
+### Remaining Outstanding Items (require further validation)
+- **4.3-4.4**: Custom rules/decoder showcase and human-approved containment runbook — **REMAINS OUTSTANDING**
+- **4.5**: TheHive CE case export — **REMAINS OUTSTANDING**
+- **4.6**: Failure/spool recovery (stop triage-api, generate alert, verify retry + `alert_buffered`, verify spool permissions and no stale `.tmp`, restart triage-api, verify oldest-first replay and spool drain, verify no duplicate incident) — **REMAINS OUTSTANDING**
+- **4.7**: Idempotent duplicate delivery (same alert/rule/agent, occurrences increments, no duplicate alert row/incident) — **REMAINS OUTSTANDING**
+- **4.6-4.7**: Full security/log-hygiene runtime audit (ingest key absent from logs, no `full_log`/alert-body leakage, no `user:pass@` URLs in logs) — **REMAINS OUTSTANDING**
+- **4.7**: 10k synthetic alerts/day soak test with SLA-safe timings — **REMAINS OUTSTANDING**
+
+- **Live validation**: The source audit (Arena) and live runtime validation (user on Windows/Docker Desktop) together establish Phase 4.1/4.2 as verified for items 4.1-4.2 (wiring defects) and 4.1-4.11 (live pipeline end-to-end). Items 4.3-4.7 remain to be validated in a subsequent phase.
+
+---\n\n## Milestones & Versioning
 
 - Semantic versioning from `v0.1.0`; tags cut only at phase completion with all gates green.
 - `CHANGELOG.md` starts in Phase 1.

@@ -677,6 +677,66 @@ nothing in the default stack:
 - **`full`:** adds the Wazuh manager profile; agents enroll over 1514/1515; the
   `integrator` custom script forwards matched rules to the ingest endpoint.
 
+**`full` profile (Phase 4.1, implemented):**
+`docker compose --profile full up` adds exactly one *optional* service and changes
+nothing in the default stack:
+
+- `wazuh-manager` (`wazuh/wazuh-manager:4.9.2`, pinned; `soc-core` only) publishes
+  **1514/1515 for agent enrollment/reporting only** — the Wazuh API (55000) is never
+  host-visible. No default service gains a `depends_on`, so `sim` mode and the
+  zero-external fallback are untouched.
+- Credentials (`API_USERNAME`, `API_PASSWORD`, `TRIAGE_INGEST_API_KEY`) use
+  `${VAR:?}` — required, no committed defaults, fail-fast on `up`.
+- Repo-sourced mounts (`wazuh/config/ossec.conf`, `wazuh/integrator/`,
+  `wazuh/entrypoint-scripts/`) are read-only; only `wazuh-manager-{etc,logs,queue}`
+  named volumes are writable. `no-new-privileges`, healthcheck via
+  `wazuh-control status`, 2 CPU / 2 GB limits.
+- **Image-contract details (verified against the pinned 4.9.2 image source).**
+  Wazuh has **no `ossec.conf.d` include mechanism**: the image copies
+  `/wazuh-config-mount/<path>` over `/var/ossec/<path>` (`cont-init.d/0-wazuh-init`),
+  so the profile mounts a *complete* `ossec.conf` derived from the official v4.9.2
+  single-node template, with `<indexer>`/`<vulnerability-detection>` disabled (this
+  stack runs no indexer) and upstream's hardcoded cluster key replaced by the
+  entrypoint's substitution marker. `wazuh-integratord` resolves the script as
+  `integrations/<name>` relative to `/var/ossec` and requires `root:wazuh` mode
+  `750`, so `wazuh/entrypoint-scripts/10-install-triage-integration.sh` installs it
+  (via the image's `/entrypoint-scripts/*.sh` hook) rather than bind-mounting it
+  with host ownership. `wazuh-integratord` is an *optional* daemon: it starts only
+  when an `<integration>` block is present.
+- **No active-response / containment configuration is mounted or defined** — the profile
+  is a detection source only (SECURITY.md §1).
+
+**Wazuh integrator (Phase 4.2, ADR-6, implemented):**
+`wazuh/integrator/custom-triage` (shell wrapper) → `custom-triage.py` (standard library
+only; the manager image has no project dependencies).
+
+- **Environment-only configuration.** The positional `api_key`/`hook_url` arguments that
+  `integratord` passes are deliberately ignored as a secret source: `ossec.conf` is
+  world-readable inside the container. Everything comes from env (§14).
+- **Unchanged auth contract.** It POSTs the *unmodified* Wazuh alert JSON to
+  `POST /api/v1/alerts/ingest` with `X-API-Key`. It is an ordinary client of the existing
+  endpoint — no new auth path, no bypass, no change to CORS/rate limits/validation.
+- **Filtering.** `WAZUH_INTEGRATOR_MIN_LEVEL` (default 5) plus optional rule-id/group
+  exclusion lists, applied before any network call.
+- **Retry + local buffering (durability without a broker).** Transient failures
+  (network errors, `408/429/5xx`) retry in-process with capped exponential backoff and
+  jitter, then spool to a bounded on-disk FIFO (0700 dir, 0600 write-then-rename entries)
+  that the next invocation drains oldest-first. The spool is bounded by count *and* age;
+  overflow drops the oldest entries. Permanent rejections (`4xx` other than 408/429) are
+  dropped, never replayed. This is the manager-side counterpart to the API's
+  "ingest returns retryable 503 (Wazuh integrator buffers)" contract in §16.
+- **Never blocks the manager.** Every path exits `0` except an operator-fixable
+  configuration error; no exception escapes the transport.
+- **Observability.** Structured JSON appended to `/var/ossec/logs/integrations.log`
+  (and mirrored to stderr for manager debug mode) with allow-listed
+  fields only — rule id/level, agent id, status, attempts, sanitized endpoint. Never the
+  API key, alert body, or `full_log`. Note `integratord` appends `> /dev/null 2>&1`
+  unless the manager runs at debug level, so the log file — not stderr — is the
+  real observability channel. The integrator exposes **no Prometheus metrics**,
+  so the approved `soc_triage_*` catalog and its cardinality guarantees are unchanged.
+- **Defensive-only.** No subprocess execution, no command evaluation, no
+  active-response capability anywhere in the path.
+
 ---
 
 ## 14. Configuration & Secret Management

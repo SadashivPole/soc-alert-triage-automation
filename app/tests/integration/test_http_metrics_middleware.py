@@ -44,6 +44,12 @@ def route_labels_in(app) -> set[str]:
     return set(re.findall(r'route="([^"]+)"', text))
 
 
+def http_label_values_in(app) -> set[str]:
+    """All method/route/status label values emitted by HTTP metrics."""
+    text = app.state.metrics.render_text()
+    return set(re.findall(r'(?:method|route|status)="([^"]+)"', text))
+
+
 def test_request_counter_increments_per_request(client: TestClient, app) -> None:
     """Each request increments the counter with method/route/status labels."""
     assert client.get("/health").status_code == 200
@@ -141,10 +147,13 @@ def test_unmatched_route_is_safe(client: TestClient, app) -> None:
     # Raw query strings and concrete paths never leak into labels.
     client.get("/api/v1/alerts?limit=999999")
     client.get("/api/v1/alerts?token=super-secret-query-value")
-    exposition = app.state.metrics.render_text()
-    assert "999999" not in exposition
-    assert "super-secret-query-value" not in exposition
-    assert "?" not in exposition
+    # Validate the actual HTTP metric labels, not the entire exposition.
+    # Numeric sample values are arbitrary floating-point measurements and may
+    # legitimately contain the same digits as the test query value.
+    label_values = http_label_values_in(app)
+    assert "999999" not in label_values
+    assert "super-secret-query-value" not in label_values
+    assert all("?" not in value for value in label_values)
 
 
 def test_status_labels_remain_bounded_http_codes(client: TestClient, app) -> None:
