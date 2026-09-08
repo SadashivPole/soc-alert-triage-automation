@@ -1,0 +1,18 @@
+<!--
+  Phase 4.3 — SOC triage custom decoders
+  Defensive-only detection content.
+-->
+
+<!-- Controlled lab web-event decoder.
+     Example:
+     SOC_WEB method=GET uri=/wp-admin/admin-ajax.php srcip=10.10.10.50 status=404
+-->
+<decoder name="soc-web">
+  <prematch>^SOC_WEB\s</prematch>
+</decoder>
+
+<decoder name="soc-web-fields">
+  <parent>soc-web</parent>
+  <regex>method=(\S+)\s+uri=(\S+)\s+srcip=(\S+)\s+status=(\d+)</regex>
+  <order>action,url,srcip,status</order>
+</decoder>
