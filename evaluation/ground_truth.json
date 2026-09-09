@@ -1,0 +1,53 @@
+{
+  "version": "1.0",
+  "fixtures": {
+    "01_wazuh_ssh_brute_force.json": {
+      "expected": {
+        "score": 43,
+        "tier": "low",
+        "action": "monitor"
+      },
+      "notes": "Authentication failure alert remains low-risk on first occurrence; recurrence is handled separately."
+    },
+    "02_wazuh_ssh_brute_force_success.json": {
+      "expected": {
+        "score": 27,
+        "tier": "low",
+        "action": "monitor"
+      },
+      "notes": "Successful authentication remains low-risk and is not escalated."
+    },
+    "03_wazuh_fim_etc_passwd_change.json": {
+      "expected": {
+        "score": 63,
+        "tier": "medium",
+        "action": "queue_l1"
+      }
+    },
+    "04_wazuh_malware_hash_virustotal.json": {
+      "expected": {
+        "score": 73,
+        "tier": "high",
+        "action": "open_incident",
+        "severity": "SEV2"
+      },
+      "notes": "High-confidence malware detection is routed to incident response."
+    },
+    "05_wazuh_web_sql_injection.json": {
+      "expected": {
+        "score": 59,
+        "tier": "medium",
+        "action": "queue_l1"
+      },
+      "notes": "SQL injection detection remains medium-risk and is routed to L1 triage."
+    },
+    "06_wazuh_windows_user_created.json": {
+      "expected": {
+        "score": 47,
+        "tier": "medium",
+        "action": "queue_l1"
+      },
+      "notes": "Account-management behavior receives suspicious-group weighting and routes to L1 triage."
+    }
+  }
+}

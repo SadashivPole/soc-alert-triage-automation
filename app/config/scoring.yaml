@@ -19,7 +19,7 @@ rule_severity:
 # Suspicious rule groups + MITRE ATT&CK presence (capped at max).
 rule_groups_mitre:
   max: 15
-  group_keywords: [authentication_failed, malware, attack]
+  group_keywords: [authentication_failed, malware, attack, account_management]
   group_points: 4
   mitre_points: 4
   multi_tactic_points: 3
