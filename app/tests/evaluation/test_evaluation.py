@@ -1,30 +1,14 @@
 from __future__ import annotations
 
 import json
-import sys
 from pathlib import Path
 from typing import Any
 
+from evaluation.metrics import ConfusionMatrix, calculate_metrics
 from fastapi.testclient import TestClient
 from tests.conftest import TEST_INGEST_KEY
 
-
-# Repository root:
-# app/tests/evaluation/test_evaluation.py
-# parents[0] = evaluation
-# parents[1] = tests
-# parents[2] = app
-# parents[3] = repository root
 ROOT = Path(__file__).resolve().parents[3]
-
-# Allow imports from the repository-level evaluation package when the
-# test suite is executed from the app directory.
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
-
-from evaluation.metrics import ConfusionMatrix, calculate_metrics
-
-
 FIXTURES_DIR = ROOT / "app" / "tests" / "fixtures"
 EVALUATION_DIR = ROOT / "evaluation"
 
@@ -106,9 +90,7 @@ def test_ground_truth_evaluation(client: TestClient) -> None:
         for field in ("score", "tier", "action", "severity"):
             if field in expected:
                 actual_value = (
-                    risk.get(field)
-                    if field in {"score", "tier"}
-                    else decision.get(field)
+                    risk.get(field) if field in {"score", "tier"} else decision.get(field)
                 )
                 contract_checks[field] = actual_value == expected[field]
 
@@ -128,22 +110,10 @@ def test_ground_truth_evaluation(client: TestClient) -> None:
         )
 
     matrix = ConfusionMatrix(
-        true_positive=sum(
-            result["classification"] == "TP"
-            for result in results
-        ),
-        false_positive=sum(
-            result["classification"] == "FP"
-            for result in results
-        ),
-        false_negative=sum(
-            result["classification"] == "FN"
-            for result in results
-        ),
-        true_negative=sum(
-            result["classification"] == "TN"
-            for result in results
-        ),
+        true_positive=sum(result["classification"] == "TP" for result in results),
+        false_positive=sum(result["classification"] == "FP" for result in results),
+        false_negative=sum(result["classification"] == "FN" for result in results),
+        true_negative=sum(result["classification"] == "TN" for result in results),
     )
 
     metrics = calculate_metrics(matrix)
@@ -169,20 +139,13 @@ def test_ground_truth_evaluation(client: TestClient) -> None:
     print(f"  Precision:          {metrics['precision']:.4f}")
     print(f"  Recall:             {metrics['recall']:.4f}")
     print(f"  F1:                 {metrics['f1']:.4f}")
-    print(
-        f"  False Positive Rate:{metrics['false_positive_rate']:.4f}"
-    )
+    print(f"  False Positive Rate:{metrics['false_positive_rate']:.4f}")
 
     contract_failures = [
-        result
-        for result in results
-        if not all(result["contract_checks"].values())
+        result for result in results if not all(result["contract_checks"].values())
     ]
 
-    assert not contract_failures, (
-        "Ground-truth contract failures: "
-        f"{contract_failures}"
-    )
+    assert not contract_failures, f"Ground-truth contract failures: {contract_failures}"
 
 
 def test_evaluation_corpus_matches_ground_truth() -> None:
@@ -190,9 +153,6 @@ def test_evaluation_corpus_matches_ground_truth() -> None:
     corpus = load_json(CORPUS)
 
     ground_truth_fixtures = set(ground_truth["fixtures"])
-    corpus_fixtures = {
-        case["fixture"]
-        for case in corpus["cases"]
-    }
+    corpus_fixtures = {case["fixture"] for case in corpus["cases"]}
 
     assert corpus_fixtures == ground_truth_fixtures
