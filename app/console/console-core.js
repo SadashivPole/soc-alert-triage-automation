@@ -87,6 +87,26 @@
     return "status-" + String(status || "unknown").replace(/[ _]/g, "-");
   }
 
+  // --- Incident board card summary ------------------------------------------
+  // Pure, testable projection of an incident summary row into the one-line
+  // meta text shown on an incident board card. The list endpoint provides
+  // linked_alert_count only when the API includes it; missing/null values are
+  // rendered as an empty suffix instead of a literal "undefined" in the UI.
+  function shortId(id) {
+    if (!id) return "—";
+    var s = String(id);
+    return s.length > 12 ? s.slice(0, 8) + "…" + s.slice(-4) : s;
+  }
+
+  function incidentCardMeta(inc) {
+    if (!inc) return "";
+    var parts = ["primary " + shortId(inc.primary_alert_id)];
+    if (inc.linked_alert_count != null) {
+      parts.push(inc.linked_alert_count + " alerts");
+    }
+    return parts.join(" · ");
+  }
+
   // --- Score factor projection ----------------------------------------------
   // Turn the server-provided risk object into render rows. The server is the
   // source of the numbers; we never recompute a score in the browser.
@@ -196,6 +216,8 @@
     severityClass: severityClass,
     riskTierClass: riskTierClass,
     statusClass: statusClass,
+    shortId: shortId,
+    incidentCardMeta: incidentCardMeta,
     buildScoreFactors: buildScoreFactors,
     totalScore: totalScore,
     groupIncidentsByStatus: groupIncidentsByStatus,
