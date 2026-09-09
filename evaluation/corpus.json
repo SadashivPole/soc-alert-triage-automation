@@ -1,0 +1,35 @@
+{
+  "version": "1.0",
+  "cases": [
+    {
+      "fixture": "01_wazuh_ssh_brute_force.json",
+      "label": "positive",
+      "reason": "Repeated SSH authentication failures"
+    },
+    {
+      "fixture": "02_wazuh_ssh_brute_force_success.json",
+      "label": "negative",
+      "reason": "Successful authentication event"
+    },
+    {
+      "fixture": "03_wazuh_fim_etc_passwd_change.json",
+      "label": "positive",
+      "reason": "Monitored system file modification"
+    },
+    {
+      "fixture": "04_wazuh_malware_hash_virustotal.json",
+      "label": "positive",
+      "reason": "Malware intelligence alert"
+    },
+    {
+      "fixture": "05_wazuh_web_sql_injection.json",
+      "label": "positive",
+      "reason": "SQL injection attack attempt"
+    },
+    {
+      "fixture": "06_wazuh_windows_user_created.json",
+      "label": "positive",
+      "reason": "Unexpected account creation on a critical-tier asset"
+    }
+  ]
+}
