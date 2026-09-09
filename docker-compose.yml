@@ -273,6 +273,13 @@ services:
       - ./wazuh/integrator:/triage-integration:ro
       - ./wazuh/entrypoint-scripts:/entrypoint-scripts:ro
       - wazuh-manager-etc:/var/ossec/etc
+
+      # Phase 4.3 — repository-owned custom detection content.
+      # These files are mounted into Wazuh's supported user-defined
+      # rules/decoder directories.
+      - ./wazuh/ruleset/rules:/var/ossec/etc/rules:ro
+      - ./wazuh/ruleset/decoders:/var/ossec/etc/decoders:ro
+
       - wazuh-manager-logs:/var/ossec/logs
       - wazuh-manager-queue:/var/ossec/queue
     networks:

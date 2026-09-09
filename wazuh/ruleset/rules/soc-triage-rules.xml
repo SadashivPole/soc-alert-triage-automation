@@ -1,0 +1,48 @@
+<!--
+  Phase 4.3 — SOC triage custom rules
+  Defensive-only detection content.
+-->
+<group name="soc_triage,">
+
+  <!-- SSH: repeated authentication failures -->
+  <rule id="100100" level="10" frequency="5" timeframe="300">
+    <if_matched_sid>5712</if_matched_sid>
+    <description>SOC Triage: repeated SSH authentication failures</description>
+    <mitre>
+      <id>T1110</id>
+    </mitre>
+    <group>authentication_failed,ssh,brute_force,soc_triage,</group>
+  </rule>
+
+  <!-- FIM: modification of a monitored file -->
+  <rule id="100110" level="8">
+    <if_sid>550</if_sid>
+    <description>SOC Triage: monitored file modified</description>
+    <mitre>
+      <id>T1565</id>
+    </mitre>
+    <group>syscheck,file_integrity,soc_triage,</group>
+  </rule>
+
+  <!-- Web: suspicious request path -->
+  <rule id="100120" level="10">
+    <decoded_as>soc-web</decoded_as>
+    <match>wp-admin|wp-login|phpmyadmin|/etc/passwd|\.env</match>
+    <description>SOC Triage: suspicious web request path detected</description>
+    <mitre>
+      <id>T1190</id>
+    </mitre>
+    <group>web,web_attack,soc_triage,</group>
+  </rule>
+
+  <!-- Web: repeated suspicious requests -->
+  <rule id="100121" level="7" frequency="5" timeframe="300">
+    <if_matched_sid>100120</if_matched_sid>
+    <description>SOC Triage: repeated suspicious web requests</description>
+    <mitre>
+      <id>T1190</id>
+    </mitre>
+    <group>web,reconnaissance,soc_triage,</group>
+  </rule>
+
+</group>

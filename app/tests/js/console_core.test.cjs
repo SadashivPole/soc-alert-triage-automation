@@ -157,3 +157,28 @@ test("severity / risk / status classes are deterministic and css-safe", () => {
   assert.strictEqual(Core.statusClass("false_positive"), "status-false-positive");
   assert.strictEqual(Core.statusClass("acknowledged"), "status-acknowledged");
 });
+
+test("shortId ellipsizes long ids and tolerates missing ids", () => {
+  assert.strictEqual(Core.shortId(null), "—");
+  assert.strictEqual(Core.shortId(""), "—");
+  assert.strictEqual(Core.shortId("inc-1"), "inc-1");
+  assert.strictEqual(
+    Core.shortId("a1b2c3d4-0000-0000-0000-000000000000"),
+    "a1b2c3d4…0000"
+  );
+});
+
+test("incidentCardMeta renders the primary id and omits a missing alert count", () => {
+  assert.strictEqual(
+    Core.incidentCardMeta({
+      primary_alert_id: "a1b2c3d4-0000-0000-0000-000000000000",
+      linked_alert_count: 3,
+    }),
+    "primary a1b2c3d4…0000 · 3 alerts"
+  );
+  assert.strictEqual(
+    Core.incidentCardMeta({ primary_alert_id: "a1b2c3d4-0000-0000-0000-000000000000" }),
+    "primary a1b2c3d4…0000"
+  );
+  assert.strictEqual(Core.incidentCardMeta(null), "");
+});
