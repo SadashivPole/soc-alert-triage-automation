@@ -420,7 +420,7 @@
       var row = el("tr", {
         attrs: { onclick: "SOC.openAlert('" + a.alert_id + "')" },
       });
-      row.appendChild(el("td", { class: "mono", text: shortId(a.alert_id) }));
+      row.appendChild(el("td", { class: "mono", text: Core.shortId(a.alert_id) }));
       row.appendChild(el("td", { class: "nowrap", text: Core.formatDateTime(a.received_at) }));
       row.appendChild(el("td", { text: a.source || "" }));
       row.appendChild(
@@ -900,15 +900,7 @@
       })
     );
     card.appendChild(
-      el("div", {
-        class: "inc-card-meta muted small",
-        text:
-          "primary " +
-          shortId(inc.primary_alert_id) +
-          " · " +
-          inc.linked_alert_count +
-          " alerts",
-      })
+      el("div", { class: "inc-card-meta muted small", text: Core.incidentCardMeta(inc) })
     );
     card.appendChild(
       el("div", {
@@ -1025,7 +1017,7 @@
       var tb = el("tbody");
       inc.linked_alerts.forEach(function (la) {
         var tr = el("tr", { attrs: { onclick: "SOC.openAlert('" + la.alert_id + "')" } });
-        tr.appendChild(el("td", { class: "mono", text: shortId(la.alert_id) }));
+        tr.appendChild(el("td", { class: "mono", text: Core.shortId(la.alert_id) }));
         tr.appendChild(el("td", { class: "nowrap", text: Core.formatDateTime(la.received_at) }));
         tr.appendChild(el("td", { class: "mono", text: la.rule_id }));
         tr.appendChild(el("td", { text: la.agent_name }));
@@ -1180,7 +1172,7 @@
     var meta = el("div", { class: "tl-meta muted small" });
     var bits = [];
     if (ev.actor) bits.push("actor: " + ev.actor);
-    if (ev.entity_type) bits.push("entity: " + ev.entity_type + "/" + shortId(ev.entity_id));
+    if (ev.entity_type) bits.push("entity: " + ev.entity_type + "/" + Core.shortId(ev.entity_id));
     if (ev.metadata && ev.metadata.before_status && ev.metadata.after_status) {
       bits.push("status: " + ev.metadata.before_status + " → " + ev.metadata.after_status);
     } else if (ev.metadata && ev.metadata.after_status) {
@@ -1227,12 +1219,6 @@
     });
     card.appendChild(dl);
     return card;
-  }
-
-  function shortId(id) {
-    if (!id) return "—";
-    var s = String(id);
-    return s.length > 12 ? s.slice(0, 8) + "…" + s.slice(-4) : s;
   }
 
   function prettyStatus(status) {

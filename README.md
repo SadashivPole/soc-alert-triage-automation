@@ -270,6 +270,15 @@ kept **in browser memory only** for the session and sent as `X-N8N-Token`. No
 token is hardcoded or persisted. (A dedicated analyst/read token is deferred —
 the console documents this rather than weakening backend authz.)
 
+**Screenshots** (local lab, Phase 3.5 console):
+
+| View | Screenshot |
+| --- | --- |
+| Alert Queue | ![](docs/screenshots/soc-alert-queue.png) |
+| Alert Detail / risk drill-down | ![](docs/screenshots/soc-alert-detail-risk.png) |
+| Incident Board | ![](docs/screenshots/soc-incident-board.png) |
+| Incident Timeline | ![](docs/screenshots/soc-incident-timeline.png) |
+
 ## Observability
 
 Phase 3.7 adds an **optional, self-hosted, read-only** observability surface for the lab.
