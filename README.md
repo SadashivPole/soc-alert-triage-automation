@@ -118,7 +118,7 @@ This project automates that loop **defensively and transparently**:
 | Deterministic and explainable by default — scoring/decision routing is the authoritative decision path | An AI-driven decision system (there is no AI/LLM in the codebase) |
 | Free-tier friendly (public VirusTotal API, self-hosted MISP, no paid dependency) | Dependent on any paid service |
 | Human-in-the-loop: destructive response actions are proposals that require explicit analyst approval | An autonomous retaliation / auto-containment bot |
-| Backed by 891 Python tests + 15 console JS tests and a Phase 5 evaluation harness | A benchmark of detection quality (the evaluation corpus is a 6-fixture smoke corpus) |
+| Backed by 930 Python tests + 15 console JS tests, a Phase 5 evaluation harness, and a validated detection-coverage framework | A benchmark of detection quality (the evaluation corpus is a 6-fixture smoke corpus) |
 
 ## SOC Use Cases
 
@@ -239,14 +239,16 @@ so there is **no detection-quality CI gate yet** — that is Phase 6); it does n
 enrichment quality (all fixtures run with enrichment disabled/skipped); it does not cover
 Wazuh rule-level detection coverage; and a 6-fixture corpus is **not** a benchmark.
 
-## Phase 6 — Detection Quality & Correlation (Planned)
+## Phase 6 — Detection Quality & Correlation (In Progress)
 
-**Status: 🔮 planned / in progress — nothing in this section is implemented.** It is
-recorded here so the roadmap and the repository state cannot drift apart.
+**Status: 🟡 in progress — 1 of 6 items implemented.** The **detection coverage
+framework** is implemented and locally validated (see below); the remaining five items are
+🔮 planned. Full detail: [docs/detection-coverage.md](docs/detection-coverage.md) and
+[DEVELOPMENT_PLAN.md](DEVELOPMENT_PLAN.md).
 
 | Phase 6 item | Intent | Current state |
 | --- | --- | --- |
-| **Detection coverage framework** | Track which Wazuh rules/decoders and scenarios the platform actually covers, and which are blind spots | 🔮 not started (no coverage artifact exists) |
+| **Detection coverage framework** | Track which Wazuh rules/decoders and scenarios the platform actually covers, and which are blind spots | ✅ **implemented** — [`evaluation/detection_catalog.yaml`](evaluation/detection_catalog.yaml) + [`docs/detection-coverage.md`](docs/detection-coverage.md), validated by 39 read-only tests. It makes rule → ATT&CK → scenario → expected outcome → runbook → regression test traceable and names 9 gaps. It does **not** change scoring or routing, and no custom rule has a pinned outcome yet (none is exercised by a fixture) |
 | **ATT&CK mapping** | Map detected scenarios to MITRE ATT&CK techniques for reporting and analyst context | 🔮 not started as a mapping framework. Today ATT&CK ids only pass through from Wazuh rule metadata as `rule.mitre`, and their *presence* contributes to the `rule_groups_mitre` score factor |
 | **Expanded regression corpus** | Grow the labeled corpus well beyond 6 fixtures (incl. label/action semantics such as UC-1's first-occurrence case) | 🔮 not started; current corpus is 6 fixtures / 1 negative |
 | **Cross-alert correlation** | Correlate related alerts (same host/user/indicator over time) into a single investigation context | 🔮 not started; dedupe groups by rule+agent recurrence only |
@@ -330,12 +332,14 @@ soc-alert-triage-automation/
 │   ├── config/                # scoring.yaml (scoring.v1) · decisions.yaml (decisions.v1)
 │   ├── alembic/               # migrations
 │   └── tests/                 # unit/ · integration/ · evaluation/ · js/ · fixtures/
-├── evaluation/                # Phase 5 evaluation framework: corpus.json · ground_truth.json · metrics.py · evaluator.py
+├── evaluation/                # Phase 5 evaluation: corpus.json · ground_truth.json · metrics.py · evaluator.py
+│                              # Phase 6 coverage catalog: detection_catalog.yaml
 ├── n8n/                       # exported workflow JSONs (WF1/WF2/WF3/WF5) + import docs + lab SMTP credential template
 ├── wazuh/                     # manager config, custom rules/decoders, integrator script, entrypoint hook (Phase 4)
 ├── misp/                      # optional MISP profile notes — scaffolded only
 ├── deploy/                    # triage-api Dockerfile, Prometheus/Grafana provisioning
 ├── docs/
+│   ├── detection-coverage.md  # Phase 6 detection coverage framework (rule → ATT&CK → scenario → outcome)
 │   ├── sample-alerts/         # safe synthetic Wazuh alert payloads (also test fixtures)
 │   ├── runbooks/              # analyst runbooks for the six sample scenarios (Phase 3.6)
 │   ├── screenshots/           # console screenshots
@@ -346,8 +350,8 @@ soc-alert-triage-automation/
 
 ## Testing & CI
 
-**Verified locally on this checkout (Python 3.11): `pytest` → 891 passed**
-(571 unit, 318 integration, 2 evaluation) and
+**Verified locally on this checkout (Python 3.11): `pytest` → 930 passed**
+(571 unit, 318 integration, 41 evaluation) and
 `node --test app/tests/js/console_core.test.cjs` → **15 passed**.
 
 | Layer | Tooling | Gate |
@@ -357,6 +361,7 @@ soc-alert-triage-automation/
 | Integration (API + temp SQLite + auth + audit + lifecycle) | FastAPI `TestClient` | all acceptance-path tests green |
 | External fakes (VirusTotal/MISP behavior) | `httpx.MockTransport` injected clients — no network in tests | outage/quota/timeout paths covered |
 | **Evaluation (Phase 5)** | pytest + `evaluation/` corpus, ground truth, metrics | ground-truth contracts and corpus/ground-truth parity must hold (metric *values* are printed, not asserted) |
+| **Detection coverage (Phase 6)** | pytest + `evaluation/detection_catalog.yaml` vs the ruleset, fixtures, ground truth, runbooks, tests, and the coverage doc | every documented mapping must resolve (39 read-only tests; no scoring/routing behavior touched) |
 | Console JS | Node `--test` | 15 tests green |
 | Security | `scripts/check_secrets.sh`, metrics no-secret canary, authz tests | all green |
 | E2E compose smoke | compose + curl assertions | ⬜ **not implemented** — no nightly compose smoke job exists |
@@ -531,7 +536,8 @@ SQLite persistence + migrations, audit log, deterministic scoring `scoring.v1`,
 deterministic decisions `decisions.v1`, incident persistence/lifecycle/read APIs/timeline,
 TTL auto-close sweeper, analyst feedback capture + incident transitions, n8n workflow
 exports with static validation, the static SOC console (+ 15 JS tests), Prometheus
-`/metrics`, and the **Phase 5 evaluation framework** (891 Python tests total).
+`/metrics`, the **Phase 5 evaluation framework**, and the **Phase 6 detection coverage
+framework** (catalog + doc + 39 validation tests; 930 Python tests total).
 
 **🔍 Source-audited (not live-run in the build environment):** the Phase 4 Wazuh wiring —
 the pinned `wazuh/wazuh-manager:4.9.2` image behaviour, `integratord` log redirection,
@@ -562,9 +568,11 @@ export; containment approval/response runbook; Phase 4 failure-spool, duplicate-
 `/metrics` hygiene, and 10k alerts/day soak validations; CI coverage threshold and nightly
 compose smoke job.
 
-**🔮 Future / planned:** everything in Phase 6 (detection coverage framework, ATT&CK
-mapping, expanded regression corpus, cross-alert correlation, analyst explainability,
-detection-quality CI gates).
+**🔮 Future / planned:** the rest of Phase 6 — ATT&CK mapping as a maintained framework,
+an expanded regression corpus, cross-alert correlation, analyst explainability, and
+detection-quality CI gates. (The detection coverage framework itself is ✅ implemented;
+its own blind spots are listed as gaps G1–G9 in
+[docs/detection-coverage.md](docs/detection-coverage.md).)
 
 **Known documentation drift outside this README/plan** (tracked, not fixed here):
 `ARCHITECTURE.md §8.3` still refers to "optional LLM polish in Phase 5", but Phase 5 is
@@ -595,6 +603,7 @@ script that is not implemented; `CHANGELOG.md` has no Phase 5 entry yet.
 | [app/console/README.md](app/console/README.md) | Static SOC console: run, API dependency, auth expectation, limitations, security |
 | [docs/sample-alerts/README.md](docs/sample-alerts/README.md) | Synthetic alert scenarios & expected triage behavior |
 | [docs/runbooks/README.md](docs/runbooks/README.md) | Analyst runbooks for the six sample scenarios (investigation + approval-gated containment proposals) |
+| [docs/detection-coverage.md](docs/detection-coverage.md) | Phase 6 detection coverage framework: rule → ATT&CK → scenario → expected outcome → runbook → regression test, catalog schema, and the explicit gaps (G1–G9) |
 | [docs/specs/phase-3.7-prometheus-observability.md](docs/specs/phase-3.7-prometheus-observability.md) | Phase 3.7 spec: `/metrics` catalog, cardinality/security rules, observability profile, decisions |
 | [docs/specs/phase-4-live-validation-checklist.md](docs/specs/phase-4-live-validation-checklist.md) | Phase 4.1/4.2 live-validation checklist: methodology, verified items, outstanding items |
 

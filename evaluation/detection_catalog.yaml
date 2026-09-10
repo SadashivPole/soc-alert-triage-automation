@@ -1,0 +1,174 @@
+# Detection coverage catalog (roadmap item 6.1 — detection coverage framework).
+#
+# This file is the machine-readable source of truth for the coverage table in
+# docs/detection-coverage.md, which documents the schema and the known gaps.
+#
+# RULES FOR THIS FILE
+#   * Every value must be verifiable from the repository. Nothing is inferred.
+#   * Rule-backed entries describe ONLY rules that exist in
+#     wazuh/ruleset/rules/soc-triage-rules.xml.
+#   * Scenario entries describe ONLY the Phase 5 evaluation fixtures that exist in
+#     app/tests/fixtures/ and evaluation/{corpus,ground_truth}.json.
+#   * Do not add a detection, ATT&CK id, scenario, runbook, or test reference that does
+#     not exist in this repository. Use the "gaps" section of the doc instead.
+#
+# Validated by app/tests/evaluation/test_detection_coverage.py.
+
+version: "1.0"
+
+# --------------------------------------------------------------------------------
+# Custom SOC-triage detections (Wazuh custom ruleset).
+#
+# validation_status values (see docs/detection-coverage.md § Catalog schema):
+#   authored  — present in the ruleset; never exercised by a fixture and no live
+#               Wazuh rule match has been recorded (Phase 4.3 remains outstanding).
+#   validated — exercised end-to-end and/or live-validated (none today).
+# --------------------------------------------------------------------------------
+detections:
+  - id: DET-100100
+    rule_id: "100100"
+    rule_source: wazuh/ruleset/rules/soc-triage-rules.xml
+    behavior: "Repeated SSH authentication failures"
+    rule_level: 10
+    mitre_attack: ["T1110"]
+    groups: ["authentication_failed", "ssh", "brute_force", "soc_triage"]
+    trigger:
+      kind: if_matched_sid
+      value: "5712"
+    reference_scenario: SCN-01
+    scenario_link: behavioral-overlap
+    regression_tests: []
+    validation_status: authored
+
+  - id: DET-100110
+    rule_id: "100110"
+    rule_source: wazuh/ruleset/rules/soc-triage-rules.xml
+    behavior: "Monitored file modified (FIM)"
+    rule_level: 8
+    mitre_attack: ["T1565"]
+    groups: ["syscheck", "file_integrity", "soc_triage"]
+    trigger:
+      kind: if_sid
+      value: "550"
+    reference_scenario: SCN-03
+    scenario_link: parent-rule
+    regression_tests: []
+    validation_status: authored
+
+  - id: DET-100120
+    rule_id: "100120"
+    rule_source: wazuh/ruleset/rules/soc-triage-rules.xml
+    behavior: "Suspicious web request path detected"
+    rule_level: 10
+    mitre_attack: ["T1190"]
+    groups: ["web", "web_attack", "soc_triage"]
+    trigger:
+      kind: decoded_as
+      value: soc-web
+    reference_scenario: SCN-05
+    scenario_link: behavioral-overlap
+    regression_tests: []
+    validation_status: authored
+
+  - id: DET-100121
+    rule_id: "100121"
+    rule_source: wazuh/ruleset/rules/soc-triage-rules.xml
+    behavior: "Repeated suspicious web requests"
+    rule_level: 7
+    mitre_attack: ["T1190"]
+    groups: ["web", "reconnaissance", "soc_triage"]
+    trigger:
+      kind: if_matched_sid
+      value: "100120"
+    reference_scenario: SCN-05
+    scenario_link: behavioral-overlap
+    regression_tests: []
+    validation_status: authored
+
+# --------------------------------------------------------------------------------
+# Evaluation scenarios (Phase 5 corpus). Each scenario is one synthetic fixture whose
+# runtime outcome is pinned by evaluation/ground_truth.json and replayed through the
+# real ingest path by app/tests/evaluation/test_evaluation.py.
+#
+# rule_id / rule_level / mitre_attack are the values DECLARED INSIDE the synthetic
+# fixture (built-in Wazuh rule ids are illustrative — see docs/sample-alerts/README.md).
+# rule_provenance records that these are fixture-declared, not live-manager-observed.
+#
+# validation_status values:
+#   locally-validated — replayed in the local test harness and pinned by ground truth.
+# --------------------------------------------------------------------------------
+scenarios:
+  - id: SCN-01
+    fixture: 01_wazuh_ssh_brute_force.json
+    rule_id: "5710"
+    rule_level: 5
+    rule_provenance: synthetic-fixture
+    mitre_attack: ["T1110"]
+    ground_truth: {score: 43, tier: low, action: monitor}
+    runbook: docs/runbooks/ssh-brute-force.md
+    regression_tests:
+      - app/tests/evaluation/test_evaluation.py::test_ground_truth_evaluation
+      - app/tests/integration/test_scoring_pipeline.py::test_ingest_response_carries_score_and_decision
+    validation_status: locally-validated
+
+  - id: SCN-02
+    fixture: 02_wazuh_ssh_brute_force_success.json
+    rule_id: "5715"
+    rule_level: 3
+    rule_provenance: synthetic-fixture
+    mitre_attack: []
+    ground_truth: {score: 27, tier: low, action: monitor}
+    runbook: docs/runbooks/ssh-brute-force.md
+    regression_tests:
+      - app/tests/evaluation/test_evaluation.py::test_ground_truth_evaluation
+    validation_status: locally-validated
+
+  - id: SCN-03
+    fixture: 03_wazuh_fim_etc_passwd_change.json
+    rule_id: "550"
+    rule_level: 7
+    rule_provenance: synthetic-fixture
+    mitre_attack: ["T1566"]
+    ground_truth: {score: 63, tier: medium, action: queue_l1}
+    runbook: docs/runbooks/fim-critical-file.md
+    regression_tests:
+      - app/tests/evaluation/test_evaluation.py::test_ground_truth_evaluation
+      - app/tests/integration/test_scoring_pipeline.py::test_fim_critical_asset_scores_medium_and_queues_l1
+    validation_status: locally-validated
+
+  - id: SCN-04
+    fixture: 04_wazuh_malware_hash_virustotal.json
+    rule_id: "87105"
+    rule_level: 12
+    rule_provenance: synthetic-fixture
+    mitre_attack: ["T1204"]
+    ground_truth: {score: 73, tier: high, action: open_incident, severity: SEV2}
+    runbook: docs/runbooks/malware-hash.md
+    regression_tests:
+      - app/tests/evaluation/test_evaluation.py::test_ground_truth_evaluation
+      - app/tests/integration/test_scoring_pipeline.py::test_malware_alert_scores_high_and_opens_sev2
+    validation_status: locally-validated
+
+  - id: SCN-05
+    fixture: 05_wazuh_web_sql_injection.json
+    rule_id: "31103"
+    rule_level: 10
+    rule_provenance: synthetic-fixture
+    mitre_attack: ["T1190"]
+    ground_truth: {score: 59, tier: medium, action: queue_l1}
+    runbook: docs/runbooks/web-attack.md
+    regression_tests:
+      - app/tests/evaluation/test_evaluation.py::test_ground_truth_evaluation
+    validation_status: locally-validated
+
+  - id: SCN-06
+    fixture: 06_wazuh_windows_user_created.json
+    rule_id: "60180"
+    rule_level: 5
+    rule_provenance: synthetic-fixture
+    mitre_attack: ["T1136"]
+    ground_truth: {score: 47, tier: medium, action: queue_l1}
+    runbook: docs/runbooks/account-creation.md
+    regression_tests:
+      - app/tests/evaluation/test_evaluation.py::test_ground_truth_evaluation
+    validation_status: locally-validated
