@@ -36,7 +36,7 @@ history. Status claims elsewhere are descriptive, not authoritative.
 | **Phase 3 — Incidents, analyst workflow & observability** | 🟡 Partially validated | Incidents, lifecycle, read APIs, timeline, sweeper, console, runbooks, `/metrics` + Grafana profile all implemented; PostgreSQL profile + stats/digest ⬜ |
 | **Phase 4 — Real Wazuh integration & approved response** | 🟡 Partially validated | 4.1/4.2 source-audited + live-validated end-to-end; 4.4 validated; 4.3 authored but not live-validated; 4.5/4.6/4.7 and runtime failure/duplicate checks ⬜ |
 | **Phase 5 — Deterministic detection evaluation** | ✅ Implemented · locally validated | Labeled corpus, ground truth, confusion matrix, precision/recall/F1/FPR, runtime evaluation tests |
-| **Phase 6 — Detection quality & correlation** | 🔮 Planned / in progress | No implementation yet: coverage framework, ATT&CK mapping, expanded regression corpus, cross-alert correlation, analyst explainability, detection-quality CI gates |
+| **Phase 6 — Detection quality & correlation** | 🟡 In progress (1 of 6 items implemented) | Detection coverage framework ✅ (catalog + doc + validation tests); ATT&CK mapping, expanded regression corpus, cross-alert correlation, analyst explainability, detection-quality CI gates 🔮 |
 
 No release tags have been cut. The package version is `0.1.0a1` and `CHANGELOG.md` is
 still under `[Unreleased]`.
@@ -294,26 +294,58 @@ Confusion matrix: **TP 4 · FP 0 · FN 1 · TN 1** → **precision 1.0000**, **r
 
 ---
 
-## Phase 6 — Detection quality & correlation 🔮
+## Phase 6 — Detection quality & correlation 🟡
 
 **Goal:** move from "the deterministic path behaves as pinned" to "detection quality is
 continuously measured and regressions are blocked".
 
-**Status: planned / in progress — nothing below is implemented.** This section exists so
-the roadmap cannot drift from the tree; it is a scope, not an achievement.
+**Status: in progress — 1 of 6 items implemented (detection coverage framework).**
+Everything else below is still a scope, not an achievement.
 
 | # | Item | Scope | Status |
 | --- | --- | --- | --- |
-| 6.1 | Detection coverage framework | A machine-readable inventory of the scenarios, Wazuh rules/decoders, and pipeline outcomes the platform covers, plus explicit blind spots | 🔮 not started |
-| 6.2 | MITRE ATT&CK mapping | Maintained mapping from scenarios/rules to ATT&CK techniques for reporting and analyst context (today ATT&CK ids only pass through from Wazuh rule metadata as `rule.mitre`, and their presence contributes to the `rule_groups_mitre` score factor) | 🔮 not started as a framework |
+| 6.1 | Detection coverage framework | A machine-readable inventory of the scenarios, Wazuh rules/decoders, and pipeline outcomes the platform covers, plus explicit blind spots | ✅ **implemented** (delivered as the Phase 6.2 implementation task) — see below |
+| 6.2 | MITRE ATT&CK mapping | Maintained mapping from scenarios/rules to ATT&CK techniques for reporting and analyst context (today ATT&CK ids only pass through from Wazuh rule metadata as `rule.mitre`, and their presence contributes to the `rule_groups_mitre` score factor) | 🔮 not started as a framework — the coverage catalog now *records* the ATT&CK ids each rule/fixture declares, and surfaces one fixture-level metadata discrepancy (gap G5) |
 | 6.3 | Expanded regression corpus | Grow the labeled corpus well beyond 6 fixtures; add negatives per scenario; define and document the positive/negative ↔ decision-action semantics (including the UC-1 first-occurrence case) | 🔮 not started |
-| 6.4 | Cross-alert correlation | Correlate related alerts (same host, user, or indicator over time) into one investigation context (today only rule+agent recurrence is grouped) | 🔮 not started |
+| 6.4 | Cross-alert correlation | Correlate related alerts (same host, user, or indicator over time) into one investigation context (today only rule+agent recurrence is grouped) | 🔮 not started — now named as gap G7 in the coverage framework |
 | 6.5 | Analyst explainability | Extend per-alert explanations beyond today's factor-by-factor score justification, decision reasons, and incident timeline — e.g. "what changed since the last occurrence" | 🔮 not started |
-| 6.6 | Detection-quality CI gates | Fail CI when precision/recall/F1 degrade beyond an agreed threshold, on a corpus large enough to make the thresholds meaningful | 🔮 not started |
+| 6.6 | Detection-quality CI gates | Fail CI when precision/recall/F1 degrade beyond an agreed threshold, on a corpus large enough to make the thresholds meaningful | 🔮 not started — coverage framework validates traceability, not quality (gap G8) |
 
-**Phase 6 exit criteria (proposed, to be refined before implementation):** a documented
-coverage map exists · ATT&CK mapping is generated from a maintained source and covered by
-tests · the corpus has scenario-level negatives, and its label semantics are documented ·
+### 6.1 Detection coverage framework — what is now implemented (Phase 6.2 task)
+
+**Status: ✅ implemented and locally validated. No scoring or decision-routing behavior
+changed; the framework is read-only data + documentation + validation tests.**
+
+| Artifact | Purpose | Status |
+| --- | --- | --- |
+| [`evaluation/detection_catalog.yaml`](evaluation/detection_catalog.yaml) | Machine-readable coverage catalog (version `1.0`): 4 custom detections (`DET-100100`–`DET-100121`, traced to `wazuh/ruleset/rules/soc-triage-rules.xml`) and 6 evaluation scenarios (`SCN-01`–`SCN-06`, traced to fixtures + ground truth) | ✅ implemented |
+| [`docs/detection-coverage.md`](docs/detection-coverage.md) | Human-readable framework: the coverage tables (detection → ATT&CK → scenario → expected outcome → runbook → regression test → validation status), the documented catalog schema, and 9 explicitly flagged gaps | ✅ implemented |
+| [`app/tests/evaluation/test_detection_coverage.py`](app/tests/evaluation/test_detection_coverage.py) | 39 read-only validation tests asserting every mapping against repository evidence (ruleset, decoders, fixtures, ground truth, corpus, runbooks, test references, document ↔ catalog sync) | ✅ implemented · locally validated |
+
+**Traced today:** 4 custom rules → ATT&CK (`T1110`, `T1565`, `T1190`) → related scenarios
+(`SCN-01`, `SCN-03`, `SCN-05`) → expected outcomes → analyst runbooks → validation status ·
+6 scenarios → fixtures → ground truth outcomes (`43/low/monitor`, `27/low/monitor`,
+`63/medium/queue_l1`, `73/high/open_incident+SEV2`, `59/medium/queue_l1`,
+`47/medium/queue_l1`) → runbooks → regression tests.
+
+**Explicitly NOT claimed** (these are gaps in the framework, not pending guesses):
+
+- No custom rule yet covers `SCN-02`, `SCN-04`, or `SCN-06` (gaps G1, G2).
+- No fixture exercises any custom rule, so no custom rule has a pinned score/tier/action —
+  those detection-table cells stay `—` by design (gap G3), and Phase 4.3 remains
+  "authored, not live-validated".
+- The `soc-web` decoder path is unexercised (G4).
+- Runbook linkage is documentation-only: `decisions.yaml` wires no runbook (G6).
+- Cross-alert correlation is absent (G7); coverage is documented, not measured (G8);
+  rule `frequency`/`timeframe` thresholds are unvalidated (G9).
+
+**Still outstanding in this item:** nothing mandatory — future work is to close the gaps
+above and to re-run the validation when rules, fixtures, or ground truth change (it fails
+on drift by design; verified locally by mutation checks during implementation).
+
+**Phase 6 exit criteria (to be refined as items land):** a documented coverage map exists
+(✅ 6.1) · ATT&CK mapping is generated from a maintained source and covered by tests ·
+the corpus has scenario-level negatives, and its label semantics are documented ·
 correlation produces a single investigation context for a multi-stage scenario ·
 quality gates run in CI with thresholds justified by the corpus size · all existing
 deterministic goldens and Phase 5 contracts still pass unchanged.
@@ -323,8 +355,9 @@ deterministic goldens and Phase 5 contracts still pass unchanged.
 ## Testing Strategy
 
 **Verified locally on the current checkout (Python 3.11, 2026-09-10):**
-`pytest` → **891 passed** (571 unit · 318 integration · 2 evaluation);
-`node --test app/tests/js/console_core.test.cjs` → **15 passed**.
+`pytest` → **930 passed** (571 unit · 318 integration · 41 evaluation, of which 39 are the
+Phase 6.1 detection-coverage validation); ruff check + format check, mypy `src`, and
+`check_secrets.sh` clean; `node --test app/tests/js/console_core.test.cjs` → **15 passed**.
 
 | Layer | Runs on | Tooling | Gate |
 | --- | --- | --- | --- |
