@@ -1,0 +1,192 @@
+# Detection Coverage Framework
+
+**Roadmap item:** Phase 6.1 — detection coverage framework (implementation task: Phase 6.2).
+**Machine-readable source of truth:** [`evaluation/detection_catalog.yaml`](../evaluation/detection_catalog.yaml)
+**Validation:** [`app/tests/evaluation/test_detection_coverage.py`](../app/tests/evaluation/test_detection_coverage.py)
+
+This document makes each supported detection traceable along one chain:
+
+```
+Wazuh rule → ATT&CK technique → evaluation scenario → expected triage outcome
+           → analyst runbook → regression test
+```
+
+It is a **description of what exists**, not a plan and not a claim of live coverage. Every
+value in the catalog is verified against repository files by the validation test above:
+
+| Field | Verified against |
+| --- | --- |
+| Custom rules (id, level, ATT&CK ids, groups, trigger) | `wazuh/ruleset/rules/soc-triage-rules.xml` |
+| Decoder references | `wazuh/ruleset/decoders/soc-triage-decoders.xml` |
+| Scenario fixtures (rule id/level, ATT&CK ids) | `app/tests/fixtures/*.json` (and the identical copies in `docs/sample-alerts/`) |
+| Expected score / tier / action / severity | `evaluation/ground_truth.json` |
+| Scenario ↔ corpus membership | `evaluation/corpus.json` |
+| Runbook references | the referenced file under `docs/runbooks/` |
+| Regression-test references | the referenced file and `def <test_name>(` inside it |
+
+**Scope limits — what this framework is not:**
+
+- It changes **no** scoring or decision-routing behavior. There is no runtime code path:
+  the catalog is data, the table below is its rendered view, and the validation is a
+  read-only test.
+- It does not measure live Wazuh rule coverage, rule health, or manager-side firing.
+- It does not add, correct, or reinterpret ATT&CK metadata; it records what the rules and
+  fixtures already declare (including the discrepancy listed in [Known gaps](#known-gaps)).
+
+---
+
+## Detection coverage (custom SOC-triage rules)
+
+Every row below is a rule that exists in `wazuh/ruleset/rules/soc-triage-rules.xml`. The
+ruleset is mounted read-only into the optional `full` compose profile.
+
+| Detection ID | Wazuh rule ID | Detection / behavior | MITRE ATT&CK | Evaluation scenario | Expected score | Expected tier | Expected action | Analyst action / runbook | Regression test | Validation status |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `DET-100100` | `100100` (level 10) | Repeated SSH authentication failures (`if_matched_sid` 5712, 5 in 300 s) | `T1110` (Credential Access) | `SCN-01` · behavioral overlap | — | — | — | `docs/runbooks/ssh-brute-force.md` (behavioral overlap, not policy-wired) | None — no fixture exercises this rule | **Authored** — not live-validated |
+| `DET-100110` | `100110` (level 8) | Monitored file modified / FIM (`if_sid` 550) | `T1565` (Impact) | `SCN-03` · parent rule | — | — | — | `docs/runbooks/fim-critical-file.md` (parent-rule overlap, not policy-wired) | None — no fixture exercises this rule | **Authored** — not live-validated |
+| `DET-100120` | `100120` (level 10) | Suspicious web request path (`decoded_as` `soc-web`) | `T1190` (Initial Access) | `SCN-05` · behavioral overlap | — | — | — | `docs/runbooks/web-attack.md` (behavioral overlap, not policy-wired) | None — no fixture exercises this rule | **Authored** — not live-validated |
+| `DET-100121` | `100121` (level 7) | Repeated suspicious web requests (`if_matched_sid` 100120, 5 in 300 s) | `T1190` (Initial Access) | `SCN-05` · behavioral overlap | — | — | — | `docs/runbooks/web-attack.md` (behavioral overlap, not policy-wired) | None — no fixture exercises this rule | **Authored** — not live-validated |
+
+**Legend**
+
+- `—` in an outcome column means **no runtime expectation exists for that rule**. No
+  evaluation fixture exercises these custom rules, so writing a score, tier, or action in
+  those cells would be a fabricated claim. The real, pinned outcomes belong to the
+  scenarios and are listed in the next table.
+- **Scenario link kinds** (catalog field `scenario_link`) — how a rule relates to a
+  scenario, with no implied equivalence:
+  - `direct` — a fixture carries this exact rule id (not used today: no fixture carries a
+    custom rule id).
+  - `parent-rule` — the custom rule is a child of the rule the fixture carries
+    (`if_sid`). True for `DET-100110`, whose parent `550` is the rule in `SCN-03`.
+  - `behavioral-overlap` — same behavior class and a shared ATT&CK id, but a **different
+    rule path**. `DET-100100` matches on `5712` while `SCN-01` carries `5710`;
+    `DET-100120`/`DET-100121` require the lab `soc-web` decoder while `SCN-05` is a
+    built-in web rule.
+  - `none` — no scenario relationship.
+- **Validation status** (catalog field `validation_status`):
+  - `authored` — the rule exists in the ruleset; no fixture exercises it and no live
+    Wazuh rule match has been recorded (matches the Phase 4.3 status: authored, not
+    live-validated).
+  - `validated` — exercised end-to-end or live-validated. **No custom rule is at this
+    status today.**
+
+---
+
+## Scenario coverage (Phase 5 evaluation corpus)
+
+Each scenario is one synthetic fixture in `app/tests/fixtures/` (identical copy in
+`docs/sample-alerts/`) that is replayed through the real ingest path
+(`normalize → dedupe → score → decide`) and compared against ground truth by
+`test_evaluation.py`.
+
+| Scenario ID | Fixture | Wazuh rule (fixture-declared) | MITRE ATT&CK | Expected score | Expected tier | Expected action | Analyst action / runbook | Regression test | Validation status |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `SCN-01` | `01_wazuh_ssh_brute_force.json` | `5710` (level 5) | `T1110` | 43 | low | `monitor` | `docs/runbooks/ssh-brute-force.md` | `test_evaluation.py::test_ground_truth_evaluation`, `test_scoring_pipeline.py::test_ingest_response_carries_score_and_decision` | **Locally validated** |
+| `SCN-02` | `02_wazuh_ssh_brute_force_success.json` | `5715` (level 3) | — (none declared) | 27 | low | `monitor` | `docs/runbooks/ssh-brute-force.md` | `test_evaluation.py::test_ground_truth_evaluation` | **Locally validated** |
+| `SCN-03` | `03_wazuh_fim_etc_passwd_change.json` | `550` (level 7) | `T1566` (as declared by the fixture — see gaps) | 63 | medium | `queue_l1` | `docs/runbooks/fim-critical-file.md` | `test_evaluation.py::test_ground_truth_evaluation`, `test_scoring_pipeline.py::test_fim_critical_asset_scores_medium_and_queues_l1` | **Locally validated** |
+| `SCN-04` | `04_wazuh_malware_hash_virustotal.json` | `87105` (level 12) | `T1204` | 73 | high | `open_incident` (`SEV2`) | `docs/runbooks/malware-hash.md` | `test_evaluation.py::test_ground_truth_evaluation`, `test_scoring_pipeline.py::test_malware_alert_scores_high_and_opens_sev2` | **Locally validated** |
+| `SCN-05` | `05_wazuh_web_sql_injection.json` | `31103` (level 10) | `T1190` | 59 | medium | `queue_l1` | `docs/runbooks/web-attack.md` | `test_evaluation.py::test_ground_truth_evaluation` | **Locally validated** |
+| `SCN-06` | `06_wazuh_windows_user_created.json` | `60180` (level 5) | `T1136` | 47 | medium | `queue_l1` | `docs/runbooks/account-creation.md` | `test_evaluation.py::test_ground_truth_evaluation` | **Locally validated** |
+
+**Reading notes**
+
+- Rule ids here are **declared inside the synthetic fixtures**. `docs/sample-alerts/README.md`
+  documents them as "illustrative Wazuh-style IDs — verify against your Wazuh version
+  before using with a real manager" (catalog field `rule_provenance: synthetic-fixture`).
+  Only the Phase 4.1/4.2 integrator path has been live-validated end-to-end, and that
+  validation used built-in rule `60602`, which is **not** part of this corpus.
+- `SCN-04` is the only scenario whose ground truth pins a decision `severity` (`SEV2`).
+- Expected values are the ones pinned by `evaluation/ground_truth.json`; they are asserted
+  by the runtime evaluation test, not estimated here.
+- Test names are abbreviated to the file basename; full paths are in the catalog
+  (`app/tests/evaluation/…`, `app/tests/integration/…`).
+
+---
+
+## Known gaps
+
+Explicit and intentional: these are the parts of the chain that the repository does **not**
+support today. Nothing below is "to be filled in later with a guess" — each item names what
+is missing and, where one exists, the roadmap item that would close it.
+
+| # | Gap | Evidence | Status |
+| --- | --- | --- | --- |
+| G1 | **No custom detection rule for `SCN-02`, `SCN-04`, `SCN-06`** — these scenarios rely solely on built-in rule ids declared in the fixture | `wazuh/ruleset/rules/soc-triage-rules.xml` defines only rules 100100–100121 (SSH, FIM, web) | Not mapped — outstanding |
+| G2 | **No custom detection rule for account creation (Windows 4720)** — `SCN-06` has ATT&CK `T1136` and no corresponding rule | ruleset covers SSH/FIM/web only | Not mapped — outstanding |
+| G3 | **No fixture exercises any custom rule** — `DET-100100`–`DET-100121` have no regression coverage; their runtime behavior (level → score path) is unproven | `regression_tests: []` in the catalog; already recorded as Phase 4.3 "authored, not live-validated" in `DEVELOPMENT_PLAN.md` | Outstanding |
+| G4 | **The `soc-web` decoder path is not exercised** — `DET-100120`/`DET-100121` require `SOC_WEB` log lines decoded by `soc-web`; no fixture emits them | `wazuh/ruleset/decoders/soc-triage-decoders.xml` prematch `^SOC_WEB\s`; `SCN-05` uses built-in rule `31103` | Outstanding |
+| G5 | **ATT&CK metadata discrepancy on `SCN-03`** — the fixture declares id `T1566` with technique name "Modify Authentication Process", while the custom FIM rule `DET-100110` declares `T1565`. This catalog records both as written rather than resolving them | `app/tests/fixtures/03_wazuh_fim_etc_passwd_change.json` vs `wazuh/ruleset/rules/soc-triage-rules.xml` | Recorded — unresolved (no scoring impact: the engine only counts ATT&CK *presence*, see `app/config/scoring.yaml` `rule_groups_mitre`) |
+| G6 | **Runbook linkage is documentation-only** — the decision engine carries a `runbook` field and the n8n payload forwards it, but `app/config/decisions.yaml` assigns no runbook to any tier, so no runbook is attached at runtime. The runbook column above is an analyst-facing reference, not a wired control | `app/config/decisions.yaml` has no `runbook` key; `app/src/soc_triage/decisions/router.py` calls runbook lookup "future extension" | Not mapped — outstanding |
+| G7 | **No cross-alert correlation** — `SCN-01`/`SCN-02` are documented as a correlated pair (failed logins followed by a success), but the platform only groups repeats of the same rule+agent (dedupe/recurrence). There is no correlation entity linking two different rules | README/`docs/sample-alerts/README.md` describe the pairing as a correlation demo; `app/src/soc_triage/ingest/deduplication.py` groups rule+agent recurrence | Not mapped — outstanding (roadmap item 6.4) |
+| G8 | **Coverage is documented, not measured** — no automated coverage metric, no threshold, and no CI gate. The framework validates *traceability*, not detection quality | this document + `app/tests/evaluation/test_detection_coverage.py` | Outstanding (roadmap items 6.2 and 6.6) |
+| G9 | **Rule thresholds (`frequency`/`timeframe`) are not validated** — values are read from the ruleset; no test or lab run exercises burst behaviour at those thresholds | `wazuh/ruleset/rules/soc-triage-rules.xml` (`frequency="5" timeframe="300"`) | Outstanding |
+
+---
+
+## Catalog schema
+
+`evaluation/detection_catalog.yaml` — YAML, `version: "1.0"`, two lists. Identifiers are
+stable and unique: `DET-<rule_id>` for rule-backed detections, `SCN-<nn>` for scenarios.
+
+### `detections[]`
+
+| Field | Type | Required | Meaning / allowed values |
+| --- | --- | --- | --- |
+| `id` | string | yes | `DET-<rule_id>`; unique |
+| `rule_id` | string | yes | Custom Wazuh rule id; must exist in `rule_source` |
+| `rule_source` | string | yes | Repo-relative path to the ruleset file that defines the rule |
+| `behavior` | string | yes | What the rule detects, matching the rule description |
+| `rule_level` | int | yes | Must equal the rule's `level` attribute |
+| `mitre_attack` | list[string] | yes | Must equal the `<mitre><id>` values in the rule (may be empty) |
+| `groups` | list[string] | yes | Must equal the rule's `<group>` values, trimmed and without the trailing empty element |
+| `trigger` | map | yes | `{kind, value}`; `kind` ∈ `if_sid`, `if_matched_sid`, `decoded_as`; the rule must contain that child element with that text |
+| `reference_scenario` | string \| null | no | Scenario id this rule relates to; `null` when none |
+| `scenario_link` | string | yes | `direct` \| `parent-rule` \| `behavioral-overlap` \| `none` (semantics in the legend above) |
+| `regression_tests` | list[string] | yes | `path::test_name` references; empty list means no coverage (a gap, not a placeholder) |
+| `validation_status` | string | yes | `authored` \| `validated` |
+
+### `scenarios[]`
+
+| Field | Type | Required | Meaning / allowed values |
+| --- | --- | --- | --- |
+| `id` | string | yes | `SCN-<nn>`; unique |
+| `fixture` | string | yes | Filename present in both `app/tests/fixtures/` and `docs/sample-alerts/` (identical copies) |
+| `rule_id` | string | yes | Rule id declared inside the fixture |
+| `rule_level` | int | yes | Rule level declared inside the fixture |
+| `rule_provenance` | string | yes | `synthetic-fixture` (the only value today) |
+| `mitre_attack` | list[string] | yes | ATT&CK ids declared inside the fixture (empty when the fixture declares none) |
+| `ground_truth` | map | yes | Must equal the fixture's `expected` block in `evaluation/ground_truth.json` (`score`, `tier`, `action`, optional `severity`) |
+| `runbook` | string | yes | Repo-relative path; must exist; the runbook must name the fixture |
+| `regression_tests` | list[string] | yes | `path::test_name` references; must exist |
+| `validation_status` | string | yes | `locally-validated` \| `outstanding` |
+
+### What the validation test asserts
+
+`app/tests/evaluation/test_detection_coverage.py` checks, without touching any runtime
+behavior: catalog structure and unique ids; every custom rule exists in the ruleset with
+matching level, ATT&CK ids, groups and trigger; decoder references exist; scenario fixtures
+exist in both locations and declare the cataloged rule id/level/ATT&CK ids; expected
+outcomes equal `ground_truth.json` exactly; the scenario set equals the corpus and
+ground-truth sets; runbooks exist and name their fixture; every referenced test file and
+test function exists; every ATT&CK id in the catalog is declared by its source file (no
+invented techniques); scenario-link semantics hold (`direct` ⇒ same rule id, `parent-rule`
+⇒ `if_sid` equals the scenario rule, `behavioral-overlap` ⇒ shared ATT&CK id); and every id
+in this document exists in the catalog (no phantom rows), with every catalog id appearing
+in the document.
+
+---
+
+## Extending the framework
+
+1. Add the rule to `wazuh/ruleset/rules/soc-triage-rules.xml` (defensive only).
+2. Add the catalog entry under `detections:` with the real rule id, level, ATT&CK ids,
+   groups, and trigger.
+3. If a fixture exists or is added, link it (`scenario_link: direct` only when the fixture
+   carries that exact rule id) and reference the test that pins the outcome.
+4. Add the row to the table above.
+5. Run `cd app && pytest tests/evaluation -q` — the validation test fails on any drift
+   between the catalog, the ruleset, the fixtures, ground truth, the runbooks, and this
+   document.
+6. Leave a cell as `—` / `Not mapped` when the evidence does not exist. Gaps are reported,
+   not filled in.
