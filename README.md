@@ -66,14 +66,14 @@ consistently in this README and in [DEVELOPMENT_PLAN.md](DEVELOPMENT_PLAN.md).
 
 | Label | Meaning |
 | --- | --- |
-| ✅ **Implemented** | Code/config/docs exist in the repository and are exercised by the default runtime or by automated tests in CI. |
-| ✅ **Locally validated** | Actually executed and observed (test suite run, or a documented runtime validation with recorded evidence). |
-| 🔍 **Source-audited** | Verified by reading the pinned upstream source/image contents — **not** by running it live. |
-| 🟡 **Partially validated** | Implemented and partly exercised; named sub-checks are still outstanding. |
-| ⬜ **Outstanding** | Scoped work with no implementation, or implementation without validation. |
-| 🔮 **Future / planned** | Not started; explicitly outside the current scope. No code exists. |
+|  **Implemented** | Code/config/docs exist in the repository and are exercised by the default runtime or by automated tests in CI. |
+|  **Locally validated** | Actually executed and observed (test suite run, or a documented runtime validation with recorded evidence). |
+|  **Source-audited** | Verified by reading the pinned upstream source/image contents — **not** by running it live. |
+|  **Partially validated** | Implemented and partly exercised; named sub-checks are still outstanding. |
+|  **Outstanding** | Scoped work with no implementation, or implementation without validation. |
+|  **Future / planned** | Not started; explicitly outside the current scope. No code exists. |
 
-**Do not read a ✅ as a production statement.** All validation in this project happened
+**Do not read a  as a production statement.** All validation in this project happened
 in a local Docker lab or a test harness; nothing here has been operated as a production
 SOC service.
 
@@ -111,7 +111,7 @@ This project automates that loop **defensively and transparently**:
 
 ## What This Project Is / Is Not
 
-| ✅ This project **is** | ❌ This project **is not** |
+|  This project **is** |  This project **is not** |
 | --- | --- |
 | A **defensive SOC alert triage and incident-response automation** lab | An offensive security / attack toolkit |
 | A realistic L1/L2 workflow for learning, portfolio, and interview review | A claim of production deployment |
@@ -127,14 +127,14 @@ current tree, not intent.
 
 | # | Use case | SOC role | Pipeline stages | Status |
 | --- | --- | --- | --- | --- |
-| UC-1 | SSH brute-force detection → enrichment → risk score → L1 notification | L1 | ingest → enrich → score → route → notify | ✅ implemented |
-| UC-2 | Malicious file hash alert (VT verdict) → high-severity incident + SLA escalation | L1/L2 | ingest → enrich → score → incident → escalate | ✅ implemented (VirusTotal path tested with fake transports only) |
-| UC-3 | File integrity alert on a critical server (`/etc/passwd`) → incident on tier-1 asset | L1/L2 | ingest → score (asset criticality) → incident | ✅ implemented |
-| UC-4 | Alert dedup & recurrence-based escalation (same rule+agent keeps firing) | L1 | normalize → dedupe → score (recurrence) | ✅ implemented |
-| UC-5 | Known-good allowlist suppression (backup servers, vulnerability scanners) | L1 | enrich (allowlist) → suppress | 🟡 engines honor allowlist matches; the allowlist/asset-inventory loader that produces them is ⬜ outstanding |
-| UC-6 | Analyst triage verdict capture (true/false positive) → tuning dataset | L2 | feedback → tune | 🟡 feedback capture ✅ implemented; automated weight tuning ⬜ outstanding |
-| UC-7 | Daily digest: volumes, top rules, false-positive rate | L2/manager | report | ⬜ outstanding (no digest workflow or stats endpoint) |
-| UC-8 | MITRE ATT&CK-tagged alert routing to the right runbook | L1 | score → route | ⬜ outstanding (ATT&CK tags flow through from Wazuh rule metadata and influence the score; runbook linkage is not implemented — Phase 6) |
+| UC-1 | SSH brute-force detection → enrichment → risk score → L1 notification | L1 | ingest → enrich → score → route → notify |  implemented |
+| UC-2 | Malicious file hash alert (VT verdict) → high-severity incident + SLA escalation | L1/L2 | ingest → enrich → score → incident → escalate |  implemented (VirusTotal path tested with fake transports only) |
+| UC-3 | File integrity alert on a critical server (`/etc/passwd`) → incident on tier-1 asset | L1/L2 | ingest → score (asset criticality) → incident |  implemented |
+| UC-4 | Alert dedup & recurrence-based escalation (same rule+agent keeps firing) | L1 | normalize → dedupe → score (recurrence) |  implemented |
+| UC-5 | Known-good allowlist suppression (backup servers, vulnerability scanners) | L1 | enrich (allowlist) → suppress |  engines honor allowlist matches; the allowlist/asset-inventory loader that produces them is  outstanding |
+| UC-6 | Analyst triage verdict capture (true/false positive) → tuning dataset | L2 | feedback → tune |  feedback capture  implemented; automated weight tuning  outstanding |
+| UC-7 | Daily digest: volumes, top rules, false-positive rate | L2/manager | report |  outstanding (no digest workflow or stats endpoint) |
+| UC-8 | MITRE ATT&CK-tagged alert routing to the right runbook | L1 | score → route |  outstanding (ATT&CK tags flow through from Wazuh rule metadata and influence the score; runbook linkage is not implemented — Phase 6) |
 
 ## Architecture Overview
 
@@ -189,7 +189,7 @@ reviewable diff accompanied by a golden update.
 
 ## Phase 5 — Deterministic Detection Evaluation
 
-**Status: ✅ implemented and locally validated.** No production or benchmark claims.
+**Status:  implemented and locally validated.** No production or benchmark claims.
 
 Phase 5 adds a labeled evaluation framework that replays fixtures through the **real
 ingest API** (FastAPI `TestClient`, temp SQLite, real normalizer → dedupe → scoring →
@@ -257,42 +257,42 @@ recorded here so the roadmap and the repository state cannot drift apart.
 
 Status markers describe the current tree.
 
-1. ✅ **Ingest** — Wazuh's `integrator` module (`wazuh/integrator/custom-triage`) POSTs
+1.  **Ingest** — Wazuh's `integrator` module (`wazuh/integrator/custom-triage`) POSTs
    alert JSON to `POST /api/v1/alerts/ingest` with an `X-API-Key` header. The synthetic
    sample alerts in `docs/sample-alerts/` (also the test fixtures) can be replayed with
-   any HTTP client. ⬜ A convenience replay script (`scripts/send_test_alert`) is **not**
+   any HTTP client.  A convenience replay script (`scripts/send_test_alert`) is **not**
    implemented.
-2. ✅ **Normalize & dedupe** — the alert maps to a canonical schema; repeats
+2.  **Normalize & dedupe** — the alert maps to a canonical schema; repeats
    (same rule + agent within a window) increment a recurrence counter instead of creating
    noise, with persisted idempotency records for duplicate deliveries.
-3. 🟡 **Extract & enrich** — IOCs (IPv4, domain, URL, MD5/SHA-1/SHA-256, email) are
+3.  **Extract & enrich** — IOCs (IPv4, domain, URL, MD5/SHA-1/SHA-256, email) are
    extracted by a pure function, then the provider chain runs
    `noop → VirusTotal → MISP`. Both real providers are **disabled by default**
    (`VIRUSTOTAL_API_KEY` / `MISP_URL`+`MISP_API_KEY` empty ⇒ disabled) and are exercised
    only through `httpx.MockTransport` fakes, with token-bucket rate limiting and bounded
    retries. Any failure degrades gracefully (fail-open, `enrichment_status` recorded).
-   ⬜ Outstanding: response TTL cache, static allowlist/asset-inventory loader, MISP
+    Outstanding: response TTL cache, static allowlist/asset-inventory loader, MISP
    container profile + seeding guide, late-enrichment re-score.
-4. ✅ **Score** — deterministic engine computes 0–100, a tier, and a factor-by-factor
+4.  **Score** — deterministic engine computes 0–100, a tier, and a factor-by-factor
    justification list; weights live in the versioned config file.
-5. ✅ **Decide & route** — per the decision matrix: open incident (`SEV1`/`SEV2`), queue
+5.  **Decide & route** — per the decision matrix: open incident (`SEV1`/`SEV2`), queue
    for L1, monitor, or suppress allowlisted sources. No autonomous response action.
-6. ✅ **Notify** — the API calls an n8n webhook; n8n fans out to email (Mailpit sink in
+6.  **Notify** — the API calls an n8n webhook; n8n fans out to email (Mailpit sink in
    the lab) including score justification, recurrence, IOC/enrichment summaries, and
    investigation links.
-7. ✅ **Escalate** — the exported escalation workflow (WF3) waits **15 minutes** for an
+7.  **Escalate** — the exported escalation workflow (WF3) waits **15 minutes** for an
    acknowledgment (checked read-only via `GET /api/v1/alerts/{id}/feedback/status`), then
    re-notifies and escalates to L2, failing safe (escalate) if the status endpoint errors.
    The design table documents 15 min for critical and 30 min for high; only the 15-minute
    wait is implemented in the exported workflow today.
-8. 🟡 **Feedback** — the analyst submits a verdict (true positive / false positive /
+8.  **Feedback** — the analyst submits a verdict (true positive / false positive /
    benign / escalate / acknowledged / resolved / contain_requested) via the n8n form or
    the API; verdicts are stored, audited, and drive incident transitions.
    `contain_requested` records an **approval-required request** and executes nothing.
-   ⬜ Automated weight tuning from feedback is not implemented.
-9. ⬜ **Report** — a scheduled digest (volumes, top rules, FP rate) is designed but not
+    Automated weight tuning from feedback is not implemented.
+9.  **Report** — a scheduled digest (volumes, top rules, FP rate) is designed but not
    implemented; there is no stats endpoint and no digest workflow.
-10. ✅ **Incident lifecycle & console** — incidents persist with a state machine,
+10.  **Incident lifecycle & console** — incidents persist with a state machine,
     read APIs, timeline, and TTL auto-close sweeper; the static SOC console provides the
     analyst queue/board/detail views.
 
@@ -300,16 +300,16 @@ Status markers describe the current tree.
 
 | Technology | Role | Status in this repo | Cost |
 | --- | --- | --- | --- |
-| **Python 3.11+ / FastAPI** | Triage API: ingest, normalize, dedupe, enrich, score, decide, REST surface | ✅ implemented (CI on 3.11 & 3.12) | Free |
-| **n8n 1.85.0** | Workflow orchestration: notification fan-out, SLA escalation, analyst feedback form | ✅ WF1/WF2/WF3/WF5 exported + import helper (⬜ WF6 digest) | Free, self-hosted |
-| **Wazuh 4.9.2** | SIEM/XDR: rules, decoders, FIM, agent telemetry — the alert source | 🟡 `full` profile + integrator implemented, live-validated end-to-end; custom ruleset authored but not live-validated | Free, self-hosted |
-| **MISP** | Self-hosted threat-intel platform for IOC attribute lookups | 🟡 provider implemented (disabled by default); container profile + seeding guide ⬜ outstanding | Free, self-hosted |
-| **VirusTotal public API** | IOC enrichment (hashes, IPs, domains, URLs) | 🟡 client implemented with rate limiting/retries (disabled by default, fake-transport tested only) | Free public tier (4 req/min, 500/day) |
-| **Prometheus + Grafana** | Optional read-only observability profile (`observability`) | ✅ implemented and runtime-validated in the lab | Free, self-hosted |
-| **TheHive 5 CE** | Case-management export | ⬜ outstanding (optional; CE only, never Premium) | Free, self-hosted |
-| **SQLite / Alembic** | Alert/incident/audit persistence with automatic migrations | ✅ implemented | Free |
-| **PostgreSQL** | Production-shaped database profile | ⬜ outstanding (a compose profile is designed, not implemented) | Free |
-| **Docker / Docker Compose** | Reproducible multi-service lab with network segmentation | ✅ implemented | Free |
+| **Python 3.11+ / FastAPI** | Triage API: ingest, normalize, dedupe, enrich, score, decide, REST surface |  implemented (CI on 3.11 & 3.12) | Free |
+| **n8n 1.85.0** | Workflow orchestration: notification fan-out, SLA escalation, analyst feedback form |  WF1/WF2/WF3/WF5 exported + import helper (⬜ WF6 digest) | Free, self-hosted |
+| **Wazuh 4.9.2** | SIEM/XDR: rules, decoders, FIM, agent telemetry — the alert source |  `full` profile + integrator implemented, live-validated end-to-end; custom ruleset authored but not live-validated | Free, self-hosted |
+| **MISP** | Self-hosted threat-intel platform for IOC attribute lookups |  provider implemented (disabled by default); container profile + seeding guide ⬜ outstanding | Free, self-hosted |
+| **VirusTotal public API** | IOC enrichment (hashes, IPs, domains, URLs) |  client implemented with rate limiting/retries (disabled by default, fake-transport tested only) | Free public tier (4 req/min, 500/day) |
+| **Prometheus + Grafana** | Optional read-only observability profile (`observability`) |  implemented and runtime-validated in the lab | Free, self-hosted |
+| **TheHive 5 CE** | Case-management export |  outstanding (optional; CE only, never Premium) | Free, self-hosted |
+| **SQLite / Alembic** | Alert/incident/audit persistence with automatic migrations |  implemented | Free |
+| **PostgreSQL** | Production-shaped database profile |  outstanding (a compose profile is designed, not implemented) | Free |
+| **Docker / Docker Compose** | Reproducible multi-service lab with network segmentation |  implemented | Free |
 | **LLM API** | Draft triage summaries | 🔮 **not implemented** — optional future idea only; `.env.example` carries unused placeholders | Free-tier possible |
 
 ## Repository Layout
@@ -359,7 +359,7 @@ soc-alert-triage-automation/
 | **Evaluation (Phase 5)** | pytest + `evaluation/` corpus, ground truth, metrics | ground-truth contracts and corpus/ground-truth parity must hold (metric *values* are printed, not asserted) |
 | Console JS | Node `--test` | 15 tests green |
 | Security | `scripts/check_secrets.sh`, metrics no-secret canary, authz tests | all green |
-| E2E compose smoke | compose + curl assertions | ⬜ **not implemented** — no nightly compose smoke job exists |
+| E2E compose smoke | compose + curl assertions |  **not implemented** — no nightly compose smoke job exists |
 
 `.github/workflows/ci.yml` runs three jobs on every push to `main`, every PR, and
 manually: **python-checks** (ruff lint, ruff format check, mypy, pytest on Python 3.11
@@ -427,13 +427,13 @@ Full detail, acceptance criteria, and evidence per phase:
 
 | Phase | Focus | Status | Key evidence / what is missing |
 | --- | --- | --- | --- |
-| **Phase 0 — Foundation** | Docs & scaffolding | ✅ implemented · locally validated | ARCHITECTURE, DEVELOPMENT_PLAN, SECURITY, CONTRIBUTING, README, `.env.example`, directory tree, `check_secrets.sh` |
-| **Phase 1 — MVP triage pipeline** | Core triage loop | ✅ implemented · locally validated | FastAPI app, ingest + normalize + dedupe, SQLite models + Alembic, scoring v1, decisions v1, n8n webhook client, compose (API+n8n+Mailpit), unit/integration tests. ⬜ `scripts/send_test_alert` simulator not implemented |
-| **Phase 2 — Enrichment & threat intelligence** | Threat intel | 🟡 partially validated | VirusTotal + MISP providers, IOC extractor, fail-open chain, rate limiting/retries; ⬜ MISP container profile + seeding, static allowlist/asset-inventory loader, TTL cache, scoring v2 intel factor, late-enrichment re-score |
-| **Phase 3 — Incidents, analyst workflow & observability** | Analyst loop | 🟡 partially validated | Incidents (3.1), lifecycle + feedback (3.2), read APIs + timeline (3.3), TTL sweeper (3.4), static console (3.5), runbooks (3.6), Prometheus `/metrics` + optional Grafana (3.7); ⬜ Postgres profile (3.8), stats endpoints + digest (3.9) |
-| **Phase 4 — Real Wazuh integration & approved response** | Full integration | 🟡 partially validated | Source-audited + live-validated `full` profile and `custom-triage` integrator (4.1/4.2), agent enrollment validated (4.4), custom rules/decoders authored (4.3, not live-validated); ⬜ approval/containment runbook (4.5), TheHive CE export (4.6), failure-spool + duplicate-delivery runtime checks and 10k/day soak (4.7) |
-| **Phase 5 — Deterministic detection evaluation** | Detection quality measurement | ✅ implemented · locally validated | Labeled corpus, ground truth, confusion matrix, precision/recall/F1/FPR, runtime evaluation tests replaying fixtures through the real ingest path |
-| **Phase 6 — Detection quality & correlation** | Coverage & correlation | 🔮 planned / in progress | ⬜ detection coverage framework, ATT&CK mapping, expanded regression corpus, cross-alert correlation, analyst explainability, detection-quality CI gates |
+| **Phase 0 — Foundation** | Docs & scaffolding |  implemented · locally validated | ARCHITECTURE, DEVELOPMENT_PLAN, SECURITY, CONTRIBUTING, README, `.env.example`, directory tree, `check_secrets.sh` |
+| **Phase 1 — MVP triage pipeline** | Core triage loop |  implemented · locally validated | FastAPI app, ingest + normalize + dedupe, SQLite models + Alembic, scoring v1, decisions v1, n8n webhook client, compose (API+n8n+Mailpit), unit/integration tests.  `scripts/send_test_alert` simulator not implemented |
+| **Phase 2 — Enrichment & threat intelligence** | Threat intel |  partially validated | VirusTotal + MISP providers, IOC extractor, fail-open chain, rate limiting/retries; ⬜ MISP container profile + seeding, static allowlist/asset-inventory loader, TTL cache, scoring v2 intel factor, late-enrichment re-score |
+| **Phase 3 — Incidents, analyst workflow & observability** | Analyst loop |  partially validated | Incidents (3.1), lifecycle + feedback (3.2), read APIs + timeline (3.3), TTL sweeper (3.4), static console (3.5), runbooks (3.6), Prometheus `/metrics` + optional Grafana (3.7);  Postgres profile (3.8), stats endpoints + digest (3.9) |
+| **Phase 4 — Real Wazuh integration & approved response** | Full integration |  partially validated | Source-audited + live-validated `full` profile and `custom-triage` integrator (4.1/4.2), agent enrollment validated (4.4), custom rules/decoders authored (4.3, not live-validated);  approval/containment runbook (4.5), TheHive CE export (4.6), failure-spool + duplicate-delivery runtime checks and 10k/day soak (4.7) |
+| **Phase 5 — Deterministic detection evaluation** | Detection quality measurement |  implemented · locally validated | Labeled corpus, ground truth, confusion matrix, precision/recall/F1/FPR, runtime evaluation tests replaying fixtures through the real ingest path |
+| **Phase 6 — Detection quality & correlation** | Coverage & correlation | 🔮 planned / in progress |  detection coverage framework, ATT&CK mapping, expanded regression corpus, cross-alert correlation, analyst explainability, detection-quality CI gates |
 
 No release tags have been cut: `CHANGELOG.md` is still under `[Unreleased]` and the Python
 package version is `0.1.0a1`.
@@ -526,14 +526,14 @@ docker compose --profile observability up -d  # + Prometheus + Grafana (lab)
 
 Consolidated, evidence-based view of where the project really stands.
 
-**✅ Implemented and locally validated (automated tests, CI):** ingest/normalize/dedupe,
+** Implemented and locally validated (automated tests, CI):** ingest/normalize/dedupe,
 SQLite persistence + migrations, audit log, deterministic scoring `scoring.v1`,
 deterministic decisions `decisions.v1`, incident persistence/lifecycle/read APIs/timeline,
 TTL auto-close sweeper, analyst feedback capture + incident transitions, n8n workflow
 exports with static validation, the static SOC console (+ 15 JS tests), Prometheus
 `/metrics`, and the **Phase 5 evaluation framework** (891 Python tests total).
 
-**🔍 Source-audited (not live-run in the build environment):** the Phase 4 Wazuh wiring —
+** Source-audited (not live-run in the build environment):** the Phase 4 Wazuh wiring —
 the pinned `wazuh/wazuh-manager:4.9.2` image behaviour, `integratord` log redirection,
 integrator install path/ownership, and the `ossec.conf` mount path. Three defects found
 this way were fixed (documented in `CHANGELOG.md` and
@@ -541,7 +541,7 @@ this way were fixed (documented in `CHANGELOG.md` and
 The custom rules/decoders in `wazuh/ruleset/` are **authored and mounted read-only but
 have not been exercised against a live rule match**.
 
-**🟡 Partially validated:**
+** Partially validated:**
 
 - **Phase 4.1/4.2 + 4.4** — live-validated end-to-end by the maintainer on Windows/Docker
   Desktop (2026-09-06): real Windows agent enrolled and active, a real Wazuh alert
@@ -554,7 +554,7 @@ have not been exercised against a live rule match**.
 - **Observability** — runtime-validated for Phase 3.7, with the post-Phase-4 `/metrics`
   hygiene re-check outstanding.
 
-**⬜ Outstanding (scoped, not done):** `scripts/send_test_alert` simulator; MISP compose
+** Outstanding (scoped, not done):** `scripts/send_test_alert` simulator; MISP compose
 profile + seeding guide; static allowlist/asset-inventory loader; enrichment TTL cache;
 scoring v2 threat-intel factor; late-enrichment re-score; PostgreSQL profile; stats
 endpoints + daily digest workflow (WF6); runbook linkage from decisions; TheHive CE
