@@ -299,16 +299,16 @@ Confusion matrix: **TP 4 · FP 0 · FN 1 · TN 1** → **precision 1.0000**, **r
 **Goal:** move from "the deterministic path behaves as pinned" to "detection quality is
 continuously measured and regressions are blocked".
 
-**Status: in progress — 1 of 6 items implemented (detection coverage framework); item 6.3
-is partially progressed (corpus expanded 6→10 scenarios).** Everything else below is still
-a scope, not an achievement.
+**Status: in progress — 2 of 6 items implemented (detection coverage framework; cross-alert
+correlation as an investigation context); item 6.3 is partially progressed (corpus expanded
+6→10 scenarios).** Everything else below is still a scope, not an achievement.
 
 | # | Item | Scope | Status |
 | --- | --- | --- | --- |
 | 6.1 | Detection coverage framework | A machine-readable inventory of the scenarios, Wazuh rules/decoders, and pipeline outcomes the platform covers, plus explicit blind spots | ✅ **implemented** (delivered as the Phase 6.2 implementation task) — see below |
 | 6.2 | MITRE ATT&CK mapping | Maintained mapping from scenarios/rules to ATT&CK techniques for reporting and analyst context (today ATT&CK ids only pass through from Wazuh rule metadata as `rule.mitre`, and their presence contributes to the `rule_groups_mitre` score factor) | 🔮 not started as a framework — the coverage catalog now *records* the ATT&CK ids each rule/fixture declares, and surfaces one fixture-level metadata discrepancy (gap G5) |
 | 6.3 | Expanded regression corpus | Grow the labeled corpus well beyond 6 fixtures; add negatives per scenario; define and document the positive/negative ↔ decision-action semantics (including the UC-1 first-occurrence case) | 🟡 **partially progressed** (Phase 6.3 task) — corpus grown 6→10 scenarios (recurrence escalation, second negative, critical/SEV1, low asset band); label semantics defined and enforced; per-scenario negatives and CI quality thresholds still outstanding — see below |
-| 6.4 | Cross-alert correlation | Correlate related alerts (same host, user, or indicator over time) into one investigation context (today only rule+agent recurrence is grouped) | 🔮 not started — now named as gap G7 in the coverage framework |
+| 6.4 | Cross-alert correlation | Correlate related alerts (same host, user, or indicator over time) into one investigation context (today only rule+agent recurrence is grouped) | ✅ **implemented** (investigation-context scope; user correlation unsupported by design — no stable canonical user field) — see below |
 | 6.5 | Analyst explainability | Extend per-alert explanations beyond today's factor-by-factor score justification, decision reasons, and incident timeline — e.g. "what changed since the last occurrence" | 🔮 not started |
 | 6.6 | Detection-quality CI gates | Fail CI when precision/recall/F1 degrade beyond an agreed threshold, on a corpus large enough to make the thresholds meaningful | 🔮 not started — coverage framework validates traceability, not quality (gap G8) |
 
@@ -376,17 +376,65 @@ exists (Phase 2.2; coverage-doc gap G10).
 **Phase 6 exit criteria (to be refined as items land):** a documented coverage map exists
 (✅ 6.1) · ATT&CK mapping is generated from a maintained source and covered by tests ·
 the corpus has scenario-level negatives, and its label semantics are documented ·
-correlation produces a single investigation context for a multi-stage scenario ·
+correlation produces a single investigation context for a multi-stage scenario
+(✅ 6.4 — e.g. `SCN-01`+`SCN-02` group through `shared_source_ip`+`same_agent` evidence;
+the corpus-level *pin* of that outcome is still outstanding) ·
 quality gates run in CI with thresholds justified by the corpus size · all existing
-deterministic goldens and Phase 5 contracts still pass unchanged.
+deterministic goldens and Phase 5 contracts still pass unchanged (✅ re-verified for 6.4).
+
+### 6.4 Cross-alert correlation — what is now implemented
+
+**Status: ✅ implemented and locally validated. No deduplication, recurrence, scoring,
+decision, or incident behavior changed; correlation is an additive, read-side investigation
+context.**
+
+| Artifact | Purpose | Status |
+| --- | --- | --- |
+| `app/src/soc_triage/correlation/evidence.py` | Pure evidence engine: pairwise evidence derivation between two canonical alerts plus the sufficiency policy `correlation.v1` | ✅ implemented |
+| `app/src/soc_triage/correlation/service.py` | Orchestrator: candidate loading (window-bounded, distinct alerts only), context create/extend/deterministic merge, audit, fail-open semantics | ✅ implemented |
+| `correlation_contexts` / `correlation_members` tables (migration `f9a0b1c2d3e4`) | Persistence: one context = many distinct alert ids, each membership carrying its pairwise evidence (`evidence_type`, `value`, `peer_alert_id`) | ✅ implemented |
+| `GET /api/v1/correlations`, `GET /api/v1/correlations/{context_id}`, `GET /api/v1/alerts/{alert_id}/correlation` | Read-only API (shared N8N token): context summaries, member alerts, aggregated explainable evidence, deterministic ordering | ✅ implemented |
+| `app/tests/unit/test_correlation_evidence.py` + `app/tests/integration/test_correlation.py` | 45 focused tests (21 unit · 24 integration) covering the A–M scenario matrix, regression protection, and mutation-checked drift detection | ✅ implemented · locally validated |
+
+**Concept separation (the core design constraint):**
+
+- **Deduplication** — "is this the same event / recurrence family?" — *unchanged* (`compute_group_key`,
+  `decide_delivery`, window semantics untouched; candidates from the alert's own dedupe group are
+  excluded from correlation, so recurrence can never surface as correlation).
+- **Recurrence** — distinct events of one `rule.id + agent.id` group within the dedupe window —
+  *unchanged* (occurrences/generation/duplicate counters verified byte-identical by tests).
+- **Correlation** — "are these distinct alerts related enough to present as one investigation
+  context?" — *new*: deterministic evidence (`same_agent`, `same_rule`, `shared_technique`,
+  `shared_source_ip`, `shared_destination_ip`, `shared_ioc`), sufficiency policy (any shared
+  indicator, or same-agent **plus** shared ATT&CK technique — agent-only is deliberately
+  insufficient to avoid noisy host dumping-grounds), bounded by `TRIAGE_CORRELATION_WINDOW_SECONDS`
+  (default 900 s, inclusive boundary, independent knob).
+- **Incident** — the response object opened by `open_incident` decisions — *unchanged and
+  independent*: correlation never reads or writes `alerts.incident_id`, never creates/merges/
+  escalates incidents; each member row surfaces its own `dedupe_group_key` and `incident_id`.
+
+**Explicitly unsupported dimensions (no stable canonical field — nothing inferred):**
+usernames (`data.srcuser`/`dstuser` only surface as *email indicators* when they validate as
+one — a `shared_user` evidence type would be built on data the model does not guarantee);
+free-text/`full_log` similarity; any ML/LLM similarity score. Allowlisted indicators are
+excluded from evidence.
+
+**Deliberate scope limits (blind spots, not gaps in implementation):** correlation does not
+feed `scoring.v1`/`decisions.v1`; contexts have no lifecycle (no TTL sweeper — bounded growth
+is a deployment concern); a context may span longer than one window when evidence chains
+transitively (each pairwise link stays window-bounded and carries its own evidence); contexts
+merge only when a *newly ingested alert* presents qualifying evidence bridging them
+(deterministically into the earlier-created context), never spontaneously — incidents are
+never merged at all.
 
 ---
 
 ## Testing Strategy
 
-**Verified locally on the current checkout (Python 3.11, 2026-09-11):**
-`pytest` → **953 passed** (574 unit · 322 integration · 57 evaluation, of which 52 are the
-Phase 6.1 detection-coverage validation); ruff check + format check, mypy `src`, and
+**Verified locally on the current checkout (Python 3.11, 2026-09-11, after Phase 6.4):**
+`pytest` → **998 passed** (595 unit · 346 integration · 57 evaluation, of which 52 are the
+Phase 6.1 detection-coverage validation; the 45 Phase 6.4 correlation tests are included);
+ruff check + format check, mypy `src`, and
 `check_secrets.sh` clean; `node --test app/tests/js/console_core.test.cjs` → **15 passed**.
 
 | Layer | Runs on | Tooling | Gate |

@@ -56,8 +56,9 @@ INCIDENT_ID_RE = re.compile(r"^INC-\d{4}-\d{2}-\d{2}-\d{4}$")
 
 PREVIOUS_REVISION = "b2c3d4e5f6a7"
 INCIDENT_REVISION = "d4e5f6a7b8c9"
-#: Phase 3.2 head revision (incident lifecycle timestamps).
-HEAD_REVISION = "e7f8a9b0c1d2"
+#: Current migration head (Phase 6.4 correlation contexts; the incident
+#: schema itself is complete since e7f8a9b0c1d2).
+HEAD_REVISION = "f9a0b1c2d3e4"
 
 #: The exact DDL the interrupted migration left committed in the Windows
 #: Docker database (verbatim from the crash): the incidents table with all of
@@ -438,7 +439,7 @@ def test_upgrade_recovers_from_partially_applied_incidents_table(db_url: str) ->
 
 
 def test_fresh_database_migrates_cleanly_to_head(db_url: str) -> None:
-    """A brand-new database migrates to head (e7f8a9b0c1d2) with the full schema."""
+    """A brand-new database migrates to head (f9a0b1c2d3e4) with the full schema."""
     engine = create_app_engine(db_url)
     run_migrations(engine, ALEMBIC_SCRIPT_LOCATION)
 

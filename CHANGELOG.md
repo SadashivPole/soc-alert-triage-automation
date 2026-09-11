@@ -6,6 +6,62 @@ semantic (`v0.1.0` targeted at the end of Phase 1).
 
 ## [Unreleased]
 
+### Added — Phase 6.4: cross-alert correlation (investigation contexts)
+
+- **Deterministic, explainable correlation of distinct alerts into one investigation
+  context.** Correlation is deliberately a *different concept* from deduplication/recurrence
+  ("is this the same event / recurrence family?"): it answers "are these distinct alerts
+  (different dedupe groups) related enough to present as one investigation context?".
+  Deduplication, recurrence, scoring (`scoring.v1`), decisions (`decisions.v1`), and the
+  incident creation/attachment policy are unchanged — verified by the untouched Phase 1–5
+  test suites.
+- **Evidence-based grouping** (`app/src/soc_triage/correlation/evidence.py`, policy
+  `correlation.v1`): alerts correlate when they share a normalized indicator
+  (`shared_ioc` — hash/domain/url/email, or an IP whose roles do not match
+  directionally), a direction-matched `shared_source_ip` / `shared_destination_ip` (from
+  typed `data.srcip`/`data.dstip` provenance), or the combination `same_agent` +
+  `shared_technique` (same ATT&CK technique from `rule.mitre.id`). Agent-only, rule-only,
+  and technique-only evidence are deliberately insufficient (a busy host produces many
+  unrelated alerts). Allowlisted indicators never correlate. Every membership stores its
+  pairwise evidence (`evidence_type`, `value`, `peer_alert_id`) — the *why* is always
+  reconstructable, and there is no opaque similarity score and no ML/LLM.
+- **Bounded window:** `TRIAGE_CORRELATION_WINDOW_SECONDS` (default 900 s, inclusive
+  boundary, independent from the dedupe window) bounds *pairwise* evidence — evidence
+  weakens with time, so correlation is never unbounded. A context may span longer when
+  evidence chains transitively; each pairwise link stays window-bounded with its own
+  evidence.
+- **Persistence** (migration `f9a0b1c2d3e4`): `correlation_contexts` (`CORR-YYYY-MM-DD-NNNN`
+  ids, first/last-seen bounds) + `correlation_members` (one row per alert — an alert joins
+  at most one context; exact duplicates can never create memberships). Contexts survive
+  restarts. When a newly ingested alert bridges two contexts with qualifying evidence they
+  merge deterministically into the earlier-created one (audited as
+  `correlation.contexts_merged`); contexts never merge spontaneously and incidents are
+  never merged. Append-only audit entries for `correlation.context_created` /
+  `correlation.alert_linked` / `correlation.contexts_merged`.
+- **Read-only API** (shared N8N token, like the other read surfaces): `GET /api/v1/correlations`
+  (paginated), `GET /api/v1/correlations/{context_id}`, and
+  `GET /api/v1/alerts/{alert_id}/correlation`. Responses carry member summaries (each
+  surfacing its own `dedupe_group_key` and `incident_id`), pairwise + aggregated evidence
+  with human-readable reasons, and deterministic ordering — never `full_log`, credentials,
+  or tokens. Ingest responses additionally report the joined `correlation_context_id`
+  (idempotently echoed on exact duplicates). No write/merge/delete endpoints.
+- **Fail-open wiring:** correlation runs after assessment persistence on non-duplicate
+  deliveries; any correlation failure is logged (exception type only) and swallowed — an
+  alert can never be rejected or corrupted by correlation.
+- **Tests:** 45 new (21 unit for the pure evidence engine; 24 integration covering the
+  full scenario matrix — exact duplicates, recurrence distinctness, policy-gated same-agent
+  correlation, shared-IOC correlation across rules/agents, window boundaries
+  (inclusive/outside), no-evidence, multi-evidence determinism, duplicate-suppression
+  idempotency, cross-context isolation + evidence-driven merge, restart persistence,
+  read-only/auth API behavior, secret/redaction checks, and explicit regression pins that
+  dedupe counters, incident independence, and alert distinctness are unchanged). Mutation
+  checks (window boundary, evidence matcher, membership linking, duplicate suppression)
+  were verified to fail the suite and then restored byte-identically.
+- **Docs:** `DEVELOPMENT_PLAN.md` Phase 6.4 marked implemented (with the concept
+  separation and explicit unsupported dimensions: usernames — no stable canonical user
+  field; `full_log`/text similarity), `docs/detection-coverage.md` gap G7 updated,
+  `.env.example` + `docker-compose.yml` carry the new window knob.
+
 ### Added — Phase 6.3: detection regression expansion (corpus 6→10 scenarios)
 
 - **Four new synthetic fixtures** (`app/tests/fixtures/`, identical copies in

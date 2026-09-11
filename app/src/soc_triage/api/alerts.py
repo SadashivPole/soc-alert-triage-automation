@@ -68,11 +68,13 @@ from ..models.records import DEFAULT_PAGE_LIMIT, MAX_PAGE_LIMIT
 from ..models.repositories import (
     AlertRepository,
     AuditRepository,
+    CorrelationRepository,
     IncidentRepository,
     NotificationRepository,
 )
 from ..notifications import build_n8n_payload
 from .dependencies import (
+    CorrelatorDependency,
     DeciderDependency,
     DeduplicatorDependency,
     EnrichmentChainDependency,
@@ -85,8 +87,10 @@ from .n8n_auth import RequireN8NToken
 from .schemas import (
     AlertDetail,
     AlertListResponse,
+    CorrelationContextDetailRead,
     alert_detail_from_record,
     alert_summary_from_record,
+    correlation_detail_from_records,
     make_pagination,
 )
 
@@ -142,6 +146,7 @@ async def ingest_alert(
     enrichment_chain: EnrichmentChainDependency,
     scorer: ScorerDependency,
     decider: DeciderDependency,
+    correlator: CorrelatorDependency,
     session_factory: SessionFactoryDependency,
     settings: SettingsDependency,
     n8n_client: N8NClientDependency,
@@ -298,11 +303,15 @@ async def ingest_alert(
 
     # --- Score & decide (Phase 1F) ---
     incident_id: str | None = None
+    correlation_context_id: str | None = None
     if is_duplicate:
         assessed = outcome.canonical_alert
         # Exact duplicates never re-score or create incidents; echo the
         # incident the original alert belongs to (if any).
         incident_id = _incident_for_alert(session_factory, outcome.alert_id)
+        # Same idempotent echo for the correlation context: the original
+        # alert's membership is surfaced, never re-created or extended.
+        correlation_context_id = _correlation_context_for_alert(session_factory, outcome.alert_id)
     else:
         risk = scorer.score(outcome.canonical_alert)
         decision = decider.decide(risk, alert=outcome.canonical_alert, decided_at=received_at)
@@ -317,6 +326,14 @@ async def ingest_alert(
             occurred_at=received_at,
         )
         incident_id = persist_result.incident_id
+        # --- Cross-alert correlation (Phase 6.4) — fail-open, read-only
+        # w.r.t. the alert of record: groups this distinct alert with
+        # window-bounded peers that share deterministic evidence into one
+        # investigation context. Never runs for exact duplicates, never
+        # touches dedupe/incident state, and can never fail the ingest.
+        correlation_context_id = _correlate_alert(
+            correlator, alert_id=outcome.alert_id, received_at=received_at
+        )
         logger.info(
             "alert_scored",
             component="scoring",
@@ -425,6 +442,7 @@ async def ingest_alert(
             "risk": assessed.risk.model_dump(mode="json") if assessed.risk else None,
             "decision": assessed.decision.model_dump(mode="json") if assessed.decision else None,
             "incident_id": incident_id,
+            "correlation_context_id": correlation_context_id,
             "normalized": assessed.model_dump(mode="json"),
             "notification": (
                 {
@@ -692,6 +710,50 @@ def _incident_for_alert(session_factory: sessionmaker, alert_id: UUID) -> str | 
         return None
 
 
+def _correlation_context_for_alert(session_factory: sessionmaker, alert_id: UUID) -> str | None:
+    """Best-effort lookup of the correlation context an alert belongs to.
+
+    Used on the idempotent exact-duplicate path (mirroring
+    :func:`_incident_for_alert`): the original alert's membership is echoed,
+    never re-created.
+    """
+    try:
+        with session_scope(session_factory) as session:
+            context = CorrelationRepository(session).context_for_alert(alert_id)
+            return context.context_id if context is not None else None
+    except SQLAlchemyError as exc:
+        logger.warning(
+            "correlation_lookup_failed",
+            component="correlation",
+            alert_id=str(alert_id),
+            error_type=type(exc).__name__,
+        )
+        return None
+
+
+def _correlate_alert(correlator: Any, *, alert_id: UUID, received_at: datetime) -> str | None:
+    """Correlate a newly recorded alert (Phase 6.4, strictly fail-open).
+
+    Returns the investigation context id the alert joined, or ``None`` when
+    no qualifying evidence exists (the normal case). A correlation failure
+    is logged with the exception type only and swallowed — the alert itself
+    is already durable and dedupe/incident state is untouched, so
+    correlation can never reject or corrupt an ingest
+    (ARCHITECTURE.md §16).
+    """
+    try:
+        result = correlator.correlate(alert_id=alert_id, received_at=received_at)
+    except Exception as exc:  # defensive: correlation must never crash ingest
+        logger.error(
+            "correlation_failed",
+            component="correlation",
+            alert_id=str(alert_id),
+            error_type=type(exc).__name__,
+        )
+        return None
+    return result.context_id if result is not None else None
+
+
 async def _read_body_with_limit(request: Request, max_size: int) -> bytes | None:
     """Read the request body, returning None if it exceeds the size limit."""
     chunks: list[bytes] = []
@@ -831,6 +893,58 @@ async def get_alert(
             "failed to load alert",
         )
     logger.info("alert_read", component="alerts", alert_id=str(alert_id))
+    return detail
+
+
+@router.get(
+    "/{alert_id}/correlation",
+    response_model=CorrelationContextDetailRead,
+    status_code=status.HTTP_200_OK,
+    summary="Get the correlation context an alert belongs to",
+    description=(
+        "Return the cross-alert investigation context this alert is a member "
+        "of (member summaries, pairwise + aggregated evidence, time span). "
+        "An uncorrelated alert returns a structured 404. Read-only — never "
+        "includes full_log, credentials, or tokens, and never mutates "
+        "incident or dedupe state. Requires the shared N8N token."
+    ),
+)
+async def get_alert_correlation(
+    session_factory: SessionFactoryDependency,
+    alert_id: Annotated[UUID, Path(description="Alert ID")],
+    _: None = RequireN8NToken,
+) -> CorrelationContextDetailRead | JSONResponse:
+    """Return the alert's correlation context, or a structured 404."""
+    try:
+        with session_scope(session_factory) as session:
+            repo = CorrelationRepository(session)
+            context = repo.context_for_alert(alert_id)
+            if context is None:
+                return error_response(
+                    status.HTTP_404_NOT_FOUND,
+                    "not_found",
+                    f"alert {alert_id} is not part of a correlation context",
+                )
+            members = repo.members(context.context_id)
+            detail = correlation_detail_from_records(context, members)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.error(
+            "alert_correlation_get_failed",
+            component="correlations",
+            alert_id=str(alert_id),
+            error_type=type(exc).__name__,
+        )
+        return error_response(
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+            "internal_error",
+            "failed to load alert correlation context",
+        )
+    logger.info(
+        "alert_correlation_read",
+        component="correlations",
+        alert_id=str(alert_id),
+        context_id=detail.context_id,
+    )
     return detail
 
 
