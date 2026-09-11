@@ -19,7 +19,7 @@ from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import Select, delete, func, select
+from sqlalchemy import Select, delete, func, select, update
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.orm import Session
 
@@ -36,6 +36,8 @@ from .orm import (
     AlertEvent,
     AnalystFeedback,
     AuditEvent,
+    CorrelationContext,
+    CorrelationMember,
     Incident,
     NotificationAttempt,
 )
@@ -43,6 +45,10 @@ from .records import (
     DEFAULT_PAGE_LIMIT,
     MAX_PAGE_LIMIT,
     AuditRecord,
+    CorrelationContextRecord,
+    CorrelationEvidenceItem,
+    CorrelationMemberRecord,
+    CorrelationMemberSummary,
     PersistedAlert,
 )
 
@@ -727,6 +733,285 @@ class IncidentRepository:
         )
 
 
+class CorrelationRepository:
+    """Persistence for cross-alert correlation contexts (Phase 6.4).
+
+    All methods run inside the caller's transaction (``db.session_scope``).
+    The repository never touches ``alerts.dedupe_group_key`` or
+    ``alerts.incident_id`` — correlation is an additive investigation
+    context, orthogonal to recurrence and incidents. There is deliberately
+    no delete-membership path: memberships only move (context merge) or
+    grow, so a context's history stays reconstructable from the audit log.
+    """
+
+    def __init__(self, session: Session) -> None:
+        self._session = session
+
+    # ------------------------------------------------------------------
+    # Reads
+    # ------------------------------------------------------------------
+
+    def candidates(
+        self,
+        *,
+        received_at: datetime,
+        window_seconds: float,
+        exclude_alert_id: uuid.UUID,
+        exclude_group_key: str,
+    ) -> list[PersistedAlert]:
+        """Load candidate alerts for correlation with a newly recorded one.
+
+        Candidates are *distinct* alerts: a different ``alert_id``, a
+        different dedupe group (same-group siblings are recurrence — that
+        relationship is already expressed by deduplication and must never
+        become correlation evidence), and ``received_at`` within the
+        correlation window of ``received_at`` (inclusive lower bound,
+        inclusive boundary: ``0 <= new - old <= window`` — the same boundary
+        convention the deduplicator uses). Oldest first for deterministic
+        processing.
+        """
+        horizon = as_utc(received_at) - timedelta(seconds=window_seconds)
+        rows = self._session.scalars(
+            select(Alert)
+            .where(Alert.alert_id != exclude_alert_id)
+            .where(Alert.dedupe_group_key != exclude_group_key)
+            .where(Alert.received_at >= horizon)
+            .where(Alert.received_at <= as_utc(received_at))
+            .order_by(Alert.received_at.asc(), Alert.alert_id.asc())
+        ).all()
+        return [_alert_to_persisted(row) for row in rows]
+
+    def membership_for_alert(self, alert_id: uuid.UUID) -> CorrelationMemberRecord | None:
+        """The alert's membership, if it already belongs to a context."""
+        row = self._session.scalars(
+            select(CorrelationMember).where(CorrelationMember.alert_id == alert_id)
+        ).first()
+        return self._member_to_record(row) if row is not None else None
+
+    def context_ids_for_alerts(self, alert_ids: Sequence[uuid.UUID]) -> dict[uuid.UUID, str]:
+        """Map each alert id to its context id (unmapped alerts omitted)."""
+        if not alert_ids:
+            return {}
+        rows = self._session.execute(
+            select(CorrelationMember.alert_id, CorrelationMember.context_id).where(
+                CorrelationMember.alert_id.in_(list(alert_ids))
+            )
+        ).all()
+        return {alert_id: context_id for alert_id, context_id in rows}
+
+    def get_context(self, context_id: str) -> CorrelationContextRecord | None:
+        """One context (with member count), or ``None`` if unknown."""
+        row = self._session.get(CorrelationContext, context_id)
+        if row is None:
+            return None
+        count = self._session.execute(
+            select(func.count(CorrelationMember.id)).where(
+                CorrelationMember.context_id == context_id
+            )
+        ).scalar_one()
+        return self._context_to_record(row, member_count=int(count))
+
+    def context_for_alert(self, alert_id: uuid.UUID) -> CorrelationContextRecord | None:
+        """The context an alert belongs to, or ``None`` if uncorrelated."""
+        membership = self._session.scalars(
+            select(CorrelationMember).where(CorrelationMember.alert_id == alert_id)
+        ).first()
+        if membership is None:
+            return None
+        return self.get_context(membership.context_id)
+
+    def list_contexts(
+        self,
+        *,
+        limit: int = DEFAULT_PAGE_LIMIT,
+        offset: int = 0,
+    ) -> tuple[list[CorrelationContextRecord], int]:
+        """Return a newest-first page of contexts plus the total count."""
+        limit, offset = _clamp_page(limit=limit, offset=offset)
+        total = self._session.execute(
+            select(func.count()).select_from(CorrelationContext)
+        ).scalar_one()
+        rows = self._session.execute(
+            select(CorrelationContext, func.count(CorrelationMember.id))
+            .outerjoin(
+                CorrelationMember, CorrelationMember.context_id == CorrelationContext.context_id
+            )
+            .group_by(CorrelationContext.context_id)
+            .order_by(CorrelationContext.created_at.desc(), CorrelationContext.context_id.desc())
+            .limit(limit)
+            .offset(offset)
+        ).all()
+        return (
+            [self._context_to_record(row, member_count=int(count)) for row, count in rows],
+            int(total),
+        )
+
+    def members(self, context_id: str) -> list[CorrelationMemberSummary]:
+        """Member alerts of a context, oldest received first (stable).
+
+        Joins the membership evidence with the alert-of-record columns; risk
+        tier / decision action come from the persisted canonical payload.
+        """
+        rows = self._session.execute(
+            select(CorrelationMember, Alert)
+            .join(Alert, Alert.alert_id == CorrelationMember.alert_id)
+            .where(CorrelationMember.context_id == context_id)
+            .order_by(Alert.received_at.asc(), Alert.alert_id.asc())
+        ).all()
+        summaries: list[CorrelationMemberSummary] = []
+        for member, alert in rows:
+            canonical = CanonicalAlert.model_validate(alert.normalized_payload)
+            summaries.append(
+                CorrelationMemberSummary(
+                    alert_id=member.alert_id,
+                    received_at=as_utc(alert.received_at),
+                    joined_at=as_utc(member.joined_at),
+                    rule_id=alert.rule_id,
+                    rule_level=alert.rule_level,
+                    agent_id=alert.agent_id,
+                    agent_name=alert.agent_name,
+                    dedupe_group_key=alert.dedupe_group_key,
+                    incident_id=alert.incident_id,
+                    risk_tier=canonical.risk.tier.value if canonical.risk is not None else None,
+                    decision_action=canonical.decision.action.value
+                    if canonical.decision is not None
+                    else None,
+                    evidence=self._evidence_items(member),
+                )
+            )
+        return summaries
+
+    # ------------------------------------------------------------------
+    # Writes (inside the caller's transaction)
+    # ------------------------------------------------------------------
+
+    def create_context(self, *, occurred_at: datetime) -> CorrelationContextRecord:
+        """Create an empty context with the next ``CORR-YYYY-MM-DD-NNNN`` id.
+
+        ``first_seen`` / ``last_seen`` start at ``occurred_at`` and are
+        recomputed by :meth:`refresh_bounds` once members are added.
+        """
+        timestamp = as_utc(occurred_at)
+        row = CorrelationContext(
+            context_id=self._next_context_id(timestamp),
+            created_at=timestamp,
+            updated_at=timestamp,
+            first_seen=timestamp,
+            last_seen=timestamp,
+        )
+        self._session.add(row)
+        self._session.flush()
+        return self._context_to_record(row, member_count=0)
+
+    def add_member(
+        self,
+        *,
+        context_id: str,
+        alert_id: uuid.UUID,
+        evidence: Sequence[CorrelationEvidenceItem],
+        joined_at: datetime,
+    ) -> None:
+        """Record one alert's membership with the evidence that justified it."""
+        self._session.add(
+            CorrelationMember(
+                context_id=context_id,
+                alert_id=alert_id,
+                joined_at=as_utc(joined_at),
+                evidence=[item.model_dump(mode="json") for item in evidence],
+            )
+        )
+
+    def move_members(self, *, source_context_id: str, target_context_id: str) -> int:
+        """Move every membership from one context into another (merge).
+
+        Used when a newly ingested alert presents qualifying evidence against
+        members of two different contexts: the contexts are joined through
+        the new evidence (never spontaneously), deterministically into the
+        earlier-created context. Returns the number of moved memberships.
+        The emptied source context row is deleted.
+        """
+        moved: CursorResult[Any] = self._session.execute(  # type: ignore[assignment]
+            update(CorrelationMember)
+            .where(CorrelationMember.context_id == source_context_id)
+            .values(context_id=target_context_id)
+        )
+        self._session.execute(
+            delete(CorrelationContext).where(CorrelationContext.context_id == source_context_id)
+        )
+        return int(moved.rowcount or 0)
+
+    def refresh_bounds(self, *, context_id: str, updated_at: datetime) -> None:
+        """Recompute ``first_seen`` / ``last_seen`` from the member alerts.
+
+        Bounds are the min/max ``received_at`` over member alerts, so they
+        always describe the evidence span rather than an update clock.
+        Flushes pending memberships first (the session runs with
+        ``autoflush=False``).
+        """
+        row = self._session.get(CorrelationContext, context_id)
+        if row is None:
+            raise LookupError(f"correlation context {context_id!r} not found")
+        self._session.flush()
+        bounds = self._session.execute(
+            select(func.min(Alert.received_at), func.max(Alert.received_at))
+            .join(CorrelationMember, CorrelationMember.alert_id == Alert.alert_id)
+            .where(CorrelationMember.context_id == context_id)
+        ).one()
+        first_seen, last_seen = bounds
+        if first_seen is not None and last_seen is not None:
+            row.first_seen = as_utc(first_seen)
+            row.last_seen = as_utc(last_seen)
+        row.updated_at = as_utc(updated_at)
+        self._session.flush()
+
+    # ------------------------------------------------------------------
+    # Internals
+    # ------------------------------------------------------------------
+
+    def _next_context_id(self, occurred_at: datetime) -> str:
+        """Next ``CORR-YYYY-MM-DD-NNNN`` id for the UTC date (as incidents)."""
+        day = as_utc(occurred_at).strftime("%Y-%m-%d")
+        prefix = f"CORR-{day}-"
+        last = self._session.execute(
+            select(func.max(CorrelationContext.context_id)).where(
+                CorrelationContext.context_id.like(f"{prefix}%")
+            )
+        ).scalar_one_or_none()
+        sequence = int(str(last).rsplit("-", 1)[-1]) + 1 if last else 1
+        return f"{prefix}{sequence:04d}"
+
+    @staticmethod
+    def _evidence_items(member: CorrelationMember) -> list[CorrelationEvidenceItem]:
+        stored = member.evidence if isinstance(member.evidence, list) else []
+        return [
+            CorrelationEvidenceItem.model_validate(dict(item))
+            for item in stored
+            if isinstance(item, dict)
+        ]
+
+    @staticmethod
+    def _member_to_record(row: CorrelationMember) -> CorrelationMemberRecord:
+        return CorrelationMemberRecord(
+            context_id=row.context_id,
+            alert_id=row.alert_id,
+            joined_at=as_utc(row.joined_at),
+            evidence=CorrelationRepository._evidence_items(row),
+        )
+
+    @staticmethod
+    def _context_to_record(
+        row: CorrelationContext, *, member_count: int
+    ) -> CorrelationContextRecord:
+        return CorrelationContextRecord(
+            context_id=row.context_id,
+            created_at=as_utc(row.created_at),
+            updated_at=as_utc(row.updated_at),
+            first_seen=as_utc(row.first_seen),
+            last_seen=as_utc(row.last_seen),
+            member_count=member_count,
+        )
+
+
 class AuditRepository:
     """Append-only writer for the ``audit_log`` table.
 
@@ -880,6 +1165,7 @@ class FeedbackRepository:
 __all__ = [
     "AlertRepository",
     "AuditRepository",
+    "CorrelationRepository",
     "DedupeStateRepository",
     "FeedbackRepository",
     "IncidentRepository",

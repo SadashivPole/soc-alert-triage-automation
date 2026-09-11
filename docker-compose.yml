@@ -21,6 +21,7 @@ services:
       TRIAGE_API_PORT: 8000
       TRIAGE_DB_URL: ${TRIAGE_DB_URL:-sqlite:////data/soc_triage.db}
       TRIAGE_DEDUPE_WINDOW_SECONDS: ${TRIAGE_DEDUPE_WINDOW_SECONDS:-900}
+      TRIAGE_CORRELATION_WINDOW_SECONDS: ${TRIAGE_CORRELATION_WINDOW_SECONDS:-900}
       TRIAGE_INGEST_API_KEY: ${TRIAGE_INGEST_API_KEY:-lab-test-key-change-in-production}
       N8N_CALLBACK_TOKEN: ${N8N_CALLBACK_TOKEN:-lab-n8n-token-change-in-production}
       N8N_WEBHOOK_TOKEN: ${N8N_WEBHOOK_TOKEN:-lab-n8n-token-change-in-production}

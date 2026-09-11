@@ -91,6 +91,24 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             dedupe_window_seconds=app_settings.triage_dedupe_window_seconds,
         )
 
+        # --- Phase 6.4: cross-alert correlation (investigation contexts) ---
+        # Additive, fail-open capability: groups *distinct* alerts (different
+        # dedupe groups) that share deterministic evidence into read-side
+        # investigation contexts. Deduplication, recurrence and incident
+        # behavior are untouched.
+        from .correlation import CorrelationService
+
+        correlator = CorrelationService(
+            session_factory,
+            window_seconds=app_settings.triage_correlation_window_seconds,
+        )
+        _app.state.correlator = correlator
+        logger.info(
+            "correlation_ready",
+            component="main",
+            window_seconds=app_settings.triage_correlation_window_seconds,
+        )
+
         # --- IOC extraction & enrichment (Phase 1E / 2A) ---
         # Extraction is pure (no I/O). Enrichment providers are registered in
         # a fixed order: the offline no-op (disabled), then VirusTotal and MISP
