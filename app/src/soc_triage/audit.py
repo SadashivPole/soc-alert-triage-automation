@@ -14,6 +14,7 @@ never raw alert payloads and never anything resembling a secret
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import datetime
 from typing import Any
 from uuid import UUID
@@ -23,6 +24,7 @@ from pydantic import BaseModel, Field
 from .ingest.deduplication import DedupeStatus, DeliveryDecision
 from .models.assessment import Decision, RiskAssessment
 from .models.incident import Incident, IncidentStatus
+from .models.records import CorrelationEvidenceItem
 
 # --- Audit vocabulary ------------------------------------------------------
 
@@ -68,6 +70,13 @@ ACTION_NOTIFICATION_FAILED = "notification.failed"
 ACTION_NOTIFICATION_SKIPPED = "notification.skipped"
 ACTION_NOTIFICATION_DUPLICATE_SUPPRESSED = "notification.duplicate_suppressed"
 ACTION_FEEDBACK_RECEIVED = "feedback.received"
+
+# Phase 6.4 — cross-alert correlation (investigation contexts)
+ACTOR_CORRELATION = "correlation"
+ENTITY_CORRELATION_CONTEXT = "correlation_context"
+ACTION_CORRELATION_CONTEXT_CREATED = "correlation.context_created"
+ACTION_CORRELATION_ALERT_LINKED = "correlation.alert_linked"
+ACTION_CORRELATION_CONTEXTS_MERGED = "correlation.contexts_merged"
 
 
 class AuditEntry(BaseModel):
@@ -542,11 +551,92 @@ def audit_entries_for_feedback(
     ]
 
 
+# ---------------------------------------------------------------------------
+# Phase 6.4 — cross-alert correlation audit entries
+# ---------------------------------------------------------------------------
+
+
+def _evidence_snapshot(items: Sequence[CorrelationEvidenceItem]) -> list[dict[str, Any]]:
+    """Small structured snapshot of pairwise evidence (no raw payloads)."""
+    return [
+        {
+            "evidence_type": item.evidence_type,
+            "value": item.value,
+            "peer_alert_id": item.peer_alert_id,
+        }
+        for item in items
+    ]
+
+
+def audit_entry_for_correlation_context_created(
+    *,
+    context_id: str,
+    member_alert_ids: Sequence[UUID],
+    evidence_reasons: Sequence[str],
+) -> AuditEntry:
+    """A new investigation context was opened for its founding alerts."""
+    return AuditEntry(
+        actor=ACTOR_CORRELATION,
+        action=ACTION_CORRELATION_CONTEXT_CREATED,
+        entity_type=ENTITY_CORRELATION_CONTEXT,
+        entity_id=context_id,
+        after={
+            "context_id": context_id,
+            "alert_ids": [str(alert_id) for alert_id in member_alert_ids],
+            "evidence": list(evidence_reasons),
+        },
+    )
+
+
+def audit_entry_for_correlation_alert_linked(
+    *,
+    context_id: str,
+    alert_id: UUID,
+    evidence: Sequence[CorrelationEvidenceItem],
+) -> AuditEntry:
+    """One alert joined a context, with the evidence that justified it."""
+    return AuditEntry(
+        actor=ACTOR_CORRELATION,
+        action=ACTION_CORRELATION_ALERT_LINKED,
+        entity_type=ENTITY_CORRELATION_CONTEXT,
+        entity_id=context_id,
+        after={
+            "context_id": context_id,
+            "alert_id": str(alert_id),
+            "evidence": _evidence_snapshot(evidence),
+        },
+    )
+
+
+def audit_entry_for_correlation_contexts_merged(
+    *,
+    kept_context_id: str,
+    merged_context_id: str,
+    bridge_alert_id: UUID,
+) -> AuditEntry:
+    """Two contexts were joined through a newly ingested bridging alert."""
+    return AuditEntry(
+        actor=ACTOR_CORRELATION,
+        action=ACTION_CORRELATION_CONTEXTS_MERGED,
+        entity_type=ENTITY_CORRELATION_CONTEXT,
+        entity_id=kept_context_id,
+        before={"context_id": merged_context_id},
+        after={
+            "kept_context_id": kept_context_id,
+            "merged_context_id": merged_context_id,
+            "bridge_alert_id": str(bridge_alert_id),
+        },
+    )
+
+
 __all__ = [
     "ACTION_ALERT_CREATED",
     "ACTION_ALERT_DECIDED",
     "ACTION_ALERT_SCORED",
     "ACTION_CONTENT_DIVERGENCE",
+    "ACTION_CORRELATION_ALERT_LINKED",
+    "ACTION_CORRELATION_CONTEXTS_MERGED",
+    "ACTION_CORRELATION_CONTEXT_CREATED",
     "ACTION_DUPLICATE_ABSORBED",
     "ACTION_FEEDBACK_RECEIVED",
     "ACTION_GENERATION_STARTED",
@@ -561,6 +651,7 @@ __all__ = [
     "ACTION_NOTIFICATION_FAILED",
     "ACTION_NOTIFICATION_SKIPPED",
     "ACTOR_ANALYST",
+    "ACTOR_CORRELATION",
     "ACTOR_DECISION",
     "ACTOR_INGEST",
     "ACTOR_N8N",
@@ -568,6 +659,7 @@ __all__ = [
     "ACTOR_SWEEPER",
     "ACTOR_SYSTEM",
     "ENTITY_ALERT",
+    "ENTITY_CORRELATION_CONTEXT",
     "ENTITY_DEDUPE_GROUP",
     "ENTITY_FEEDBACK",
     "ENTITY_INCIDENT",
@@ -581,4 +673,7 @@ __all__ = [
     "audit_entries_for_incident_containment_request",
     "audit_entries_for_incident_status",
     "audit_entries_for_notification",
+    "audit_entry_for_correlation_alert_linked",
+    "audit_entry_for_correlation_context_created",
+    "audit_entry_for_correlation_contexts_merged",
 ]

@@ -10,6 +10,7 @@ from sqlalchemy.orm import sessionmaker
 
 from ..core.config import Settings
 from ..core.metrics import MetricsRegistry
+from ..correlation import CorrelationService
 from ..decisions import DecisionEngine
 from ..enrichment import EnrichmentChain
 from ..ingest.deduplication import Deduplicator
@@ -30,6 +31,12 @@ def get_deduplicator(request: Request) -> Deduplicator:
     """
     deduplicator: Deduplicator = request.app.state.deduplicator
     return deduplicator
+
+
+def get_correlator(request: Request) -> CorrelationService:
+    """Return the correlation service bound to the running application."""
+    correlator: CorrelationService = request.app.state.correlator
+    return correlator
 
 
 def get_enrichment_chain(request: Request) -> EnrichmentChain:
@@ -84,6 +91,7 @@ def get_metrics_registry(request: Request) -> MetricsRegistry:
 
 SettingsDependency = Annotated[Settings, Depends(get_app_settings)]
 DeduplicatorDependency = Annotated[Deduplicator, Depends(get_deduplicator)]
+CorrelatorDependency = Annotated[CorrelationService, Depends(get_correlator)]
 EnrichmentChainDependency = Annotated[EnrichmentChain, Depends(get_enrichment_chain)]
 DbEngineDependency = Annotated[Engine, Depends(get_db_engine)]
 SessionFactoryDependency = Annotated[sessionmaker, Depends(get_session_factory)]
@@ -94,6 +102,7 @@ MetricsDependency = Annotated[MetricsRegistry, Depends(get_metrics_registry)]
 
 
 __all__ = [
+    "CorrelatorDependency",
     "DbEngineDependency",
     "DeciderDependency",
     "DeduplicatorDependency",
@@ -104,6 +113,7 @@ __all__ = [
     "SessionFactoryDependency",
     "SettingsDependency",
     "get_app_settings",
+    "get_correlator",
     "get_db_engine",
     "get_decider",
     "get_deduplicator",

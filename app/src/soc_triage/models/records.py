@@ -58,6 +58,69 @@ class AuditRecord(BaseModel):
     after: dict[str, Any] | None = None
 
 
+class CorrelationEvidenceItem(BaseModel):
+    """One stored pairwise evidence item on a correlation membership.
+
+    ``peer_alert_id`` is the *other* alert of the pair the evidence was
+    computed against — the reason a membership exists is always a
+    relationship between exactly two distinct alerts.
+    """
+
+    model_config = {"frozen": True}
+
+    evidence_type: str
+    value: str
+    peer_alert_id: str
+
+
+class CorrelationMemberRecord(BaseModel):
+    """Membership of one alert in one correlation context (persistence view)."""
+
+    model_config = {"frozen": True}
+
+    context_id: str
+    alert_id: UUID
+    joined_at: datetime
+    evidence: list[CorrelationEvidenceItem]
+
+
+class CorrelationContextRecord(BaseModel):
+    """One correlation context plus its (query-derived) member count."""
+
+    model_config = {"frozen": True}
+
+    context_id: str
+    created_at: datetime
+    updated_at: datetime
+    first_seen: datetime
+    last_seen: datetime
+    member_count: int = Field(default=0, ge=0)
+
+
+class CorrelationMemberSummary(BaseModel):
+    """One member alert of a correlation context, as shown on the read API.
+
+    Carries the alert's own ``dedupe_group_key`` and ``incident_id`` so the
+    three relationships an alert can have (recurrence group, incident,
+    correlation context) stay visibly distinct (DEVELOPMENT_PLAN.md 6.4).
+    """
+
+    model_config = {"frozen": True}
+
+    alert_id: UUID
+    received_at: datetime
+    joined_at: datetime
+    rule_id: str
+    rule_level: int
+    agent_id: str
+    agent_name: str
+    dedupe_group_key: str
+    incident_id: str | None = None
+    risk_tier: str | None = None
+    decision_action: str | None = None
+    evidence: list[CorrelationEvidenceItem] = Field(default_factory=list)
+
+
 class TimelineEvent(BaseModel):
     """One chronological, read-only timeline entry for an incident.
 
@@ -81,6 +144,10 @@ __all__ = [
     "DEFAULT_PAGE_LIMIT",
     "MAX_PAGE_LIMIT",
     "AuditRecord",
+    "CorrelationContextRecord",
+    "CorrelationEvidenceItem",
+    "CorrelationMemberRecord",
+    "CorrelationMemberSummary",
     "PersistedAlert",
     "TimelineEvent",
 ]

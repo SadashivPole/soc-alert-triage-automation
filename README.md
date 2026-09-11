@@ -14,7 +14,8 @@ workflows, and a Docker lab.
 > implemented with named items outstanding; **Phase 4 (real Wazuh integration)** is
 > implemented and partially live-validated; **Phase 5 (deterministic detection
 > evaluation)** is implemented and locally validated; **Phase 6 (detection quality &
-> correlation) is planned / in progress with no implementation yet** — see
+> correlation) is in progress — the coverage framework and cross-alert correlation
+> (Phase 6.4 investigation contexts) are implemented** — see
 > [Development Roadmap](#development-roadmap) and
 > [DEVELOPMENT_PLAN.md](DEVELOPMENT_PLAN.md).
 >
@@ -241,8 +242,9 @@ Wazuh rule-level detection coverage; and a 6-fixture corpus is **not** a benchma
 
 ## Phase 6 — Detection Quality & Correlation (In Progress)
 
-**Status: 🟡 in progress — 1 of 6 items implemented.** The **detection coverage
-framework** is implemented and locally validated (see below); the remaining five items are
+**Status: 🟡 in progress — 2 of 6 items implemented.** The **detection coverage
+framework** and **cross-alert correlation** (Phase 6.4, investigation contexts) are
+implemented and locally validated (see below); the remaining items are
 🔮 planned. Full detail: [docs/detection-coverage.md](docs/detection-coverage.md) and
 [DEVELOPMENT_PLAN.md](DEVELOPMENT_PLAN.md).
 
@@ -251,7 +253,7 @@ framework** is implemented and locally validated (see below); the remaining five
 | **Detection coverage framework** | Track which Wazuh rules/decoders and scenarios the platform actually covers, and which are blind spots | ✅ **implemented** — [`evaluation/detection_catalog.yaml`](evaluation/detection_catalog.yaml) + [`docs/detection-coverage.md`](docs/detection-coverage.md), validated by 39 read-only tests. It makes rule → ATT&CK → scenario → expected outcome → runbook → regression test traceable and names 9 gaps. It does **not** change scoring or routing, and no custom rule has a pinned outcome yet (none is exercised by a fixture) |
 | **ATT&CK mapping** | Map detected scenarios to MITRE ATT&CK techniques for reporting and analyst context | 🔮 not started as a mapping framework. Today ATT&CK ids only pass through from Wazuh rule metadata as `rule.mitre`, and their *presence* contributes to the `rule_groups_mitre` score factor |
 | **Expanded regression corpus** | Grow the labeled corpus well beyond 6 fixtures (incl. label/action semantics such as UC-1's first-occurrence case) | 🔮 not started; current corpus is 6 fixtures / 1 negative |
-| **Cross-alert correlation** | Correlate related alerts (same host/user/indicator over time) into a single investigation context | 🔮 not started; dedupe groups by rule+agent recurrence only |
+| **Cross-alert correlation** | Correlate related alerts (same host/user/indicator over time) into a single investigation context | ✅ **implemented (Phase 6.4)** — deterministic, explainable *investigation contexts* grouping distinct alerts (different dedupe groups) that share evidence (shared indicator, source/destination IP, or same-agent + ATT&CK technique) within a configurable window. Read API: `GET /api/v1/correlations`. Dedupe/recurrence/incidents unchanged; user correlation unsupported (no stable canonical user field) |
 | **Analyst explainability** | Extend per-alert explanations so an analyst can see why an alert mattered and what changed | 🔮 not started beyond today's factor-by-factor score justification, decision reasons, and incident timeline |
 | **Detection-quality CI gates** | Fail CI when precision/recall/F1 regress beyond a threshold | 🔮 not started; the Phase 5 harness prints metrics but asserts none of them |
 
