@@ -37,6 +37,13 @@ ARCHITECTURE.md §19):
   prevention and audit.
 * ``analyst_feedback`` — analyst acknowledgement/feedback via n8n callback
   (Phase 2B): alert_id, verdict, notes, actor, timestamp.
+* ``correlation_contexts`` + ``correlation_members`` — cross-alert
+  investigation contexts (Phase 6.4): one context groups *distinct* alerts
+  (different dedupe groups) that share deterministic evidence (shared
+  indicator, direction-matched IP, or same-agent+technique). Membership rows
+  carry the pairwise evidence that justified them. Purely additive — alerts
+  keep their ``dedupe_group_key`` / ``incident_id`` untouched, and contexts
+  have no lifecycle coupling to incidents.
 
 Timestamps are stored as UTC (normalized on write/read by the repositories).
 """
@@ -181,6 +188,59 @@ class AlertEvent(Base):
     last_delivered_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
+class CorrelationContext(Base):
+    """One cross-alert investigation context (Phase 6.4).
+
+    Groups *distinct* alerts (different dedupe groups) that share explainable
+    evidence (see :mod:`soc_triage.correlation.evidence`). Deliberately
+    separate from incidents: a context is an investigation aid — it never
+    changes an alert's ``incident_id`` or ``dedupe_group_key`` and has no
+    lifecycle of its own (no status). ``first_seen`` / ``last_seen`` bound
+    the ``received_at`` span of the member alerts and are recomputed whenever
+    membership changes.
+    """
+
+    __tablename__ = "correlation_contexts"
+
+    #: Human-readable ``CORR-YYYY-MM-DD-NNNN`` (sequential per UTC date).
+    context_id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, index=True
+    )
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    first_seen: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    last_seen: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class CorrelationMember(Base):
+    """Membership of one alert in one correlation context (Phase 6.4).
+
+    One row per alert — an alert belongs to at most one context (enforced by
+    the unique constraint), so a context is always a set of distinct alerts
+    and an exact duplicate delivery (which creates no alert row) can never
+    create a membership. ``evidence`` stores the pairwise items that justify
+    the membership: ``[{evidence_type, value, peer_alert_id}, ...]`` — small
+    structured snapshots, never raw payloads (SECURITY.md §5).
+    """
+
+    __tablename__ = "correlation_members"
+    __table_args__ = (Index("ix_correlation_members_context", "context_id", "joined_at"),)
+
+    id: Mapped[int] = mapped_column(
+        BigInteger().with_variant(Integer, "sqlite"), primary_key=True, autoincrement=True
+    )
+    context_id: Mapped[str] = mapped_column(
+        String(32),
+        ForeignKey("correlation_contexts.context_id"),
+        nullable=False,
+    )
+    alert_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("alerts.alert_id"), nullable=False, unique=True, index=True
+    )
+    joined_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    evidence: Mapped[list[dict[str, Any]]] = mapped_column(JSON, nullable=False)
+
+
 class AuditEvent(Base):
     """One append-only audit entry (``audit_log`` table).
 
@@ -266,6 +326,8 @@ __all__ = [
     "AnalystFeedback",
     "AuditEvent",
     "Base",
+    "CorrelationContext",
+    "CorrelationMember",
     "Incident",
     "NotificationAttempt",
 ]
