@@ -251,10 +251,10 @@ implemented and locally validated (see below); the remaining items are
 | Phase 6 item | Intent | Current state |
 | --- | --- | --- |
 | **Detection coverage framework** | Track which Wazuh rules/decoders and scenarios the platform actually covers, and which are blind spots | ✅ **implemented** — [`evaluation/detection_catalog.yaml`](evaluation/detection_catalog.yaml) + [`docs/detection-coverage.md`](docs/detection-coverage.md), validated by 39 read-only tests. It makes rule → ATT&CK → scenario → expected outcome → runbook → regression test traceable and names 9 gaps. It does **not** change scoring or routing, and no custom rule has a pinned outcome yet (none is exercised by a fixture) |
-| **ATT&CK mapping** | Map detected scenarios to MITRE ATT&CK techniques for reporting and analyst context | 🔮 not started as a mapping framework. Today ATT&CK ids only pass through from Wazuh rule metadata as `rule.mitre`, and their *presence* contributes to the `rule_groups_mitre` score factor |
-| **Expanded regression corpus** | Grow the labeled corpus well beyond 6 fixtures (incl. label/action semantics such as UC-1's first-occurrence case) | 🔮 not started; current corpus is 6 fixtures / 1 negative |
+| **ATT&CK mapping** | Map detected scenarios to MITRE ATT&CK techniques for reporting and analyst context | ✅ **implemented (Phase 6.2)** — [`evaluation/attack_mappings.yaml`](evaluation/attack_mappings.yaml) registry + [`docs/attack-coverage.md`](docs/attack-coverage.md), validated by 39 static tests: technique ↔ rule/scenario/runbook traceability with explicit provenance; values recorded verbatim from the declaring sources (matrix verification explicitly `unverified`; no external ATT&CK data); the G5 fixture-vs-rule id conflict pinned as `recorded-unresolved`. Runtime unchanged — ATT&CK ids still pass through from Wazuh rule metadata as `rule.mitre`, and their *presence* contributes to the `rule_groups_mitre` score factor |
+| **Expanded regression corpus** | Grow the labeled corpus well beyond 6 fixtures (incl. label/action semantics such as UC-1's first-occurrence case) | 🟡 partially progressed (Phase 6.3) — corpus grown 6→10 scenarios / 2 negatives (recurrence escalation, benign informational baseline, critical/SEV1, low asset band) with label semantics defined and enforced; per-scenario negatives and CI quality thresholds outstanding |
 | **Cross-alert correlation** | Correlate related alerts (same host/user/indicator over time) into a single investigation context | ✅ **implemented (Phase 6.4)** — deterministic, explainable *investigation contexts* grouping distinct alerts (different dedupe groups) that share evidence (shared indicator, source/destination IP, or same-agent + ATT&CK technique) within a configurable window. Read API: `GET /api/v1/correlations`. Dedupe/recurrence/incidents unchanged; user correlation unsupported (no stable canonical user field) |
-| **Analyst explainability** | Extend per-alert explanations so an analyst can see why an alert mattered and what changed | 🔮 not started beyond today's factor-by-factor score justification, decision reasons, and incident timeline |
+| **Analyst explainability** | Extend per-alert explanations so an analyst can see why an alert mattered and what changed | ✅ **implemented (Phase 6.5)** — deterministic, read-only `GET /api/v1/alerts/{alert_id}/explanation` (`explanation.v1`): the stored alert, detection metadata (stored `rule.mitre` verbatim), scoring factor breakdown reconciled against the authoritative score, decision reasons, dedupe/recurrence facts, correlation context and evidence, incident linkage, and audit history — explicit nulls for missing facts, never re-scoring or inferring |
 | **Detection-quality CI gates** | Fail CI when precision/recall/F1 regress beyond a threshold | 🔮 not started; the Phase 5 harness prints metrics but asserts none of them |
 
 ## Triage Pipeline (End to End)
@@ -342,6 +342,7 @@ soc-alert-triage-automation/
 ├── deploy/                    # triage-api Dockerfile, Prometheus/Grafana provisioning
 ├── docs/
 │   ├── detection-coverage.md  # Phase 6 detection coverage framework (rule → ATT&CK → scenario → outcome)
+│   ├── attack-coverage.md     # Phase 6.2 ATT&CK mapping framework (technique-first registry view)
 │   ├── sample-alerts/         # safe synthetic Wazuh alert payloads (also test fixtures)
 │   ├── runbooks/              # analyst runbooks for the six sample scenarios (Phase 3.6)
 │   ├── screenshots/           # console screenshots
@@ -440,7 +441,7 @@ Full detail, acceptance criteria, and evidence per phase:
 | **Phase 3 — Incidents, analyst workflow & observability** | Analyst loop |  partially validated | Incidents (3.1), lifecycle + feedback (3.2), read APIs + timeline (3.3), TTL sweeper (3.4), static console (3.5), runbooks (3.6), Prometheus `/metrics` + optional Grafana (3.7);  Postgres profile (3.8), stats endpoints + digest (3.9) |
 | **Phase 4 — Real Wazuh integration & approved response** | Full integration |  partially validated | Source-audited + live-validated `full` profile and `custom-triage` integrator (4.1/4.2), agent enrollment validated (4.4), custom rules/decoders authored (4.3, not live-validated);  approval/containment runbook (4.5), TheHive CE export (4.6), failure-spool + duplicate-delivery runtime checks and 10k/day soak (4.7) |
 | **Phase 5 — Deterministic detection evaluation** | Detection quality measurement |  implemented · locally validated | Labeled corpus, ground truth, confusion matrix, precision/recall/F1/FPR, runtime evaluation tests replaying fixtures through the real ingest path |
-| **Phase 6 — Detection quality & correlation** | Coverage & correlation | 🔮 planned / in progress |  detection coverage framework, ATT&CK mapping, expanded regression corpus, cross-alert correlation, analyst explainability, detection-quality CI gates |
+| **Phase 6 — Detection quality & correlation** | Coverage & correlation | 🟡 in progress (4 of 6 items) |  detection coverage framework ✅ (6.1), ATT&CK mapping ✅ (6.2), cross-alert correlation ✅ (6.4), analyst explainability ✅ (6.5); expanded regression corpus 🟡 (6.3, 10 scenarios), detection-quality CI gates 🔮 (6.6) |
 
 No release tags have been cut: `CHANGELOG.md` is still under `[Unreleased]` and the Python
 package version is `0.1.0a1`.
@@ -570,10 +571,11 @@ export; containment approval/response runbook; Phase 4 failure-spool, duplicate-
 `/metrics` hygiene, and 10k alerts/day soak validations; CI coverage threshold and nightly
 compose smoke job.
 
-**🔮 Future / planned:** the rest of Phase 6 — ATT&CK mapping as a maintained framework,
-an expanded regression corpus, cross-alert correlation, analyst explainability, and
-detection-quality CI gates. (The detection coverage framework itself is ✅ implemented;
-its own blind spots are listed as gaps G1–G9 in
+**🔮 Future / planned:** the rest of Phase 6 — per-scenario negatives and further corpus
+growth (6.3), a pinned corpus-level correlation outcome, and detection-quality CI gates
+(6.6). (The detection coverage framework, the ATT&CK mapping registry, cross-alert
+correlation, and analyst explainability are ✅ implemented; the coverage framework's own
+blind spots are listed as gaps G1–G10 in
 [docs/detection-coverage.md](docs/detection-coverage.md).)
 
 **Known documentation drift outside this README/plan** (tracked, not fixed here):
@@ -605,7 +607,8 @@ script that is not implemented; `CHANGELOG.md` has no Phase 5 entry yet.
 | [app/console/README.md](app/console/README.md) | Static SOC console: run, API dependency, auth expectation, limitations, security |
 | [docs/sample-alerts/README.md](docs/sample-alerts/README.md) | Synthetic alert scenarios & expected triage behavior |
 | [docs/runbooks/README.md](docs/runbooks/README.md) | Analyst runbooks for the six sample scenarios (investigation + approval-gated containment proposals) |
-| [docs/detection-coverage.md](docs/detection-coverage.md) | Phase 6 detection coverage framework: rule → ATT&CK → scenario → expected outcome → runbook → regression test, catalog schema, and the explicit gaps (G1–G9) |
+| [docs/detection-coverage.md](docs/detection-coverage.md) | Phase 6 detection coverage framework: rule → ATT&CK → scenario → expected outcome → runbook → regression test, catalog schema, and the explicit gaps (G1–G10) |
+| [docs/attack-coverage.md](docs/attack-coverage.md) | Phase 6.2 ATT&CK mapping framework: technique-first registry view (detection → rule → technique → scenario → outcome → regression test → runbook), verbatim declared values with provenance, the G5 discrepancy, and the registry schema |
 | [docs/specs/phase-3.7-prometheus-observability.md](docs/specs/phase-3.7-prometheus-observability.md) | Phase 3.7 spec: `/metrics` catalog, cardinality/security rules, observability profile, decisions |
 | [docs/specs/phase-4-live-validation-checklist.md](docs/specs/phase-4-live-validation-checklist.md) | Phase 4.1/4.2 live-validation checklist: methodology, verified items, outstanding items |
 
