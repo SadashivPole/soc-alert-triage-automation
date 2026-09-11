@@ -290,8 +290,8 @@ def test_default_filter_matches_the_repository_sample_corpus() -> None:
     """Every sample alert is classified deterministically by rule level.
 
     The default threshold is level >= 5, which forwards the eight actionable
-    samples and filters the two level-3 samples
-    (``02_wazuh_ssh_brute_force_success``, ``08_wazuh_ssh_session_opened``)
+    samples and filters the three level-3 samples
+    (``02_wazuh_ssh_brute_force_success``, ``08_wazuh_ssh_session_opened``, and ``16_ordinary_web_request``)
     as noise. Phase 6.3 added the level-3 benign baseline fixture 08, so the
     filtered golden grew by exactly that sample.
     """
@@ -308,8 +308,9 @@ def test_default_filter_matches_the_repository_sample_corpus() -> None:
     assert filtered == [
         "02_wazuh_ssh_brute_force_success.json",
         "08_wazuh_ssh_session_opened.json",
+        "16_ordinary_web_request.json",
     ]
-    assert len(forwarded) == len(samples) - 2
+    assert len(forwarded) == len(samples) - 3
 
 
 # ---------------------------------------------------------------------------

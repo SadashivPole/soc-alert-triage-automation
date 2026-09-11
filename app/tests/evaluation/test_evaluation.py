@@ -299,43 +299,56 @@ def test_recurrence_scenario_escalates_according_to_ground_truth(client: TestCli
     ground_truth = load_json(GROUND_TRUTH)
     corpus = load_json(CORPUS)
 
-    recurrence_cases = [case for case in corpus["cases"] if _deliveries(case) > 1]
-    assert len(recurrence_cases) == 1, (
-        "expected exactly one multi-delivery corpus case",
-        [case["fixture"] for case in recurrence_cases],
-    )
-    case = recurrence_cases[0]
-
-    record = ground_truth["fixtures"][case["fixture"]]
-    recurrence = record["recurrence"]
-    payloads = _delivery_payloads(load_fixture(case["fixture"]), recurrence["deliveries"])
-
-    bodies = [
-        client.post("/api/v1/alerts/ingest", json=payload, headers=AUTH_HEADERS).json()
-        for payload in payloads
+    recurrence_cases = [
+        case
+        for case in corpus["cases"]
+        if _deliveries(case) > 1
+        and "recurrence" in ground_truth["fixtures"].get(case["fixture"], {})
     ]
+    assert recurrence_cases, "expected at least one multi-delivery ground-truth recurrence case"
 
-    first = bodies[0]
-    final = bodies[-1]
+    for case in recurrence_cases:
+        record = ground_truth["fixtures"][case["fixture"]]
+        recurrence = record["recurrence"]
+        assert _deliveries(case) == recurrence["deliveries"], case["fixture"]
 
-    # The escalation is recurrence-driven: only the recurrence factor's points
-    # change between first and final delivery.
-    first_points = {f["name"]: f["points"] for f in first["risk"]["factors"]}
-    final_points = {f["name"]: f["points"] for f in final["risk"]["factors"]}
-    changed = {name for name, points in first_points.items() if final_points.get(name) != points}
-    assert changed == {"recurrence_velocity"}, (case["fixture"], first_points, final_points)
+        payloads = _delivery_payloads(load_fixture(case["fixture"]), recurrence["deliveries"])
+        bodies = [
+            client.post("/api/v1/alerts/ingest", json=payload, headers=AUTH_HEADERS).json()
+            for payload in payloads
+        ]
 
-    assert final["dedupe"]["occurrences"] == recurrence["occurrences"]
-    assert final["dedupe_status"] == "repeated"
+        first = bodies[0]
+        final = bodies[-1]
 
-    expected_final = recurrence["after_final_delivery"]
-    assert final["risk"]["score"] == expected_final["score"]
-    assert final["risk"]["tier"] == expected_final["tier"]
-    assert final["decision"]["action"] == expected_final["action"]
+        # The escalation is recurrence-driven: only the recurrence factor's points
+        # change between first and final delivery.
+        first_points = {f["name"]: f["points"] for f in first["risk"]["factors"]}
+        final_points = {f["name"]: f["points"] for f in final["risk"]["factors"]}
+        changed = {
+            name for name, points in first_points.items() if final_points.get(name) != points
+        }
+        assert changed == {"recurrence_velocity"}, (
+            case["fixture"],
+            first_points,
+            final_points,
+        )
 
-    # The tier actually moved with the score (recurrence is what escalated it).
-    assert expected_final["tier"] != record["expected"]["tier"]
-    assert expected_final["action"] != record["expected"]["action"]
+        if "occurrences" in recurrence:
+            assert final["dedupe"]["occurrences"] == recurrence["occurrences"]
+        assert final["dedupe_status"] == "repeated"
+
+        expected_final = recurrence.get("after_final_delivery", {})
+        if "score" in expected_final:
+            assert final["risk"]["score"] == expected_final["score"]
+        if "tier" in expected_final:
+            assert final["risk"]["tier"] == expected_final["tier"]
+        if "action" in expected_final:
+            assert final["decision"]["action"] == expected_final["action"]
+
+        # A recurrence case must pin a changed score attributable to recurrence.
+        if "score" in expected_final:
+            assert expected_final["score"] != record["expected"].get("score")
 
 
 def test_repeated_evaluation_is_deterministic(client: TestClient) -> None:

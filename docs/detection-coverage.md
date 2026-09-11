@@ -79,7 +79,7 @@ ruleset is mounted read-only into the optional `full` compose profile.
 Each scenario is one synthetic fixture in `app/tests/fixtures/` (identical copy in
 `docs/sample-alerts/`) that is replayed through the real ingest path
 (`normalize → dedupe → score → decide`) and compared against ground truth by
-`test_evaluation.py`. Phase 6.3 grew the corpus from six to ten scenarios and added its
+`test_evaluation.py`. Phase 6.3 grew the corpus from ten to sixteen scenarios and added its
 first multi-delivery case (`SCN-07`, recurrence).
 
 | Scenario ID | Fixture | Wazuh rule (fixture-declared) | MITRE ATT&CK | Expected score | Expected tier | Expected action | Analyst action / runbook | Regression test | Validation status |
@@ -94,6 +94,12 @@ first multi-delivery case (`SCN-07`, recurrence).
 | `SCN-08` | `08_wazuh_ssh_session_opened.json` | `5716` (level 3) | — (none declared) | 14 | informational | `monitor` | `docs/runbooks/ssh-brute-force.md` | `test_evaluation.py::test_ground_truth_evaluation`, `test_scoring_pipeline.py::test_benign_informational_event_stays_informational` | **Locally validated** |
 | `SCN-09` | `09_wazuh_malware_hash_critical_server.json` | `87105` (level 12) | `T1204` | 88 | critical | `open_incident` (`SEV1`) | `docs/runbooks/malware-hash.md` | `test_evaluation.py::test_ground_truth_evaluation`, `test_scoring_pipeline.py::test_malware_on_critical_asset_scores_critical_and_opens_sev1` | **Locally validated** |
 | `SCN-10` | `10_wazuh_web_sql_injection_staging.json` | `31103` (level 10) | `T1190` | 46 | medium | `queue_l1` | `docs/runbooks/web-attack.md` | `test_evaluation.py::test_ground_truth_evaluation`, `test_scoring_pipeline.py::test_low_criticality_asset_holds_medium` | **Locally validated** |
+| `SCN-11` | `11_custom_ssh_rule_100100.json` | `100100` (level 10) | `T1110` | 59 | medium | `queue_l1` | `docs/runbooks/ssh-brute-force.md` | `test_evaluation.py::test_ground_truth_evaluation` | **Locally validated; synthetic custom-rule output** |
+| `SCN-12` | `12_custom_fim_rule_100110.json` | `100110` (level 8) | `T1565` | 60 | medium | `queue_l1` | `docs/runbooks/fim-critical-file.md` | `test_evaluation.py::test_ground_truth_evaluation` | **Locally validated; synthetic custom-rule output** |
+| `SCN-13` | `13_custom_web_rule_100120_env.json` | `100120` (level 10) | `T1190` | 55 | medium | `queue_l1` | `docs/runbooks/web-attack.md` | `test_evaluation.py::test_ground_truth_evaluation` | **Locally validated; synthetic custom-rule output** |
+| `SCN-14` | `14_custom_web_recurrence_rule_100121.json` | `100121` (level 7) | `T1190` | 47 | medium | `queue_l1` | `docs/runbooks/web-attack.md` | `test_evaluation.py::test_ground_truth_evaluation`, `test_evaluation.py::test_recurrence_scenario_escalates_according_to_ground_truth` | **Locally validated; application recurrence only** |
+| `SCN-15` | `15_ssh_failed_auth_below_threshold.json` | `5712` (level 5) | `T1110` | 43 | low | `monitor` | `docs/runbooks/ssh-brute-force.md` | `test_evaluation.py::test_ground_truth_evaluation` | **Locally validated; synthetic non-match shape** |
+| `SCN-16` | `16_ordinary_web_request.json` | `31100` (level 3) | — (none declared) | 27 | low | `monitor` | `docs/runbooks/web-attack.md` | `test_evaluation.py::test_ground_truth_evaluation` | **Locally validated; synthetic non-match shape** |
 
 **Reading notes**
 

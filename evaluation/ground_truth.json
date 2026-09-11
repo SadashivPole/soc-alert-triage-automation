@@ -90,6 +90,63 @@
         "action": "queue_l1"
       },
       "notes": "Same web-attack behavior as fixture 05 against a low-criticality staging asset: the low asset band holds the score just inside the medium band."
+    },
+    "11_custom_ssh_rule_100100.json": {
+      "expected": {
+        "score": 59,
+        "tier": "medium",
+        "action": "queue_l1"
+      },
+      "notes": "Synthetic fixture represents application-facing normalized output of custom rule 100100; it does not claim Wazuh execution."
+    },
+    "12_custom_fim_rule_100110.json": {
+      "expected": {
+        "score": 60,
+        "tier": "medium",
+        "action": "queue_l1"
+      },
+      "notes": "Synthetic fixture preserves custom rule 100110 metadata including T1565; G5 remains unresolved."
+    },
+    "13_custom_web_rule_100120_env.json": {
+      "expected": {
+        "score": 55,
+        "tier": "medium",
+        "action": "queue_l1"
+      },
+      "notes": "Synthetic SOC_WEB-shaped .env path fixture; it does not claim decoder or Wazuh execution."
+    },
+    "14_custom_web_recurrence_rule_100121.json": {
+      "expected": {
+        "score": 47,
+        "tier": "medium",
+        "action": "queue_l1"
+      },
+      "recurrence": {
+        "deliveries": 5,
+        "occurrences": 5,
+        "after_final_delivery": {
+          "score": 65,
+          "tier": "medium",
+          "action": "queue_l1"
+        }
+      },
+      "notes": "Five distinct deliveries validate application recurrence only; they do not prove Wazuh frequency=5/timeframe=300."
+    },
+    "15_ssh_failed_auth_below_threshold.json": {
+      "expected": {
+        "score": 43,
+        "tier": "low",
+        "action": "monitor"
+      },
+      "notes": "Two failed-auth deliveries remain below the custom Wazuh five-event threshold; the application harness does not prove Wazuh non-match behavior."
+    },
+    "16_ordinary_web_request.json": {
+      "expected": {
+        "score": 27,
+        "tier": "low",
+        "action": "monitor"
+      },
+      "notes": "SOC_WEB-shaped ordinary path outside all custom suspicious alternatives; no unrelated suspicious indicators."
     }
   }
 }

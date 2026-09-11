@@ -51,6 +51,38 @@
       "fixture": "10_wazuh_web_sql_injection_staging.json",
       "label": "positive",
       "reason": "Web attack against a low-criticality staging asset remains medium-risk"
+    },
+    {
+      "fixture": "11_custom_ssh_rule_100100.json",
+      "label": "positive",
+      "reason": "Application-facing output of custom SSH detection 100100"
+    },
+    {
+      "fixture": "12_custom_fim_rule_100110.json",
+      "label": "positive",
+      "reason": "Application-facing output of custom FIM detection 100110"
+    },
+    {
+      "fixture": "13_custom_web_rule_100120_env.json",
+      "label": "positive",
+      "reason": "Custom web decoder/path output for .env"
+    },
+    {
+      "fixture": "14_custom_web_recurrence_rule_100121.json",
+      "label": "positive",
+      "reason": "Five-event application recurrence using custom web rule-shaped output",
+      "deliveries": 5
+    },
+    {
+      "fixture": "15_ssh_failed_auth_below_threshold.json",
+      "label": "negative",
+      "reason": "Failed SSH authentication remains below five-event threshold",
+      "deliveries": 2
+    },
+    {
+      "fixture": "16_ordinary_web_request.json",
+      "label": "negative",
+      "reason": "Ordinary web request outside suspicious custom paths"
     }
   ]
 }

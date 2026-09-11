@@ -215,3 +215,4 @@ The primary technique represented by scenario 01 is:
 
 The technique metadata is inherited from the synthetic sample and should be
 validated against the organization's detection mapping before production use.
+Phase 6.3 regression samples: `docs/sample-alerts/11_custom_ssh_rule_100100.json`, `docs/sample-alerts/15_ssh_failed_auth_below_threshold.json`.
