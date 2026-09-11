@@ -18,6 +18,12 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field
 
+# Secret-redaction lives in ``core.redaction`` (a cross-cutting concern) so
+# domain-level projections — e.g. the Phase 6.5 explanation builder — can
+# apply the exact same policy without importing the API layer
+# (ARCHITECTURE.md §12). Re-exported here so existing import sites
+# (``api.incidents``, tests) are unchanged.
+from ..core.redaction import _SENSITIVE_FRAGMENTS, redact_mapping  # noqa: F401
 from ..correlation.evidence import EVIDENCE_TYPE_ORDER, EvidenceType, evidence_reason
 from ..models.canonical import CanonicalAlert
 from ..models.incident import Incident
@@ -27,39 +33,6 @@ from ..models.records import (
     PersistedAlert,
     TimelineEvent,
 )
-
-# Keys / substrings that must never appear in a read-API payload.
-_SENSITIVE_FRAGMENTS: tuple[str, ...] = (
-    "password",
-    "passwd",
-    "secret",
-    "token",
-    "api_key",
-    "apikey",
-    "authorization",
-    "credential",
-    "private_key",
-    "full_log",
-)
-
-
-def redact_mapping(value: Any) -> Any:
-    """Recursively drop secret-bearing keys and ``full_log``.
-
-    Applied to nested ``data`` / ``syscheck`` / enrichment blobs before they
-    leave the process. Primitive values are returned unchanged.
-    """
-    if isinstance(value, dict):
-        redacted: dict[str, Any] = {}
-        for key, inner in value.items():
-            lowered = str(key).lower()
-            if any(fragment in lowered for fragment in _SENSITIVE_FRAGMENTS):
-                continue
-            redacted[key] = redact_mapping(inner)
-        return redacted
-    if isinstance(value, list):
-        return [redact_mapping(item) for item in value]
-    return value
 
 
 def _iso(value: datetime | None) -> str | None:
