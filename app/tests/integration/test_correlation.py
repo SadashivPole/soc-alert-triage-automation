@@ -607,6 +607,8 @@ def test_correlation_contexts_survive_application_restart(db_url: str) -> None:
             triage_db_url=db_url,
             triage_ingest_api_key=TEST_INGEST_KEY,
             n8n_callback_token=TEST_CALLBACK_TOKEN,
+            n8n_webhook_token="",
+            n8n_webhook_url="",
         )
         return TestClient(create_app(settings=settings))
 
