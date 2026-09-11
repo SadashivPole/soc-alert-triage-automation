@@ -30,6 +30,27 @@
       "fixture": "06_wazuh_windows_user_created.json",
       "label": "positive",
       "reason": "Unexpected account creation on a critical-tier asset"
+    },
+    {
+      "fixture": "07_wazuh_ssh_brute_force_recurrence.json",
+      "label": "positive",
+      "reason": "Recurring SSH authentication failures cross the rapid-burst recurrence threshold",
+      "deliveries": 3
+    },
+    {
+      "fixture": "08_wazuh_ssh_session_opened.json",
+      "label": "negative",
+      "reason": "Benign SSH session event stays in the informational band"
+    },
+    {
+      "fixture": "09_wazuh_malware_hash_critical_server.json",
+      "label": "positive",
+      "reason": "Malware intelligence on a critical asset escalates to a SEV1 incident"
+    },
+    {
+      "fixture": "10_wazuh_web_sql_injection_staging.json",
+      "label": "positive",
+      "reason": "Web attack against a low-criticality staging asset remains medium-risk"
     }
   ]
 }

@@ -48,6 +48,48 @@
         "action": "queue_l1"
       },
       "notes": "Account-management behavior receives suspicious-group weighting and routes to L1 triage."
+    },
+    "07_wazuh_ssh_brute_force_recurrence.json": {
+      "expected": {
+        "score": 43,
+        "tier": "low",
+        "action": "monitor"
+      },
+      "recurrence": {
+        "deliveries": 3,
+        "occurrences": 3,
+        "after_final_delivery": {
+          "score": 55,
+          "tier": "medium",
+          "action": "queue_l1"
+        }
+      },
+      "notes": "Same rule+agent recurrence as fixture 01 on a second tier-1 host: the third distinct event inside the dedupe window crosses the rapid-burst threshold, raising the recurrence factor by 12 and escalating the action from monitor to queue_l1. `expected` pins the first delivery; `recurrence` pins the escalation."
+    },
+    "08_wazuh_ssh_session_opened.json": {
+      "expected": {
+        "score": 14,
+        "tier": "informational",
+        "action": "monitor"
+      },
+      "notes": "Benign SSH session event: no suspicious rule groups, no MITRE metadata, no indicators, and no asset-tier label (unknown fallback) keep it in the informational band."
+    },
+    "09_wazuh_malware_hash_critical_server.json": {
+      "expected": {
+        "score": 88,
+        "tier": "critical",
+        "action": "open_incident",
+        "severity": "SEV1"
+      },
+      "notes": "Malware-intelligence alert on a critical-tier asset crosses the critical band and opens a SEV1 incident."
+    },
+    "10_wazuh_web_sql_injection_staging.json": {
+      "expected": {
+        "score": 46,
+        "tier": "medium",
+        "action": "queue_l1"
+      },
+      "notes": "Same web-attack behavior as fixture 05 against a low-criticality staging asset: the low asset band holds the score just inside the medium band."
     }
   }
 }

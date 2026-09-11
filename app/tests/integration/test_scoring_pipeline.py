@@ -199,6 +199,69 @@ def test_recurrence_escalation_raises_the_score(client: TestClient) -> None:
     assert "rapid_burst" in recurrence["detail"]
 
 
+def test_second_occurrence_below_rapid_burst_does_not_escalate(client: TestClient) -> None:
+    """Two distinct events of the same rule+agent stay one delivery below the
+    configured rapid-burst minimum: the recurrence factor contributes nothing,
+    so the score and routing action are unchanged (Phase 6.3 boundary)."""
+    base = _load_sample("01_wazuh_ssh_brute_force.json")
+
+    first = _ingest(client, base)
+    second = _ingest(client, dict(base, id="1770000000.100001.r2"))
+
+    assert second["dedupe"]["occurrences"] == 2
+    assert second["risk"]["score"] == first["risk"]["score"]
+    assert second["risk"]["tier"] == first["risk"]["tier"]
+    assert second["decision"]["action"] == first["decision"]["action"]
+
+    recurrence = next(f for f in second["risk"]["factors"] if f["name"] == "recurrence_velocity")
+    assert recurrence["points"] == 0
+
+
+def test_benign_informational_event_stays_informational(client: TestClient) -> None:
+    """A benign session event with no suspicious groups, no MITRE metadata, no
+    indicators, and no asset-tier label stays in the informational band and is
+    only monitored (Phase 6.3: fixture 08, second corpus negative)."""
+    body = _ingest(client, _load_sample("08_wazuh_ssh_session_opened.json"))
+
+    assert body["risk"]["score"] == 14
+    assert body["risk"]["tier"] == "informational"
+    assert body["decision"]["action"] == "monitor"
+    assert body["decision"]["severity"] is None
+    assert body["iocs"] == []
+
+    asset = next(f for f in body["risk"]["factors"] if f["name"] == "asset_criticality")
+    assert asset["points"] == client.app.state.scorer.policy.asset_criticality.unknown_points
+    groups = next(f for f in body["risk"]["factors"] if f["name"] == "rule_groups_mitre")
+    assert groups["points"] == 0
+
+
+def test_malware_on_critical_asset_scores_critical_and_opens_sev1(client: TestClient) -> None:
+    """Fixture 09 pins the critical band and SEV1 severity at pipeline level:
+    the same malware-intelligence behavior as fixture 04 on a critical asset
+    crosses the critical threshold and opens a SEV1 incident."""
+    body = _ingest(client, _load_sample("09_wazuh_malware_hash_critical_server.json"))
+
+    assert body["risk"]["score"] == 88
+    assert body["risk"]["tier"] == "critical"
+    assert body["decision"]["action"] == "open_incident"
+    assert body["decision"]["severity"] == "SEV1"
+    assert body["incident_id"]
+
+
+def test_low_criticality_asset_holds_medium(client: TestClient) -> None:
+    """Fixture 10 pins the `low` asset-criticality band (unexercised before
+    Phase 6.3): the same web-attack behavior as fixture 05 on a tier-3 asset
+    contributes the policy's low band and stays medium, not lower."""
+    body = _ingest(client, _load_sample("10_wazuh_web_sql_injection_staging.json"))
+
+    asset = next(f for f in body["risk"]["factors"] if f["name"] == "asset_criticality")
+    assert asset["points"] == client.app.state.scorer.policy.asset_criticality.bands["low"]
+
+    assert body["risk"]["score"] == 46
+    assert body["risk"]["tier"] == "medium"
+    assert body["decision"]["action"] == "queue_l1"
+
+
 def test_pipeline_is_fully_offline(client: TestClient) -> None:
     """Phase 1F performs no external enrichment (no VirusTotal/MISP)."""
     chain = client.app.state.enrichment_chain
