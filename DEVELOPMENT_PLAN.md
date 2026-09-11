@@ -36,7 +36,7 @@ history. Status claims elsewhere are descriptive, not authoritative.
 | **Phase 3 — Incidents, analyst workflow & observability** | 🟡 Partially validated | Incidents, lifecycle, read APIs, timeline, sweeper, console, runbooks, `/metrics` + Grafana profile all implemented; PostgreSQL profile + stats/digest ⬜ |
 | **Phase 4 — Real Wazuh integration & approved response** | 🟡 Partially validated | 4.1/4.2 source-audited + live-validated end-to-end; 4.4 validated; 4.3 authored but not live-validated; 4.5/4.6/4.7 and runtime failure/duplicate checks ⬜ |
 | **Phase 5 — Deterministic detection evaluation** | ✅ Implemented · locally validated | Labeled corpus, ground truth, confusion matrix, precision/recall/F1/FPR, runtime evaluation tests |
-| **Phase 6 — Detection quality & correlation** | 🟡 In progress (1 of 6 items implemented) | Detection coverage framework ✅ (catalog + doc + validation tests); ATT&CK mapping, expanded regression corpus, cross-alert correlation, analyst explainability, detection-quality CI gates 🔮 |
+| **Phase 6 — Detection quality & correlation** | 🟡 In progress (4 of 6 items implemented) | Detection coverage framework ✅ (6.1); ATT&CK mapping ✅ (6.2 — registry + rendered view + validation tests); cross-alert correlation ✅ (6.4); analyst explainability ✅ (6.5); expanded regression corpus 🟡 (6.3, 10 scenarios); detection-quality CI gates 🔮 (6.6) |
 
 No release tags have been cut. The package version is `0.1.0a1` and `CHANGELOG.md` is
 still under `[Unreleased]`.
@@ -299,17 +299,18 @@ Confusion matrix: **TP 4 · FP 0 · FN 1 · TN 1** → **precision 1.0000**, **r
 **Goal:** move from "the deterministic path behaves as pinned" to "detection quality is
 continuously measured and regressions are blocked".
 
-**Status: in progress — 2 of 6 items implemented (detection coverage framework; cross-alert
-correlation as an investigation context); item 6.3 is partially progressed (corpus expanded
-6→10 scenarios).** Everything else below is still a scope, not an achievement.
+**Status: in progress — 4 of 6 items implemented (detection coverage framework; ATT&CK
+mapping; cross-alert correlation as an investigation context; analyst explainability);
+item 6.3 is partially progressed (corpus expanded 6→10 scenarios).** Everything else
+below is still a scope, not an achievement.
 
 | # | Item | Scope | Status |
 | --- | --- | --- | --- |
 | 6.1 | Detection coverage framework | A machine-readable inventory of the scenarios, Wazuh rules/decoders, and pipeline outcomes the platform covers, plus explicit blind spots | ✅ **implemented** (delivered as the Phase 6.2 implementation task) — see below |
-| 6.2 | MITRE ATT&CK mapping | Maintained mapping from scenarios/rules to ATT&CK techniques for reporting and analyst context (today ATT&CK ids only pass through from Wazuh rule metadata as `rule.mitre`, and their presence contributes to the `rule_groups_mitre` score factor) | 🔮 not started as a framework — the coverage catalog now *records* the ATT&CK ids each rule/fixture declares, and surfaces one fixture-level metadata discrepancy (gap G5) |
+| 6.2 | MITRE ATT&CK mapping | Maintained mapping from scenarios/rules to ATT&CK techniques for reporting and analyst context (today ATT&CK ids only pass through from Wazuh rule metadata as `rule.mitre`, and their presence contributes to the `rule_groups_mitre` score factor) | ✅ **implemented** (registry + rendered view + validation tests; runtime untouched) — see below |
 | 6.3 | Expanded regression corpus | Grow the labeled corpus well beyond 6 fixtures; add negatives per scenario; define and document the positive/negative ↔ decision-action semantics (including the UC-1 first-occurrence case) | 🟡 **partially progressed** (Phase 6.3 task) — corpus grown 6→10 scenarios (recurrence escalation, second negative, critical/SEV1, low asset band); label semantics defined and enforced; per-scenario negatives and CI quality thresholds still outstanding — see below |
 | 6.4 | Cross-alert correlation | Correlate related alerts (same host, user, or indicator over time) into one investigation context (today only rule+agent recurrence is grouped) | ✅ **implemented** (investigation-context scope; user correlation unsupported by design — no stable canonical user field) — see below |
-| 6.5 | Analyst explainability | Extend per-alert explanations beyond today's factor-by-factor score justification, decision reasons, and incident timeline — e.g. "what changed since the last occurrence" | 🔮 not started |
+| 6.5 | Analyst explainability | Extend per-alert explanations beyond today's factor-by-factor score justification, decision reasons, and incident timeline — e.g. "what changed since the last occurrence" | ✅ **implemented** (merged via PR #31) — deterministic, read-only per-alert explanations (`explanation.v1`): `GET /api/v1/alerts/{alert_id}/explanation` assembles the stored alert/detection/score/decision/dedupe/correlation/incident/audit facts with explicit nulls, never re-scoring or inferring |
 | 6.6 | Detection-quality CI gates | Fail CI when precision/recall/F1 degrade beyond an agreed threshold, on a corpus large enough to make the thresholds meaningful | 🔮 not started — coverage framework validates traceability, not quality (gap G8) |
 
 ### 6.1 Detection coverage framework — what is now implemented (Phase 6.2 task)
@@ -348,6 +349,41 @@ on drift by design; verified locally by mutation checks during implementation).
 now traces 10 scenarios `SCN-01`–`SCN-10`; the outcome list above records what 6.1/6.2
 delivered and is kept as written.)*
 
+### 6.2 MITRE ATT&CK mapping — what is now implemented
+
+**Status: ✅ implemented and locally validated. No scoring, decision, dedupe, recurrence,
+correlation, incident, explainability, or canonical-model behavior changed; the framework
+is read-only registry data + a rendered document + static validation tests. No runtime
+Python under `app/src/soc_triage/` was touched.**
+
+| Artifact | Purpose | Status |
+| --- | --- | --- |
+| `evaluation/attack_mappings.yaml` | Machine-readable technique-first registry (version `1.0`): 6 techniques (`T1110`, `T1136`, `T1190`, `T1204`, `T1565`, `T1566` — exactly the ids the repository declares), 11 rule mappings (4 custom rules + 7 fixture-declared rule ids, including two that declare none), 10 scenario mappings, and the G5 conflict pinned as `known_discrepancies` (`recorded-unresolved`) | ✅ implemented |
+| `docs/attack-coverage.md` | Rendered technique-first view of the full chain: Wazuh detection → rule → ATT&CK technique → scenario → expected outcome → regression test → analyst/runbook context, plus the documented registry schema | ✅ implemented |
+| `app/tests/evaluation/test_attack_mappings.py` | 39 read-only validation tests: schema/version (incl. the permanent `attack_reference.matrix_verification: unverified` flag), unique ids, provenance-file existence, no invented ids (registry set == repository-declared set, both directions), rule/scenario mappings vs the ruleset, the fixtures, and the Phase 6.1 catalog, verbatim names/tactics with complete metadata provenance, byte-identical fixture copies, G5 liveness, runbook ↔ fixture agreement, and full document sync (ids and table cells vs registry, catalog, and ground truth) | ✅ implemented · locally validated |
+
+**Design (documented combination, no runtime coupling):** runtime keeps consuming
+source-declared `rule.mitre` verbatim (scoring counts *presence* only; correlation matches
+ids; explainability echoes the stored block) — a side-catalog is never consulted at
+runtime, so the registry can never silently diverge from what an alert actually carried.
+The registry records *what the repository's detection content declares*, every entry
+carrying provenance to its source file/path; declared names/tactics are recorded verbatim
+with `matrix_verification: unverified`, because the repository carries no ATT&CK reference
+data — nothing is corrected, completed, or validated against an external matrix, and no
+external/STIX/API data or runtime enrichment was added.
+
+**Explicitly NOT claimed:** no ATT&CK matrix version is pinned; the fixture-declared
+name/tactic triples are unverified; the G5 conflict (`SCN-03`/fixture rule `550` declares
+`T1566` with name "Modify Authentication Process", custom rule `DET-100110` declares
+`T1565`) is recorded, not resolved; the alert read API still omits `rule.mitre` from
+`RuleSummary` (an additive, separately-reviewed change if ever wanted); coverage is still
+documented, not measured (gap G8 → 6.6).
+
+**Still outstanding in this item:** nothing mandatory — the registry fails on drift by
+design (verified by mutation checks during implementation: an altered fixture id, a
+removed G5 record, an altered provenance path, and a doc/registry desync each fail the
+suite); re-run the validation when rules, fixtures, ground truth, or runbooks change.
+
 ### 6.3 Expanded regression corpus — what is now implemented (partial)
 
 **Status: 🟡 partially progressed. No scoring or decision-routing behavior changed; the
@@ -374,13 +410,16 @@ negative), corpus growth "well beyond" 10 fixtures, and quality thresholds on th
 exists (Phase 2.2; coverage-doc gap G10).
 
 **Phase 6 exit criteria (to be refined as items land):** a documented coverage map exists
-(✅ 6.1) · ATT&CK mapping is generated from a maintained source and covered by tests ·
+(✅ 6.1) · ATT&CK mapping is generated from a maintained source and covered by tests
+(✅ 6.2 — the registry is generated from the declaring sources, every value verbatim with
+provenance, matrix-verification explicitly `unverified`) ·
 the corpus has scenario-level negatives, and its label semantics are documented ·
 correlation produces a single investigation context for a multi-stage scenario
 (✅ 6.4 — e.g. `SCN-01`+`SCN-02` group through `shared_source_ip`+`same_agent` evidence;
 the corpus-level *pin* of that outcome is still outstanding) ·
 quality gates run in CI with thresholds justified by the corpus size · all existing
-deterministic goldens and Phase 5 contracts still pass unchanged (✅ re-verified for 6.4).
+deterministic goldens and Phase 5 contracts still pass unchanged (✅ re-verified for 6.4
+and 6.2).
 
 ### 6.4 Cross-alert correlation — what is now implemented
 
