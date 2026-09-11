@@ -6,6 +6,37 @@ semantic (`v0.1.0` targeted at the end of Phase 1).
 
 ## [Unreleased]
 
+### Added — Phase 6.3: detection regression expansion (corpus 6→10 scenarios)
+
+- **Four new synthetic fixtures** (`app/tests/fixtures/`, identical copies in
+  `docs/sample-alerts/`), each with ground-truth pins, catalog entries (`SCN-07`–`SCN-10`),
+  and runbook references: `07_wazuh_ssh_brute_force_recurrence.json` (recurrence burst on a
+  second tier-1 host), `08_wazuh_ssh_session_opened.json` (benign informational baseline,
+  no asset-tier labels), `09_wazuh_malware_hash_critical_server.json` (critical-tier asset
+  → SEV1), `10_wazuh_web_sql_injection_staging.json` (tier-3 asset, `low` criticality band).
+- **First multi-delivery corpus case (SCN-07).** The corpus case declares
+  `deliveries: 3`; `evaluation/ground_truth.json` pins the escalation under a `recurrence`
+  block (43/low/`monitor` → 55/medium/`queue_l1`, `occurrences: 3`). Ground truth remains
+  the single expected-outcome source; the catalog mirrors it and a validation test enforces
+  the mirror.
+- **Label semantics defined and enforced** (`test_corpus_labels_match_ground_truth_actions`):
+  `negative` scenarios must never route to L1/incident; `positive` scenarios must never be
+  suppressed (UC-1 first-occurrence `monitor` stays an accepted, reported FN).
+- **Stronger evaluation assertions.** The corpus harness now checks the stable
+  scoring.v1/decisions.v1 contract on every delivery (engine version, non-degraded flag,
+  exact factor set and order, decision-reasons shape, severity consistency, incident id
+  presence for `open_incident`, offline `enrichment_status`), plus a whole-corpus
+  replay-determinism test.
+- **Boundary regression tests** (no behavior change): recurrence `min_occurrences` −1 and
+  window ±1 s at unit level; second-delivery non-escalation, informational floor,
+  critical/SEV1, and low-asset-band pins at pipeline level.
+- **Coverage documentation** updated: `docs/detection-coverage.md` scenario table (10
+  scenarios), recurrence mechanics, label semantics, new gap **G10** (allowlist
+  `suppress` is unreachable end-to-end until a Phase 2.2 allowlist provider exists),
+  and `DEVELOPMENT_PLAN.md` Phase 6.3 marked partially progressed.
+- No change to `app/config/scoring.yaml`, `app/config/decisions.yaml`, or any engine
+  code: existing golden outcomes are untouched (`01`–`06` pins unchanged).
+
 ### Added — Phase 4.1/4.2: real Wazuh integration (`full` profile + `custom-triage` integrator)
 
 - **`full` compose profile (4.1).** New optional `wazuh-manager` service

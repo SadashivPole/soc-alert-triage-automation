@@ -260,6 +260,42 @@ def test_scenario_outcomes_match_ground_truth_exactly(scenario: dict[str, Any]) 
     )
 
 
+def test_scenario_recurrence_blocks_match_ground_truth() -> None:
+    """A scenario's optional ``recurrence`` block mirrors ground truth exactly.
+
+    ``recurrence`` (Phase 6.3) is only valid for multi-delivery corpus cases:
+    it must match the fixture's ``recurrence`` block in ground_truth.json, and
+    the corpus case must declare the same delivery count. Ground truth stays
+    the single expected-outcome source; the catalog only mirrors it.
+    """
+    corpus = _load_json(CORPUS)
+    deliveries_by_fixture = {
+        case["fixture"]: int(case.get("deliveries", 1)) for case in corpus["cases"]
+    }
+
+    for scenario in SCENARIOS:
+        record = _load_json(GROUND_TRUTH)["fixtures"][scenario["fixture"]]
+        block = scenario.get("recurrence")
+
+        if block is None:
+            # A multi-delivery case without a mirrored block would leave the
+            # escalation unpinned by the catalog.
+            assert "recurrence" not in record or deliveries_by_fixture[scenario["fixture"]] == 1, (
+                f"{scenario['id']}: multi-delivery ground-truth case is not mirrored in the catalog"
+            )
+            continue
+
+        assert record.get("recurrence") == block, (
+            f"{scenario['id']}: catalog recurrence block differs from {GROUND_TRUTH.name}"
+        )
+        assert block["deliveries"] > 1
+        assert block["deliveries"] == deliveries_by_fixture[scenario["fixture"]], (
+            f"{scenario['id']}: catalog deliveries differ from the corpus case"
+        )
+        assert set(block["after_final_delivery"]) <= {"score", "tier", "action", "severity"}
+        assert block["occurrences"] >= block["deliveries"]
+
+
 # ---------------------------------------------------------------------------------
 # references: runbooks and regression tests
 # ---------------------------------------------------------------------------------

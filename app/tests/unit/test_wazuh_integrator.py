@@ -289,8 +289,11 @@ def test_forwarding_filter_rejects_malformed_alert(alert: dict) -> None:
 def test_default_filter_matches_the_repository_sample_corpus() -> None:
     """Every sample alert is classified deterministically by rule level.
 
-    The default threshold is level >= 5, which forwards the five actionable
-    samples and filters ``02_wazuh_ssh_brute_force_success`` (level 3) as noise.
+    The default threshold is level >= 5, which forwards the eight actionable
+    samples and filters the two level-3 samples
+    (``02_wazuh_ssh_brute_force_success``, ``08_wazuh_ssh_session_opened``)
+    as noise. Phase 6.3 added the level-3 benign baseline fixture 08, so the
+    filtered golden grew by exactly that sample.
     """
     config = integrator.load_config(make_env())
     samples = sorted(SAMPLE_ALERTS.glob("*.json"))
@@ -302,8 +305,11 @@ def test_default_filter_matches_the_repository_sample_corpus() -> None:
         (forwarded if decision else filtered).append(sample.name)
         expected = alert["rule"]["level"] >= config.min_rule_level
         assert decision is expected, (sample.name, reason)
-    assert filtered == ["02_wazuh_ssh_brute_force_success.json"]
-    assert len(forwarded) == len(samples) - 1
+    assert filtered == [
+        "02_wazuh_ssh_brute_force_success.json",
+        "08_wazuh_ssh_session_opened.json",
+    ]
+    assert len(forwarded) == len(samples) - 2
 
 
 # ---------------------------------------------------------------------------

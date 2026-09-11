@@ -172,3 +172,66 @@ scenarios:
     regression_tests:
       - app/tests/evaluation/test_evaluation.py::test_ground_truth_evaluation
     validation_status: locally-validated
+
+  # --------------------------------------------------------------------------------
+  # Phase 6.3 expansion. SCN-07 is the corpus's first multi-delivery scenario: the
+  # corpus case declares `deliveries: 3` and ground truth pins the escalation under
+  # the fixture's `recurrence` block (ground_truth.json stays the single source).
+  # --------------------------------------------------------------------------------
+  - id: SCN-07
+    fixture: 07_wazuh_ssh_brute_force_recurrence.json
+    rule_id: "5710"
+    rule_level: 5
+    rule_provenance: synthetic-fixture
+    mitre_attack: ["T1110"]
+    ground_truth: {score: 43, tier: low, action: monitor}
+    recurrence:
+      deliveries: 3
+      occurrences: 3
+      after_final_delivery: {score: 55, tier: medium, action: queue_l1}
+    runbook: docs/runbooks/ssh-brute-force.md
+    regression_tests:
+      - app/tests/evaluation/test_evaluation.py::test_ground_truth_evaluation
+      - app/tests/evaluation/test_evaluation.py::test_recurrence_scenario_escalates_according_to_ground_truth
+      - app/tests/integration/test_scoring_pipeline.py::test_recurrence_escalation_raises_the_score
+      - app/tests/integration/test_scoring_pipeline.py::test_second_occurrence_below_rapid_burst_does_not_escalate
+    validation_status: locally-validated
+
+  - id: SCN-08
+    fixture: 08_wazuh_ssh_session_opened.json
+    rule_id: "5716"
+    rule_level: 3
+    rule_provenance: synthetic-fixture
+    mitre_attack: []
+    ground_truth: {score: 14, tier: informational, action: monitor}
+    runbook: docs/runbooks/ssh-brute-force.md
+    regression_tests:
+      - app/tests/evaluation/test_evaluation.py::test_ground_truth_evaluation
+      - app/tests/integration/test_scoring_pipeline.py::test_benign_informational_event_stays_informational
+    validation_status: locally-validated
+
+  - id: SCN-09
+    fixture: 09_wazuh_malware_hash_critical_server.json
+    rule_id: "87105"
+    rule_level: 12
+    rule_provenance: synthetic-fixture
+    mitre_attack: ["T1204"]
+    ground_truth: {score: 88, tier: critical, action: open_incident, severity: SEV1}
+    runbook: docs/runbooks/malware-hash.md
+    regression_tests:
+      - app/tests/evaluation/test_evaluation.py::test_ground_truth_evaluation
+      - app/tests/integration/test_scoring_pipeline.py::test_malware_on_critical_asset_scores_critical_and_opens_sev1
+    validation_status: locally-validated
+
+  - id: SCN-10
+    fixture: 10_wazuh_web_sql_injection_staging.json
+    rule_id: "31103"
+    rule_level: 10
+    rule_provenance: synthetic-fixture
+    mitre_attack: ["T1190"]
+    ground_truth: {score: 46, tier: medium, action: queue_l1}
+    runbook: docs/runbooks/web-attack.md
+    regression_tests:
+      - app/tests/evaluation/test_evaluation.py::test_ground_truth_evaluation
+      - app/tests/integration/test_scoring_pipeline.py::test_low_criticality_asset_holds_medium
+    validation_status: locally-validated
