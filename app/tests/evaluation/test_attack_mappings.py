@@ -354,7 +354,12 @@ def test_fixture_rule_mappings_are_complete() -> None:
         _fixture_by_catalog_name(scenario["fixture"])["rule"]["id"]
         for scenario in CATALOG_SCENARIOS
     }
-    assert fixture_rule_ids == set(_registry_rule_ids(source_kind="synthetic-fixture")), (
+    custom_rule_ids = {
+        mapping["rule_id"] for mapping in RULE_MAPPINGS if mapping["source_kind"] == "ruleset-xml"
+    }
+    assert fixture_rule_ids - custom_rule_ids == set(
+        _registry_rule_ids(source_kind="synthetic-fixture")
+    ), (
         "every rule id declared by a corpus fixture must be mapped (absence is recorded "
         "with an empty technique_ids list, never omitted)"
     )

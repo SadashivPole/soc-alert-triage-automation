@@ -210,3 +210,6 @@ The synthetic sample identifies:
 
 Validate the mapping against the organization's actual detection content
 before production use.
+Phase 6.3 regression samples: `docs/sample-alerts/13_custom_web_rule_100120_env.json`,
+`docs/sample-alerts/14_custom_web_recurrence_rule_100121.json`, and
+`docs/sample-alerts/16_ordinary_web_request.json`.

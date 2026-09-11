@@ -37,7 +37,8 @@ detections:
       value: "5712"
     reference_scenario: SCN-01
     scenario_link: behavioral-overlap
-    regression_tests: []
+    regression_tests:
+      - app/tests/evaluation/test_evaluation.py::test_ground_truth_evaluation
     validation_status: authored
 
   - id: DET-100110
@@ -52,7 +53,8 @@ detections:
       value: "550"
     reference_scenario: SCN-03
     scenario_link: parent-rule
-    regression_tests: []
+    regression_tests:
+      - app/tests/evaluation/test_evaluation.py::test_ground_truth_evaluation
     validation_status: authored
 
   - id: DET-100120
@@ -67,7 +69,8 @@ detections:
       value: soc-web
     reference_scenario: SCN-05
     scenario_link: behavioral-overlap
-    regression_tests: []
+    regression_tests:
+      - app/tests/evaluation/test_evaluation.py::test_ground_truth_evaluation
     validation_status: authored
 
   - id: DET-100121
@@ -82,7 +85,8 @@ detections:
       value: "100120"
     reference_scenario: SCN-05
     scenario_link: behavioral-overlap
-    regression_tests: []
+    regression_tests:
+      - app/tests/evaluation/test_evaluation.py::test_recurrence_scenario_escalates_according_to_ground_truth
     validation_status: authored
 
 # --------------------------------------------------------------------------------
@@ -234,4 +238,81 @@ scenarios:
     regression_tests:
       - app/tests/evaluation/test_evaluation.py::test_ground_truth_evaluation
       - app/tests/integration/test_scoring_pipeline.py::test_low_criticality_asset_holds_medium
+    validation_status: locally-validated
+
+  - id: SCN-11
+    fixture: 11_custom_ssh_rule_100100.json
+    rule_id: "100100"
+    rule_level: 10
+    rule_provenance: synthetic-fixture
+    mitre_attack: ["T1110"]
+    ground_truth: {score: 59, tier: medium, action: queue_l1}
+    runbook: docs/runbooks/ssh-brute-force.md
+    regression_tests:
+      - app/tests/evaluation/test_evaluation.py::test_ground_truth_evaluation
+    validation_status: locally-validated
+
+  - id: SCN-12
+    fixture: 12_custom_fim_rule_100110.json
+    rule_id: "100110"
+    rule_level: 8
+    rule_provenance: synthetic-fixture
+    mitre_attack: ["T1565"]
+    ground_truth: {score: 60, tier: medium, action: queue_l1}
+    runbook: docs/runbooks/fim-critical-file.md
+    regression_tests:
+      - app/tests/evaluation/test_evaluation.py::test_ground_truth_evaluation
+    validation_status: locally-validated
+
+  - id: SCN-13
+    fixture: 13_custom_web_rule_100120_env.json
+    rule_id: "100120"
+    rule_level: 10
+    rule_provenance: synthetic-fixture
+    mitre_attack: ["T1190"]
+    ground_truth: {score: 55, tier: medium, action: queue_l1}
+    runbook: docs/runbooks/web-attack.md
+    regression_tests:
+      - app/tests/evaluation/test_evaluation.py::test_ground_truth_evaluation
+    validation_status: locally-validated
+
+  - id: SCN-14
+    fixture: 14_custom_web_recurrence_rule_100121.json
+    rule_id: "100121"
+    rule_level: 7
+    rule_provenance: synthetic-fixture
+    mitre_attack: ["T1190"]
+    ground_truth: {score: 47, tier: medium, action: queue_l1}
+    recurrence:
+      deliveries: 5
+      occurrences: 5
+      after_final_delivery: {score: 65, tier: medium, action: queue_l1}
+    runbook: docs/runbooks/web-attack.md
+    regression_tests:
+      - app/tests/evaluation/test_evaluation.py::test_ground_truth_evaluation
+      - app/tests/evaluation/test_evaluation.py::test_recurrence_scenario_escalates_according_to_ground_truth
+    validation_status: locally-validated
+
+  - id: SCN-15
+    fixture: 15_ssh_failed_auth_below_threshold.json
+    rule_id: "5712"
+    rule_level: 5
+    rule_provenance: synthetic-fixture
+    mitre_attack: ["T1110"]
+    ground_truth: {score: 43, tier: low, action: monitor}
+    runbook: docs/runbooks/ssh-brute-force.md
+    regression_tests:
+      - app/tests/evaluation/test_evaluation.py::test_ground_truth_evaluation
+    validation_status: locally-validated
+
+  - id: SCN-16
+    fixture: 16_ordinary_web_request.json
+    rule_id: "31100"
+    rule_level: 3
+    rule_provenance: synthetic-fixture
+    mitre_attack: []
+    ground_truth: {score: 27, tier: low, action: monitor}
+    runbook: docs/runbooks/web-attack.md
+    regression_tests:
+      - app/tests/evaluation/test_evaluation.py::test_ground_truth_evaluation
     validation_status: locally-validated
