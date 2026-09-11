@@ -25,6 +25,10 @@ users, networks, or malware are represented.
 | `04_wazuh_malware_hash_virustotal.json` | File hash with VirusTotal verdict (malicious 38/70) on a workstation | 87105 / 12 | high rule level + `threat_intel` → SEV1/SEV2 incident |
 | `05_wazuh_web_sql_injection.json` | Web attack (SQL injection pattern) from external IP | 31103 / 10 | high band from rule level; external-IP enrichment in Phase 2 |
 | `06_wazuh_windows_user_created.json` | Windows Event 4720 — new local account on a critical finance server | 60180 / 5 | medium band; `asset_criticality` lifts it; requires analyst review |
+| `07_wazuh_ssh_brute_force_recurrence.json` | Same SSH brute-force behavior as 01 on a second tier-1 host (`web-prod-02`); evaluation corpus replays it as 3 distinct deliveries | 5710 / 5 | first delivery 43/low/monitor (identical to 01); third occurrence crosses the rapid-burst recurrence threshold (+12) → 55/medium/`queue_l1` (Phase 6.3) |
+| `08_wazuh_ssh_session_opened.json` | Benign SSH session-opened baseline event; no suspicious groups, no MITRE, no indicators, no asset-tier labels | 5716 / 3 | informational band (unknown-asset fallback only) → `monitor`; must never escalate (Phase 6.3) |
+| `09_wazuh_malware_hash_critical_server.json` | Same malware verdict as 04 on a critical finance server (`fin-db-01`) | 87105 / 12 | critical band → SEV1 `open_incident`; pins the critical tier end-to-end (Phase 6.3) |
+| `10_wazuh_web_sql_injection_staging.json` | Same SQL-injection behavior as 05 against a tier-3 staging host (`web-stg-01`) | 31103 / 10 | low asset-criticality band keeps it medium → `queue_l1`; pins the `low` asset band (Phase 6.3) |
 
 ## Usage (once Phase 1 lands)
 

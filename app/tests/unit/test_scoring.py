@@ -140,6 +140,32 @@ def test_recurrence_rapid_burst() -> None:
     assert "rapid_burst" in factor.detail
 
 
+def test_recurrence_below_rapid_burst_minimum_is_zero() -> None:
+    """One delivery below the configured rapid-burst minimum contributes
+    nothing (Phase 6.3: min_occurrences boundary)."""
+    alert = make_canonical_alert(occurrences=2, span_seconds=300)
+    factor = _factor(alert, "recurrence_velocity")
+    assert factor.points == 0
+    assert "no recurrence threshold met" in factor.detail
+
+
+def test_recurrence_exactly_at_window_boundary_matches() -> None:
+    """A span exactly equal to the configured rapid-burst window (900 s) is
+    still inside it (`span <= max_window_seconds`)."""
+    alert = make_canonical_alert(occurrences=3, span_seconds=900)
+    factor = _factor(alert, "recurrence_velocity")
+    assert factor.points == 12
+    assert "rapid_burst" in factor.detail
+
+
+def test_recurrence_just_past_window_is_zero_for_small_bursts() -> None:
+    """Three occurrences one second past the rapid-burst window meet no
+    threshold (Phase 6.3: window boundary)."""
+    alert = make_canonical_alert(occurrences=3, span_seconds=901)
+    factor = _factor(alert, "recurrence_velocity")
+    assert factor.points == 0
+
+
 def test_recurrence_rising_burst() -> None:
     alert = make_canonical_alert(occurrences=5, span_seconds=600)
     factor = _factor(alert, "recurrence_velocity")
