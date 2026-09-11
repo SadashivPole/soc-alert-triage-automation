@@ -1,0 +1,51 @@
+{
+  "id": "1770000000.600015",
+  "timestamp": "2026-08-29T10:15:29.000+0000",
+  "rule": {
+    "level": 5,
+    "description": "sshd: authentication failure",
+    "id": "5712",
+    "firedtimes": 4,
+    "mail": false,
+    "groups": [
+      "syslog",
+      "sshd",
+      "authentication_failed"
+    ],
+    "mitre": {
+      "id": [
+        "T1110"
+      ],
+      "tactic": [
+        "Credential Access"
+      ],
+      "technique": [
+        "Brute Force: Password Guessing"
+      ]
+    }
+  },
+  "agent": {
+    "id": "001",
+    "name": "web-prod-01",
+    "ip": "10.0.1.10",
+    "labels": {
+      "asset_tier": "tier-1",
+      "owner": "platform-team"
+    }
+  },
+  "manager": {
+    "name": "wazuh-manager"
+  },
+  "decoder": {
+    "name": "sshd"
+  },
+  "data": {
+    "srcip": "203.0.113.50",
+    "srcport": 41234,
+    "srcuser": "root",
+    "dstuser": "admin",
+    "protocol": "ssh"
+  },
+  "location": "/var/log/auth.log",
+  "full_log": "Aug 29 10:15:29 web-prod-01 sshd[3123]: Failed password for admin from 203.0.113.51 port 41234 ssh2"
+}

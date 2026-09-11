@@ -57,6 +57,10 @@ techniques:
         path: rule.mitre
       - file: app/tests/fixtures/07_wazuh_ssh_brute_force_recurrence.json
         path: rule.mitre
+      - file: app/tests/fixtures/11_custom_ssh_rule_100100.json
+        path: rule.mitre
+      - file: app/tests/fixtures/15_ssh_failed_auth_below_threshold.json
+        path: rule.mitre
   - id: "T1136"
     declared_names: ["Create Account: Local Account"]
     declared_tactics: ["Persistence"]
@@ -71,6 +75,10 @@ techniques:
         path: rule.mitre
       - file: app/tests/fixtures/10_wazuh_web_sql_injection_staging.json
         path: rule.mitre
+      - file: app/tests/fixtures/13_custom_web_rule_100120_env.json
+        path: rule.mitre
+      - file: app/tests/fixtures/14_custom_web_recurrence_rule_100121.json
+        path: rule.mitre
   - id: "T1204"
     declared_names: ["User Execution: Malicious File"]
     declared_tactics: ["Execution", "Initial Access"]
@@ -80,11 +88,12 @@ techniques:
       - file: app/tests/fixtures/09_wazuh_malware_hash_critical_server.json
         path: rule.mitre
   - id: "T1565"
-    # Declared by the custom ruleset only (rule 100110). Its id provenance is
-    # the ruleset mapping below; no fixture declares a name or tactic for it.
-    declared_names: []
-    declared_tactics: []
-    metadata_declared_by: []
+    # The custom fixture preserves the custom rule metadata; the G5 conflict remains unresolved.
+    declared_names: ["Data Manipulation"]
+    declared_tactics: ["Impact"]
+    metadata_declared_by:
+      - file: app/tests/fixtures/12_custom_fim_rule_100110.json
+        path: rule.mitre
   - id: "T1566"
     declared_names: ["Modify Authentication Process"]
     declared_tactics: ["Persistence", "Privilege Escalation"]
@@ -182,6 +191,19 @@ rule_mappings:
       - file: app/tests/fixtures/09_wazuh_malware_hash_critical_server.json
         path: rule.mitre.id
 
+  - rule_id: "5712"
+    source_kind: synthetic-fixture
+    technique_ids: ["T1110"]
+    declared_by:
+      - file: app/tests/fixtures/15_ssh_failed_auth_below_threshold.json
+        path: rule.mitre.id
+  - rule_id: "31100"
+    source_kind: synthetic-fixture
+    technique_ids: []
+    declared_by:
+      - file: app/tests/fixtures/16_ordinary_web_request.json
+        path: rule.mitre
+
 # --------------------------------------------------------------------------------
 # Scenario → technique mappings (SCN-01 … SCN-10). `technique_ids` equals the
 # fixture's declared `rule.mitre.id` list and the detection catalog's
@@ -232,6 +254,32 @@ scenario_mappings:
     fixture: app/tests/fixtures/10_wazuh_web_sql_injection_staging.json
     path: rule.mitre.id
     technique_ids: ["T1190"]
+
+  - scenario_id: SCN-11
+    fixture: app/tests/fixtures/11_custom_ssh_rule_100100.json
+    path: rule.mitre.id
+    technique_ids: ["T1110"]
+  - scenario_id: SCN-12
+    fixture: app/tests/fixtures/12_custom_fim_rule_100110.json
+    path: rule.mitre.id
+    technique_ids: ["T1565"]
+  - scenario_id: SCN-13
+    fixture: app/tests/fixtures/13_custom_web_rule_100120_env.json
+    path: rule.mitre.id
+    technique_ids: ["T1190"]
+  - scenario_id: SCN-14
+    fixture: app/tests/fixtures/14_custom_web_recurrence_rule_100121.json
+    path: rule.mitre.id
+    technique_ids: ["T1190"]
+  - scenario_id: SCN-15
+    fixture: app/tests/fixtures/15_ssh_failed_auth_below_threshold.json
+    path: rule.mitre.id
+    technique_ids: ["T1110"]
+  - scenario_id: SCN-16
+    fixture: app/tests/fixtures/16_ordinary_web_request.json
+    path: rule.mitre
+    technique_ids: []
+    note: "fixture declares no ATT&CK ids"
 
 # --------------------------------------------------------------------------------
 # Known, unresolved conflicts between declaring sources. Both values and both

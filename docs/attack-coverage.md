@@ -51,11 +51,12 @@ and tactics are the verbatim fixture declarations (`rule.mitre.technique` /
 
 | Technique | Declared name(s) | Declared tactic(s) | Name/tactic provenance | Custom rule(s) | Fixture rule(s) | Scenario(s) | Runbook(s) |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `T1110` | Brute Force: Password Guessing | Credential Access | `01_wazuh_ssh_brute_force.json`, `07_wazuh_ssh_brute_force_recurrence.json` | `100100` | `5710` | `SCN-01`, `SCN-07` | `docs/runbooks/ssh-brute-force.md` |
+| `T1110` | Brute Force: Password Guessing | Credential Access | `01_wazuh_ssh_brute_force.json`, `07_wazuh_ssh_brute_force_recurrence.json`, `11_custom_ssh_rule_100100.json`, `15_ssh_failed_auth_below_threshold.json` | `100100` | `5710`, `5712` | `SCN-01`, `SCN-07`, `SCN-11`, `SCN-15` | `docs/runbooks/ssh-brute-force.md` |
+| `5712` | synthetic fixture | `15_ssh_failed_auth_below_threshold.json` | `T1110` | `SCN-15` |
 | `T1136` | Create Account: Local Account | Persistence | `06_wazuh_windows_user_created.json` | — | `60180` | `SCN-06` | `docs/runbooks/account-creation.md` |
-| `T1190` | Exploit Public-Facing Application | Initial Access | `05_wazuh_web_sql_injection.json`, `10_wazuh_web_sql_injection_staging.json` | `100120`, `100121` | `31103` | `SCN-05`, `SCN-10` | `docs/runbooks/web-attack.md` |
+| `T1190` | Exploit Public-Facing Application | Initial Access | `05_wazuh_web_sql_injection.json`, `10_wazuh_web_sql_injection_staging.json`, `13_custom_web_rule_100120_env.json`, `14_custom_web_recurrence_rule_100121.json` | `100120`, `100121` | `31103` | `SCN-05`, `SCN-10`, `SCN-13`, `SCN-14` | `docs/runbooks/web-attack.md` |
 | `T1204` | User Execution: Malicious File | Execution, Initial Access | `04_wazuh_malware_hash_virustotal.json`, `09_wazuh_malware_hash_critical_server.json` | — | `87105` | `SCN-04`, `SCN-09` | `docs/runbooks/malware-hash.md` |
-| `T1565` | — | — | — | `100110` | — | — | — |
+| `T1565` | Data Manipulation | Impact | `12_custom_fim_rule_100110.json` | `100110` | — | `SCN-12` | `docs/runbooks/fim-critical-file.md` |
 | `T1566` | Modify Authentication Process | Persistence, Privilege Escalation | `03_wazuh_fim_etc_passwd_change.json` | — | `550` | `SCN-03` | `docs/runbooks/fim-critical-file.md` |
 
 **Reading notes**
@@ -87,8 +88,10 @@ Wazuh-style ids, not live-manager-observed; see
 | `100121` | custom ruleset | `soc-triage-rules.xml` | `T1190` | `DET-100121` · `SCN-05` (behavioral-overlap) |
 | `550` | synthetic fixture | `03_wazuh_fim_etc_passwd_change.json` | `T1566` | `SCN-03` |
 | `5710` | synthetic fixture | `01_wazuh_ssh_brute_force.json`, `07_wazuh_ssh_brute_force_recurrence.json` | `T1110` | `SCN-01`, `SCN-07` |
+
 | `5715` | synthetic fixture | `02_wazuh_ssh_brute_force_success.json` | — | `SCN-02` |
 | `5716` | synthetic fixture | `08_wazuh_ssh_session_opened.json` | — | `SCN-08` |
+| `31100` | synthetic fixture | `16_ordinary_web_request.json` | — | `SCN-16` |
 | `31103` | synthetic fixture | `05_wazuh_web_sql_injection.json`, `10_wazuh_web_sql_injection_staging.json` | `T1190` | `SCN-05`, `SCN-10` |
 | `60180` | synthetic fixture | `06_wazuh_windows_user_created.json` | `T1136` | `SCN-06` |
 | `87105` | synthetic fixture | `04_wazuh_malware_hash_virustotal.json`, `09_wazuh_malware_hash_critical_server.json` | `T1204` | `SCN-04`, `SCN-09` |
@@ -136,6 +139,12 @@ remains the single expected-outcome source; this table renders it.
   `rule_groups_mitre` factor counts presence only).
 - Regression-test references are abbreviated to `file::test`; full paths live
   in the detection catalog, which the validation tests keep in sync.
+| `SCN-11` | `11_custom_ssh_rule_100100.json` | `100100` (level 10) | `T1110` | `59` / `medium` / `queue_l1` | `test_evaluation.py::test_ground_truth_evaluation` | `docs/runbooks/ssh-brute-force.md` |
+| `SCN-12` | `12_custom_fim_rule_100110.json` | `100110` (level 8) | `T1565` | `60` / `medium` / `queue_l1` | `test_evaluation.py::test_ground_truth_evaluation` | `docs/runbooks/fim-critical-file.md` |
+| `SCN-13` | `13_custom_web_rule_100120_env.json` | `100120` (level 10) | `T1190` | `55` / `medium` / `queue_l1` | `test_evaluation.py::test_ground_truth_evaluation` | `docs/runbooks/web-attack.md` |
+| `SCN-14` | `14_custom_web_recurrence_rule_100121.json` | `100121` (level 7) | `T1190` | `47` / `medium` / `queue_l1` | `test_evaluation.py::test_ground_truth_evaluation`, `test_evaluation.py::test_recurrence_scenario_escalates_according_to_ground_truth` | `docs/runbooks/web-attack.md` |
+| `SCN-15` | `15_ssh_failed_auth_below_threshold.json` | `5712` (level 5) | `T1110` | `43` / `low` / `monitor` | `test_evaluation.py::test_ground_truth_evaluation` | `docs/runbooks/ssh-brute-force.md` |
+| `SCN-16` | `16_ordinary_web_request.json` | `31100` (level 3) | — | `27` / `low` / `monitor` | `test_evaluation.py::test_ground_truth_evaluation` | `docs/runbooks/web-attack.md` |
 
 ## Known discrepancy (G5)
 
