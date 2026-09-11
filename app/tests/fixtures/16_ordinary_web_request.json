@@ -1,0 +1,40 @@
+{
+  "id": "1770000000.600016",
+  "timestamp": "2026-08-29T13:45:00.000+0000",
+  "rule": {
+    "level": 3,
+    "description": "Web access request",
+    "id": "31100",
+    "firedtimes": 1,
+    "mail": false,
+    "groups": [
+      "web",
+      "accesslog"
+    ],
+    "mitre": {}
+  },
+  "agent": {
+    "id": "001",
+    "name": "web-prod-01",
+    "ip": "10.0.1.10",
+    "labels": {
+      "asset_tier": "tier-1",
+      "owner": "platform-team"
+    }
+  },
+  "manager": {
+    "name": "wazuh-manager"
+  },
+  "decoder": {
+    "name": "soc-web"
+  },
+  "data": {
+    "srcip": "198.51.100.77",
+    "id": "1054",
+    "url": "/products/42",
+    "protocol": "HTTP/1.1",
+    "status": "200"
+  },
+  "location": "/var/log/nginx/error.log",
+  "full_log": "SOC_WEB 2026-08-29T13:45:00Z GET /products/42 from 198.51.100.79"
+}
