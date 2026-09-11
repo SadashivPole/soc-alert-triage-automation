@@ -9,6 +9,11 @@ This runbook covers:
 
 - `01_wazuh_ssh_brute_force.json` — Wazuh rule `5710`
 - `02_wazuh_ssh_brute_force_success.json` — Wazuh rule `5715`
+- `07_wazuh_ssh_brute_force_recurrence.json` — Wazuh rule `5710` on a second
+  tier-1 host (`web-prod-02`); the evaluation corpus replays it as three
+  distinct deliveries to pin the recurrence escalation (Phase 6.3, SCN-07)
+- `08_wazuh_ssh_session_opened.json` — Wazuh rule `5716`; a benign baseline
+  session event that must stay in the informational band (Phase 6.3, SCN-08)
 
 The investigation is defensive only. Do not perform exploitation or
 unauthorized access. Any containment action is a proposal that requires

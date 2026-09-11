@@ -73,12 +73,13 @@ ruleset is mounted read-only into the optional `full` compose profile.
 
 ---
 
-## Scenario coverage (Phase 5 evaluation corpus)
+## Scenario coverage (Phase 5 evaluation corpus, expanded in Phase 6.3)
 
 Each scenario is one synthetic fixture in `app/tests/fixtures/` (identical copy in
 `docs/sample-alerts/`) that is replayed through the real ingest path
 (`normalize → dedupe → score → decide`) and compared against ground truth by
-`test_evaluation.py`.
+`test_evaluation.py`. Phase 6.3 grew the corpus from six to ten scenarios and added its
+first multi-delivery case (`SCN-07`, recurrence).
 
 | Scenario ID | Fixture | Wazuh rule (fixture-declared) | MITRE ATT&CK | Expected score | Expected tier | Expected action | Analyst action / runbook | Regression test | Validation status |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -88,6 +89,10 @@ Each scenario is one synthetic fixture in `app/tests/fixtures/` (identical copy 
 | `SCN-04` | `04_wazuh_malware_hash_virustotal.json` | `87105` (level 12) | `T1204` | 73 | high | `open_incident` (`SEV2`) | `docs/runbooks/malware-hash.md` | `test_evaluation.py::test_ground_truth_evaluation`, `test_scoring_pipeline.py::test_malware_alert_scores_high_and_opens_sev2` | **Locally validated** |
 | `SCN-05` | `05_wazuh_web_sql_injection.json` | `31103` (level 10) | `T1190` | 59 | medium | `queue_l1` | `docs/runbooks/web-attack.md` | `test_evaluation.py::test_ground_truth_evaluation` | **Locally validated** |
 | `SCN-06` | `06_wazuh_windows_user_created.json` | `60180` (level 5) | `T1136` | 47 | medium | `queue_l1` | `docs/runbooks/account-creation.md` | `test_evaluation.py::test_ground_truth_evaluation` | **Locally validated** |
+| `SCN-07` | `07_wazuh_ssh_brute_force_recurrence.json` | `5710` (level 5) | `T1110` | 43 | low | `monitor` | `docs/runbooks/ssh-brute-force.md` | `test_evaluation.py::test_ground_truth_evaluation`, `test_evaluation.py::test_recurrence_scenario_escalates_according_to_ground_truth`, `test_scoring_pipeline.py::test_recurrence_escalation_raises_the_score`, `test_scoring_pipeline.py::test_second_occurrence_below_rapid_burst_does_not_escalate` | **Locally validated** |
+| `SCN-08` | `08_wazuh_ssh_session_opened.json` | `5716` (level 3) | — (none declared) | 14 | informational | `monitor` | `docs/runbooks/ssh-brute-force.md` | `test_evaluation.py::test_ground_truth_evaluation`, `test_scoring_pipeline.py::test_benign_informational_event_stays_informational` | **Locally validated** |
+| `SCN-09` | `09_wazuh_malware_hash_critical_server.json` | `87105` (level 12) | `T1204` | 88 | critical | `open_incident` (`SEV1`) | `docs/runbooks/malware-hash.md` | `test_evaluation.py::test_ground_truth_evaluation`, `test_scoring_pipeline.py::test_malware_on_critical_asset_scores_critical_and_opens_sev1` | **Locally validated** |
+| `SCN-10` | `10_wazuh_web_sql_injection_staging.json` | `31103` (level 10) | `T1190` | 46 | medium | `queue_l1` | `docs/runbooks/web-attack.md` | `test_evaluation.py::test_ground_truth_evaluation`, `test_scoring_pipeline.py::test_low_criticality_asset_holds_medium` | **Locally validated** |
 
 **Reading notes**
 
@@ -96,7 +101,22 @@ Each scenario is one synthetic fixture in `app/tests/fixtures/` (identical copy 
   before using with a real manager" (catalog field `rule_provenance: synthetic-fixture`).
   Only the Phase 4.1/4.2 integrator path has been live-validated end-to-end, and that
   validation used built-in rule `60602`, which is **not** part of this corpus.
-- `SCN-04` is the only scenario whose ground truth pins a decision `severity` (`SEV2`).
+- `SCN-04` (SEV2) and `SCN-09` (SEV1) pin decision `severity` in ground truth; `SCN-09`
+  is the only scenario in the critical tier.
+- **Recurrence case (`SCN-07`).** The corpus case declares `deliveries: 3`; the harness
+  replays the fixture as three distinct events of the same rule+agent group. Ground truth
+  pins the first delivery under `expected` (43 / low / `monitor` — identical to `SCN-01`
+  by design) and the escalation under a `recurrence` block: after the third delivery the
+  score is 55, tier medium, action `queue_l1`, with `occurrences: 3` and a `repeated`
+  dedupe status. The catalog mirrors that block verbatim; ground truth stays the single
+  expected-outcome source.
+- **Label semantics (Phase 6.3).** Corpus labels classify the *scenario*, not each pinned
+  outcome: `negative` means every pinned outcome stays passive (`monitor`/`suppress`) —
+  routing a benign case to L1/incident fails the evaluation; `positive` means an
+  attack/malicious scenario whose pinned outcomes must never be `suppress`. A positive
+  scenario whose first occurrence stays `monitor` (`SCN-01`, the UC-1 first-occurrence
+  case) is an accepted under-triage result and is reported transparently as an FN by the
+  harness metrics.
 - Expected values are the ones pinned by `evaluation/ground_truth.json`; they are asserted
   by the runtime evaluation test, not estimated here.
 - Test names are abbreviated to the file basename; full paths are in the catalog
@@ -121,6 +141,7 @@ is missing and, where one exists, the roadmap item that would close it.
 | G7 | **No cross-alert correlation** — `SCN-01`/`SCN-02` are documented as a correlated pair (failed logins followed by a success), but the platform only groups repeats of the same rule+agent (dedupe/recurrence). There is no correlation entity linking two different rules | README/`docs/sample-alerts/README.md` describe the pairing as a correlation demo; `app/src/soc_triage/ingest/deduplication.py` groups rule+agent recurrence | Not mapped — outstanding (roadmap item 6.4) |
 | G8 | **Coverage is documented, not measured** — no automated coverage metric, no threshold, and no CI gate. The framework validates *traceability*, not detection quality | this document + `app/tests/evaluation/test_detection_coverage.py` | Outstanding (roadmap items 6.2 and 6.6) |
 | G9 | **Rule thresholds (`frequency`/`timeframe`) are not validated** — values are read from the ruleset; no test or lab run exercises burst behaviour at those thresholds | `wazuh/ruleset/rules/soc-triage-rules.xml` (`frequency="5" timeframe="300"`) | Outstanding |
+| G10 | **Allowlist suppression is not reachable end-to-end through ingest** — `scoring.v1` subtracts the allowlist modifier and `decisions.v1` overrides to `suppress` only when an IOC carries a provider-attached `allowlist.matched` enrichment, and no allowlist provider/loader exists yet (Phase 2.2 outstanding). The corpus therefore cannot pin a `suppress` outcome; the behavior is covered at unit/engine level only | `app/src/soc_triage/models/ioc.py` (`ioc_is_allowlisted`), `app/config/scoring.yaml` (`allowlist`), `app/config/decisions.yaml` (`allowlisted_action`), `app/tests/unit/test_decisions.py` | Outstanding (Phase 2.2) |
 
 ---
 
@@ -167,13 +188,14 @@ stable and unique: `DET-<rule_id>` for rule-backed detections, `SCN-<nn>` for sc
 behavior: catalog structure and unique ids; every custom rule exists in the ruleset with
 matching level, ATT&CK ids, groups and trigger; decoder references exist; scenario fixtures
 exist in both locations and declare the cataloged rule id/level/ATT&CK ids; expected
-outcomes equal `ground_truth.json` exactly; the scenario set equals the corpus and
-ground-truth sets; runbooks exist and name their fixture; every referenced test file and
-test function exists; every ATT&CK id in the catalog is declared by its source file (no
-invented techniques); scenario-link semantics hold (`direct` ⇒ same rule id, `parent-rule`
-⇒ `if_sid` equals the scenario rule, `behavioral-overlap` ⇒ shared ATT&CK id); and every id
-in this document exists in the catalog (no phantom rows), with every catalog id appearing
-in the document.
+outcomes equal `ground_truth.json` exactly (and any scenario `recurrence` block mirrors
+the ground-truth recurrence block and the corpus delivery count); the scenario set equals
+the corpus and ground-truth sets; runbooks exist and name their fixture; every referenced
+test file and test function exists; every ATT&CK id in the catalog is declared by its
+source file (no invented techniques); scenario-link semantics hold (`direct` ⇒ same rule
+id, `parent-rule` ⇒ `if_sid` equals the scenario rule, `behavioral-overlap` ⇒ shared
+ATT&CK id); and every id in this document exists in the catalog (no phantom rows), with
+every catalog id appearing in the document.
 
 ---
 

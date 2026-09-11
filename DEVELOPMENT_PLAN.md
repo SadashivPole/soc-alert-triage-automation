@@ -299,14 +299,15 @@ Confusion matrix: **TP 4 · FP 0 · FN 1 · TN 1** → **precision 1.0000**, **r
 **Goal:** move from "the deterministic path behaves as pinned" to "detection quality is
 continuously measured and regressions are blocked".
 
-**Status: in progress — 1 of 6 items implemented (detection coverage framework).**
-Everything else below is still a scope, not an achievement.
+**Status: in progress — 1 of 6 items implemented (detection coverage framework); item 6.3
+is partially progressed (corpus expanded 6→10 scenarios).** Everything else below is still
+a scope, not an achievement.
 
 | # | Item | Scope | Status |
 | --- | --- | --- | --- |
 | 6.1 | Detection coverage framework | A machine-readable inventory of the scenarios, Wazuh rules/decoders, and pipeline outcomes the platform covers, plus explicit blind spots | ✅ **implemented** (delivered as the Phase 6.2 implementation task) — see below |
 | 6.2 | MITRE ATT&CK mapping | Maintained mapping from scenarios/rules to ATT&CK techniques for reporting and analyst context (today ATT&CK ids only pass through from Wazuh rule metadata as `rule.mitre`, and their presence contributes to the `rule_groups_mitre` score factor) | 🔮 not started as a framework — the coverage catalog now *records* the ATT&CK ids each rule/fixture declares, and surfaces one fixture-level metadata discrepancy (gap G5) |
-| 6.3 | Expanded regression corpus | Grow the labeled corpus well beyond 6 fixtures; add negatives per scenario; define and document the positive/negative ↔ decision-action semantics (including the UC-1 first-occurrence case) | 🔮 not started |
+| 6.3 | Expanded regression corpus | Grow the labeled corpus well beyond 6 fixtures; add negatives per scenario; define and document the positive/negative ↔ decision-action semantics (including the UC-1 first-occurrence case) | 🟡 **partially progressed** (Phase 6.3 task) — corpus grown 6→10 scenarios (recurrence escalation, second negative, critical/SEV1, low asset band); label semantics defined and enforced; per-scenario negatives and CI quality thresholds still outstanding — see below |
 | 6.4 | Cross-alert correlation | Correlate related alerts (same host, user, or indicator over time) into one investigation context (today only rule+agent recurrence is grouped) | 🔮 not started — now named as gap G7 in the coverage framework |
 | 6.5 | Analyst explainability | Extend per-alert explanations beyond today's factor-by-factor score justification, decision reasons, and incident timeline — e.g. "what changed since the last occurrence" | 🔮 not started |
 | 6.6 | Detection-quality CI gates | Fail CI when precision/recall/F1 degrade beyond an agreed threshold, on a corpus large enough to make the thresholds meaningful | 🔮 not started — coverage framework validates traceability, not quality (gap G8) |
@@ -343,6 +344,35 @@ changed; the framework is read-only data + documentation + validation tests.**
 above and to re-run the validation when rules, fixtures, or ground truth change (it fails
 on drift by design; verified locally by mutation checks during implementation).
 
+*(Phase 6.3 update: the corpus and validation suite below have since grown — the catalog
+now traces 10 scenarios `SCN-01`–`SCN-10`; the outcome list above records what 6.1/6.2
+delivered and is kept as written.)*
+
+### 6.3 Expanded regression corpus — what is now implemented (partial)
+
+**Status: 🟡 partially progressed. No scoring or decision-routing behavior changed; the
+expansion adds fixtures, ground-truth pins, and regression tests only.**
+
+| Scenario | What it pins | Why it exists |
+| --- | --- | --- |
+| `SCN-07` (`07_wazuh_ssh_brute_force_recurrence.json`, corpus case `deliveries: 3`) | First delivery 43/low/`monitor`; third occurrence 55/medium/`queue_l1`, `occurrences: 3`, escalation attributable to the recurrence factor alone (+12 rapid burst) | First multi-delivery corpus case: pins recurrence/velocity score change and the resulting tier/action transition at corpus level, with ground truth as the single source (`recurrence` block) |
+| `SCN-08` (`08_wazuh_ssh_session_opened.json`, negative) | 14/informational/`monitor`: no suspicious groups, no MITRE, no indicators, no asset-tier label | Second corpus negative; pins the informational band, the benign zero-contribution path, and the unknown-asset fallback end-to-end |
+| `SCN-09` (`09_wazuh_malware_hash_critical_server.json`) | 88/critical/`open_incident` + `SEV1` | Only critical-tier scenario; pins the critical band and SEV1 incident severity through the real pipeline (previously unit/integration-only) |
+| `SCN-10` (`10_wazuh_web_sql_injection_staging.json`) | 46/medium/`queue_l1` with the `low` asset-criticality band | Last unexercised asset band (`low`); shows rule severity holding a tier-3 asset in medium |
+
+Plus: corpus label semantics defined and enforced (`positive` scenarios must never be
+suppressed; `negative` scenarios must never be actioned — `SCN-01` remains the documented
+UC-1 first-occurrence FN), harness assertions for the stable scoring.v1/decisions.v1
+contract (engine version, non-degraded factor set and order, decision reasons shape,
+severity consistency, offline `enrichment_status`), a replay-determinism test over the
+whole corpus, and recurrence boundary tests (2 occurrences and window ±1 s at unit level;
+second-delivery non-escalation at pipeline level).
+
+**Still outstanding in this item:** negatives per scenario (only `SCN-02`/`SCN-08` are
+negative), corpus growth "well beyond" 10 fixtures, and quality thresholds on the metrics
+(6.6). Allowlist `suppress` remains unreachable end-to-end until an allowlist provider
+exists (Phase 2.2; coverage-doc gap G10).
+
 **Phase 6 exit criteria (to be refined as items land):** a documented coverage map exists
 (✅ 6.1) · ATT&CK mapping is generated from a maintained source and covered by tests ·
 the corpus has scenario-level negatives, and its label semantics are documented ·
@@ -354,8 +384,8 @@ deterministic goldens and Phase 5 contracts still pass unchanged.
 
 ## Testing Strategy
 
-**Verified locally on the current checkout (Python 3.11, 2026-09-10):**
-`pytest` → **930 passed** (571 unit · 318 integration · 41 evaluation, of which 39 are the
+**Verified locally on the current checkout (Python 3.11, 2026-09-11):**
+`pytest` → **953 passed** (574 unit · 322 integration · 57 evaluation, of which 52 are the
 Phase 6.1 detection-coverage validation); ruff check + format check, mypy `src`, and
 `check_secrets.sh` clean; `node --test app/tests/js/console_core.test.cjs` → **15 passed**.
 
