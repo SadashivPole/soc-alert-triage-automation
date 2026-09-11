@@ -395,6 +395,17 @@ change, and every change is a reviewable diff.
 - Golden-file tests pin expected scores for the sample-alert scenarios; any weight change
   must consciously update the goldens (that is the tuning workflow).
 
+### 8.4 ATT&CK technique identity is not a scoring input
+
+`rule_groups_mitre` counts ATT&CK **presence** only; which technique an alert maps to
+never influences a score, tier, or action. The maintained, provenance-carrying mapping
+of the repository's rules and scenarios to ATT&CK techniques lives in
+`evaluation/attack_mappings.yaml` (Phase 6.2; rendered in `docs/attack-coverage.md`,
+validated by static tests, with declared values recorded verbatim and matrix
+verification explicitly `unverified`). It is a reporting/traceability artifact: the
+runtime consumes only the source-declared `rule.mitre` block verbatim and never
+consults the registry.
+
 ---
 
 ## 9. Decision & Routing Engine

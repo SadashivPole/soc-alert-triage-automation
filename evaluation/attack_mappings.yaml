@@ -1,0 +1,275 @@
+# MITRE ATT&CK mapping registry (roadmap item 6.2 — ATT&CK mapping framework).
+#
+# This file is the machine-readable source of truth for which MITRE ATT&CK
+# techniques the repository's detections and evaluation scenarios declare.
+# Its human-readable rendering is docs/attack-coverage.md; its companion
+# inventory (rules, scenarios, expected outcomes, runbooks, regression tests)
+# is the Phase 6.1 detection catalog, evaluation/detection_catalog.yaml.
+#
+# RULES FOR THIS FILE (same discipline as the detection catalog)
+#   * Every value must be verifiable from the repository. Nothing is inferred.
+#   * Technique ids, names, and tactics are recorded EXACTLY as their source
+#     file declares them — never corrected, completed, or validated against an
+#     external ATT&CK release (see `attack_reference` below).
+#   * Every mapping carries provenance: the file that declares it (and the
+#     path within that file, where a path is meaningful).
+#   * A rule or scenario that declares no technique is recorded with an empty
+#     `technique_ids` list — absence is recorded, never guessed.
+#   * Known conflicts between sources are recorded under `known_discrepancies`
+#     with both values and both sources; they are never silently resolved.
+#   * Do not add a technique id, name, tactic, rule, scenario, or discrepancy
+#     that a repository file does not already declare.
+#
+# Validated by app/tests/evaluation/test_attack_mappings.py.
+
+version: "1.0"
+
+# The repository contains no MITRE ATT&CK reference data: no STIX/bundle, no
+# id → name/tactic registry, no pinned matrix version, and no external or
+# runtime lookup. Every name and tactic below is *declared by a repository
+# file* (evaluation fixtures declare `rule.mitre.technique` / `rule.mitre.tactic`;
+# the custom ruleset declares ids only). `matrix_verification: unverified` is a
+# property of this registry, not a TODO: it may only change if reference data
+# is introduced deliberately, with a plan to validate every recorded value.
+# Runtime behavior is deliberately NOT driven by this file — the triage
+# pipeline consumes source-declared `rule.mitre` verbatim (Phase 6.1/6.2
+# design: the registry reports and traces; it never scores, routes, or enrich).
+attack_reference:
+  source: none
+  matrix_verification: unverified
+
+# --------------------------------------------------------------------------------
+# Techniques — one entry per distinct ATT&CK id declared by a repository source
+# (the custom ruleset or an evaluation fixture). `declared_names` /
+# `declared_tactics` are the verbatim `rule.mitre.technique` / `rule.mitre.tactic`
+# values of the fixtures that declare the id (sorted, deduplicated). Both are
+# empty when no fixture declares the id: T1565 is declared by the custom
+# ruleset only, and no machine-readable source declares a name or tactic for it
+# (docs/detection-coverage.md hand-annotates a tactic in prose — unvalidated
+# documentation, not recorded here as data).
+# --------------------------------------------------------------------------------
+techniques:
+  - id: "T1110"
+    declared_names: ["Brute Force: Password Guessing"]
+    declared_tactics: ["Credential Access"]
+    metadata_declared_by:
+      - file: app/tests/fixtures/01_wazuh_ssh_brute_force.json
+        path: rule.mitre
+      - file: app/tests/fixtures/07_wazuh_ssh_brute_force_recurrence.json
+        path: rule.mitre
+  - id: "T1136"
+    declared_names: ["Create Account: Local Account"]
+    declared_tactics: ["Persistence"]
+    metadata_declared_by:
+      - file: app/tests/fixtures/06_wazuh_windows_user_created.json
+        path: rule.mitre
+  - id: "T1190"
+    declared_names: ["Exploit Public-Facing Application"]
+    declared_tactics: ["Initial Access"]
+    metadata_declared_by:
+      - file: app/tests/fixtures/05_wazuh_web_sql_injection.json
+        path: rule.mitre
+      - file: app/tests/fixtures/10_wazuh_web_sql_injection_staging.json
+        path: rule.mitre
+  - id: "T1204"
+    declared_names: ["User Execution: Malicious File"]
+    declared_tactics: ["Execution", "Initial Access"]
+    metadata_declared_by:
+      - file: app/tests/fixtures/04_wazuh_malware_hash_virustotal.json
+        path: rule.mitre
+      - file: app/tests/fixtures/09_wazuh_malware_hash_critical_server.json
+        path: rule.mitre
+  - id: "T1565"
+    # Declared by the custom ruleset only (rule 100110). Its id provenance is
+    # the ruleset mapping below; no fixture declares a name or tactic for it.
+    declared_names: []
+    declared_tactics: []
+    metadata_declared_by: []
+  - id: "T1566"
+    declared_names: ["Modify Authentication Process"]
+    declared_tactics: ["Persistence", "Privilege Escalation"]
+    metadata_declared_by:
+      - file: app/tests/fixtures/03_wazuh_fim_etc_passwd_change.json
+        path: rule.mitre
+
+# --------------------------------------------------------------------------------
+# Rule → technique mappings. Two source kinds:
+#
+#   ruleset-xml       — custom SOC-triage rules; provenance is the ruleset file,
+#                       which declares `<mitre><id>` values only (never names or
+#                       tactics). Must stay equal to the `detections[]`
+#                       `mitre_attack` lists of the detection catalog.
+#   synthetic-fixture — rule ids declared inside the Phase 5/6.3 evaluation
+#                       fixtures (illustrative Wazuh-style ids, not
+#                       live-manager-observed — see docs/sample-alerts/README.md).
+#
+# Rules that declare no technique are listed with an empty `technique_ids`
+# (absence recorded). A rule id declared by several fixtures cites each of them.
+# --------------------------------------------------------------------------------
+rule_mappings:
+  - rule_id: "100100"
+    source_kind: ruleset-xml
+    technique_ids: ["T1110"]
+    declared_by:
+      - file: wazuh/ruleset/rules/soc-triage-rules.xml
+        path: "rule[@id='100100']/mitre/id"
+  - rule_id: "100110"
+    source_kind: ruleset-xml
+    technique_ids: ["T1565"]
+    declared_by:
+      - file: wazuh/ruleset/rules/soc-triage-rules.xml
+        path: "rule[@id='100110']/mitre/id"
+  - rule_id: "100120"
+    source_kind: ruleset-xml
+    technique_ids: ["T1190"]
+    declared_by:
+      - file: wazuh/ruleset/rules/soc-triage-rules.xml
+        path: "rule[@id='100120']/mitre/id"
+  - rule_id: "100121"
+    source_kind: ruleset-xml
+    technique_ids: ["T1190"]
+    declared_by:
+      - file: wazuh/ruleset/rules/soc-triage-rules.xml
+        path: "rule[@id='100121']/mitre/id"
+  - rule_id: "550"
+    source_kind: synthetic-fixture
+    technique_ids: ["T1566"]
+    declared_by:
+      - file: app/tests/fixtures/03_wazuh_fim_etc_passwd_change.json
+        path: rule.mitre.id
+  - rule_id: "5710"
+    source_kind: synthetic-fixture
+    technique_ids: ["T1110"]
+    declared_by:
+      - file: app/tests/fixtures/01_wazuh_ssh_brute_force.json
+        path: rule.mitre.id
+      - file: app/tests/fixtures/07_wazuh_ssh_brute_force_recurrence.json
+        path: rule.mitre.id
+  - rule_id: "5715"
+    source_kind: synthetic-fixture
+    technique_ids: []
+    declared_by:
+      - file: app/tests/fixtures/02_wazuh_ssh_brute_force_success.json
+        path: rule.mitre
+    note: "fixture 02 declares no rule.mitre block — absence recorded"
+  - rule_id: "5716"
+    source_kind: synthetic-fixture
+    technique_ids: []
+    declared_by:
+      - file: app/tests/fixtures/08_wazuh_ssh_session_opened.json
+        path: rule.mitre
+    note: "fixture 08 declares no rule.mitre block — absence recorded"
+  - rule_id: "31103"
+    source_kind: synthetic-fixture
+    technique_ids: ["T1190"]
+    declared_by:
+      - file: app/tests/fixtures/05_wazuh_web_sql_injection.json
+        path: rule.mitre.id
+      - file: app/tests/fixtures/10_wazuh_web_sql_injection_staging.json
+        path: rule.mitre.id
+  - rule_id: "60180"
+    source_kind: synthetic-fixture
+    technique_ids: ["T1136"]
+    declared_by:
+      - file: app/tests/fixtures/06_wazuh_windows_user_created.json
+        path: rule.mitre.id
+  - rule_id: "87105"
+    source_kind: synthetic-fixture
+    technique_ids: ["T1204"]
+    declared_by:
+      - file: app/tests/fixtures/04_wazuh_malware_hash_virustotal.json
+        path: rule.mitre.id
+      - file: app/tests/fixtures/09_wazuh_malware_hash_critical_server.json
+        path: rule.mitre.id
+
+# --------------------------------------------------------------------------------
+# Scenario → technique mappings (SCN-01 … SCN-10). `technique_ids` equals the
+# fixture's declared `rule.mitre.id` list and the detection catalog's
+# `mitre_attack` list for the same scenario; ground truth (expected outcomes)
+# remains authoritative in evaluation/ground_truth.json and is rendered, not
+# duplicated, by this registry.
+# --------------------------------------------------------------------------------
+scenario_mappings:
+  - scenario_id: SCN-01
+    fixture: app/tests/fixtures/01_wazuh_ssh_brute_force.json
+    path: rule.mitre.id
+    technique_ids: ["T1110"]
+  - scenario_id: SCN-02
+    fixture: app/tests/fixtures/02_wazuh_ssh_brute_force_success.json
+    path: rule.mitre
+    technique_ids: []
+    note: "fixture declares no rule.mitre block — absence recorded"
+  - scenario_id: SCN-03
+    fixture: app/tests/fixtures/03_wazuh_fim_etc_passwd_change.json
+    path: rule.mitre.id
+    technique_ids: ["T1566"]
+  - scenario_id: SCN-04
+    fixture: app/tests/fixtures/04_wazuh_malware_hash_virustotal.json
+    path: rule.mitre.id
+    technique_ids: ["T1204"]
+  - scenario_id: SCN-05
+    fixture: app/tests/fixtures/05_wazuh_web_sql_injection.json
+    path: rule.mitre.id
+    technique_ids: ["T1190"]
+  - scenario_id: SCN-06
+    fixture: app/tests/fixtures/06_wazuh_windows_user_created.json
+    path: rule.mitre.id
+    technique_ids: ["T1136"]
+  - scenario_id: SCN-07
+    fixture: app/tests/fixtures/07_wazuh_ssh_brute_force_recurrence.json
+    path: rule.mitre.id
+    technique_ids: ["T1110"]
+  - scenario_id: SCN-08
+    fixture: app/tests/fixtures/08_wazuh_ssh_session_opened.json
+    path: rule.mitre
+    technique_ids: []
+    note: "fixture declares no rule.mitre block — absence recorded"
+  - scenario_id: SCN-09
+    fixture: app/tests/fixtures/09_wazuh_malware_hash_critical_server.json
+    path: rule.mitre.id
+    technique_ids: ["T1204"]
+  - scenario_id: SCN-10
+    fixture: app/tests/fixtures/10_wazuh_web_sql_injection_staging.json
+    path: rule.mitre.id
+    technique_ids: ["T1190"]
+
+# --------------------------------------------------------------------------------
+# Known, unresolved conflicts between declaring sources. Both values and both
+# sources are recorded; nothing is resolved here. An entry is *live* only while
+# its sources still declare the recorded values — the validation test fails
+# when either side changes without this record being updated (and fails when
+# the record is removed while the conflict persists).
+# --------------------------------------------------------------------------------
+known_discrepancies:
+  - id: G5
+    status: recorded-unresolved
+    summary: >-
+      The same FIM behavior (modification of a monitored file, e.g.
+      /etc/passwd) is declared as two different ATT&CK technique ids by two
+      repository sources: the evaluation fixture SCN-03 (fixture-declared rule
+      550) declares T1566 — paired with the technique name
+      "Modify Authentication Process" — while the custom rule DET-100110
+      (rule 100110, a child of rule 550 via if_sid) declares T1565.
+    values:
+      - value: "T1566"
+        declared_by:
+          file: app/tests/fixtures/03_wazuh_fim_etc_passwd_change.json
+          path: rule.mitre.id
+        detail: >-
+          Scenario SCN-03, fixture-declared rule 550; the same block declares
+          the technique name "Modify Authentication Process" and the tactics
+          Persistence, Privilege Escalation.
+      - value: "T1565"
+        declared_by:
+          file: wazuh/ruleset/rules/soc-triage-rules.xml
+          path: "rule[@id='100110']/mitre/id"
+        detail: >-
+          Custom detection DET-100110 (evaluation/detection_catalog.yaml),
+          parent-rule linked to SCN-03 by the detection catalog.
+    scoring_impact: >-
+      None. scoring.v1 counts ATT&CK presence only (the rule_groups_mitre
+      factor); technique identity never influences a score, tier, or action.
+    resolution: >-
+      None — recorded as declared. Resolving the conflict requires a
+      deliberate change to one of the two source files, accompanied by updates
+      to this record, the detection catalog, and both coverage documents.
