@@ -6,6 +6,74 @@ semantic (`v0.1.0` targeted at the end of Phase 1).
 
 ## [Unreleased]
 
+### Added — Phase 6.2: MITRE ATT&CK mapping framework
+
+- **A maintained, machine-readable ATT&CK mapping registry** — `evaluation/attack_mappings.yaml`
+  (version `1.0`): one entry per technique id the repository's detection content declares
+  (`T1110`, `T1136`, `T1190`, `T1204`, `T1565`, `T1566`), 11 rule → technique mappings
+  (the 4 custom SOC-triage rules plus the 7 fixture-declared rule ids, including the two
+  that declare none — absence recorded, never guessed), and 10 scenario → technique
+  mappings. Every entry carries explicit provenance to the declaring source file/path.
+- **Declared values are preserved exactly — nothing corrected or inferred.** Technique
+  names and tactics are the verbatim fixture `rule.mitre` declarations;
+  `attack_reference` pins `source: none` and `matrix_verification: unverified` (the
+  repository carries no ATT&CK reference data — no STIX, no matrix pin, no external or
+  runtime lookup was added, and none is performed). The validation test treats the flag
+  as a permanent property of the registry, not a TODO.
+- **The G5 conflict is now machine-tracked, not just documented.** The
+  `/etc/passwd`-FIM discrepancy (fixture `SCN-03`/rule `550` declares `T1566` with the
+  name "Modify Authentication Process"; custom rule `DET-100110` declares `T1565`) is
+  recorded under `known_discrepancies` with status `recorded-unresolved`, both values,
+  both sources, an explicit no-scoring-impact statement, and what a resolution would
+  require. The validation test fails if either source changes without the record being
+  updated — or if the record is removed while the conflict persists.
+- **Rendered traceability** — `docs/attack-coverage.md`: the technique-first view of the
+  full chain *Wazuh detection → rule → ATT&CK technique → scenario → expected outcome →
+  regression test → analyst/runbook context*, with `—` wherever no repository evidence
+  exists, plus the documented registry schema and extension workflow.
+  `docs/detection-coverage.md` cross-links it; its G5 gap row and G8 status were updated
+  truthfully.
+- **39 static validation tests** — `app/tests/evaluation/test_attack_mappings.py`
+  (read-only, never importing `soc_triage`): schema/version and the unverified-matrix
+  flag; unique ids; provenance files exist; **no invented ids** (the registry technique
+  set must equal the set declared by the ruleset and the corpus fixtures, in both
+  directions); rule mappings vs the ruleset XML, the fixtures, and the Phase 6.1 catalog;
+  scenario mappings vs the catalog and each fixture; verbatim names/tactics with
+  complete metadata provenance; byte-identical `docs/sample-alerts/` copies of every
+  cited fixture; G5 liveness; runbook "MITRE ATT&CK" sections vs the fixtures they cover;
+  and full document sync (every registry/catalog id present in the rendered doc and none
+  extra, with the technique/rule/scenario table cells pinned against the registry, the
+  catalog, and the ground truth). Mutation checks (altered fixture id, removed G5 record,
+  altered provenance path, registry/doc desync) were verified to fail the suite and then
+  restored byte-identically.
+- **No runtime change.** Scoring (`scoring.v1`, presence-only `rule_groups_mitre`),
+  decisions (`decisions.v1`), dedupe, recurrence, correlation (`correlation.v1`
+  `shared_technique`), incidents, explainability (`explanation.v1`), the canonical
+  models, the n8n payloads, the fixtures, the ground truth, the corpus, and the Wazuh
+  ruleset are untouched; no runtime Python under `app/src/soc_triage/` changed. The full
+  existing suite (1031 tests) passes unchanged — no golden updates.
+- **Docs:** `DEVELOPMENT_PLAN.md` (6.2 marked implemented with its artifact table and
+  explicit not-claimed list; Phase 6 status line and exit criteria updated) and
+  `README.md` (roadmap rows, phase table, docs map) refreshed — including truthful
+  status fixes for the already-merged Phase 6.3/6.5 rows that had drifted stale.
+
+### Added — Phase 6.5: analyst explainability
+
+- **Deterministic, read-only per-alert explanations** (`explanation.v1`, merged via
+  PR #31): `GET /api/v1/alerts/{alert_id}/explanation` assembles — exclusively from
+  already-persisted facts — the alert summary, detection metadata (the stored
+  `rule.mitre` verbatim, redacted, or explicit null), the authoritative scoring.v1
+  assessment with its ordered factor breakdown reconciled against the stored score, the
+  decisions.v1 routing decision with its exact reasons, dedupe/recurrence facts, the
+  correlation.v1 context and its evidence when present, incident linkage, IOCs,
+  enrichment status, and the audit history. Missing facts are explicit nulls; the
+  builder never re-scores, re-decides, or infers, and performs no I/O, network, LLM, or
+  clock reads. Shared N8N token; structured 404s; never `full_log` or secrets.
+  Unit + integration tests pin the determinism, the verbatim-or-null ATT&CK handling,
+  and the redaction guarantees.
+  *(Backfilled during the Phase 6.2 documentation pass — the Phase 6.5 merge had no
+  changelog entry at the time.)*
+
 ### Added — Phase 6.4: cross-alert correlation (investigation contexts)
 
 - **Deterministic, explainable correlation of distinct alerts into one investigation
