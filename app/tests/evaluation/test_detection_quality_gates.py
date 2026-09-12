@@ -35,12 +35,8 @@ EXPECTED_SCENARIO_COUNT = 24
 _CATALOG: dict[str, Any] = yaml.safe_load(CATALOG.read_text(encoding="utf-8"))
 SCENARIOS: list[dict[str, Any]] = _CATALOG["scenarios"]
 _CORPUS: dict[str, Any] = json.loads(CORPUS.read_text(encoding="utf-8-sig"))
-_GROUND_TRUTH: dict[str, Any] = json.loads(
-    GROUND_TRUTH.read_text(encoding="utf-8-sig")
-)
-_ATTACK_MAPPINGS: dict[str, Any] = yaml.safe_load(
-    ATTACK_MAPPINGS.read_text(encoding="utf-8")
-)
+_GROUND_TRUTH: dict[str, Any] = json.loads(GROUND_TRUTH.read_text(encoding="utf-8-sig"))
+_ATTACK_MAPPINGS: dict[str, Any] = yaml.safe_load(ATTACK_MAPPINGS.read_text(encoding="utf-8"))
 
 
 def _assert_test_reference_exists(reference: str) -> None:
@@ -71,20 +67,12 @@ def _is_recurrence_case(case: dict[str, Any]) -> bool:
 
 
 def _quality_counts() -> dict[str, int]:
-    recurrence_count = sum(
-        1 for case in _CORPUS["cases"] if _is_recurrence_case(case)
-    )
-    regression_covered_count = sum(
-        1 for scenario in SCENARIOS if scenario.get("regression_tests")
-    )
+    recurrence_count = sum(1 for case in _CORPUS["cases"] if _is_recurrence_case(case))
+    regression_covered_count = sum(1 for scenario in SCENARIOS if scenario.get("regression_tests"))
     return {
         "total scenarios": len(_CORPUS["cases"]),
-        "positive count": sum(
-            1 for case in _CORPUS["cases"] if case["label"] == "positive"
-        ),
-        "negative count": sum(
-            1 for case in _CORPUS["cases"] if case["label"] == "negative"
-        ),
+        "positive count": sum(1 for case in _CORPUS["cases"] if case["label"] == "positive"),
+        "negative count": sum(1 for case in _CORPUS["cases"] if case["label"] == "negative"),
         "recurrence count": recurrence_count,
         "regression-covered count": regression_covered_count,
     }
@@ -166,9 +154,7 @@ def test_g5_remains_recorded_unresolved() -> None:
     """G5 stays present in the ATT&CK registry with status recorded-unresolved."""
     discrepancies = _ATTACK_MAPPINGS["known_discrepancies"]
     g5 = next((item for item in discrepancies if item["id"] == "G5"), None)
-    assert g5 is not None, (
-        "G5 must remain present in evaluation/attack_mappings.yaml"
-    )
+    assert g5 is not None, "G5 must remain present in evaluation/attack_mappings.yaml"
     assert g5["status"] == "recorded-unresolved"
 
 

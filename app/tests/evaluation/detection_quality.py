@@ -26,12 +26,10 @@ def assert_detection_quality_gate(metrics: dict[str, float | int]) -> None:
         f"is below minimum {thresholds.minimum_precision:.10f}"
     )
     assert metrics["recall"] >= thresholds.minimum_recall, (
-        f"recall {metrics['recall']:.10f} "
-        f"is below minimum {thresholds.minimum_recall:.10f}"
+        f"recall {metrics['recall']:.10f} is below minimum {thresholds.minimum_recall:.10f}"
     )
     assert metrics["f1"] >= thresholds.minimum_f1, (
-        f"f1 {metrics['f1']:.10f} "
-        f"is below minimum {thresholds.minimum_f1:.10f}"
+        f"f1 {metrics['f1']:.10f} is below minimum {thresholds.minimum_f1:.10f}"
     )
     assert metrics["false_positive_rate"] <= thresholds.maximum_false_positive_rate, (
         f"false_positive_rate {metrics['false_positive_rate']:.10f} "
