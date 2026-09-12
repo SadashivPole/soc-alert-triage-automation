@@ -1,0 +1,11 @@
+﻿# Static IOC allowlist (Phase 2.2).
+# Non-secret, version-controlled policy.
+# Loaded only when TRIAGE_ALLOWLIST_PATH is configured.
+version: allowlist.v1
+entries: []
+
+# Example:
+# - id: qualys-scanner
+#   type: ipv4
+#   value: 203.0.113.20
+#   reason: "Approved vulnerability scanner"

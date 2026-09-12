@@ -148,6 +148,20 @@ class Settings(BaseSettings):
     )
     misp_verify_tls: bool = Field(default=True, alias="MISP_VERIFY_TLS")
 
+    # ------------------------------------------------------------------
+    # Phase 2.2 - static local policies
+    # ------------------------------------------------------------------
+    # Empty path = disabled.
+    # These policies are local, deterministic, non-secret, and versioned.
+    triage_allowlist_path: str = Field(
+        default="",
+        alias="TRIAGE_ALLOWLIST_PATH",
+    )
+    triage_asset_inventory_path: str = Field(
+        default="",
+        alias="TRIAGE_ASSET_INVENTORY_PATH",
+    )
+
     @property
     def cors_origins(self) -> list[str]:
         """Parse the comma-separated CORS origins into a clean list."""
