@@ -32,7 +32,7 @@ history. Status claims elsewhere are descriptive, not authoritative.
 | --- | --- | --- |
 | **Phase 0 — Foundation** | ✅ Implemented · locally validated | Docs, scaffolding, secret scanner, CI |
 | **Phase 1 — MVP triage pipeline** | ✅ Implemented · locally validated | Ingest → normalize → dedupe → score → decide → notify, tests green (⬜ simulator script) |
-| **Phase 2 — Enrichment & threat intelligence** | 🟡 Partially validated | VirusTotal + MISP providers implemented (fake-transport tested, disabled by default); MISP profile, static allowlist loader, scoring v2 intel factor, TTL cache ⬜ |
+| **Phase 2 — Enrichment & threat intelligence** | 🟡 Partially validated | 2.2 static allowlist + asset inventory ✅ implemented · locally validated (deterministic local policy wiring, disabled by default, 47 targeted tests); VirusTotal + MISP providers implemented (fake-transport tested, disabled by default); MISP profile, scoring v2 intel factor, TTL cache, late-enrichment re-score ⬜ |
 | **Phase 3 — Incidents, analyst workflow & observability** | 🟡 Partially validated | Incidents, lifecycle, read APIs, timeline, sweeper, console, runbooks, `/metrics` + Grafana profile all implemented; PostgreSQL profile + stats/digest ⬜ |
 | **Phase 4 — Real Wazuh integration & approved response** | 🟡 Partially validated | 4.1/4.2 source-audited + live-validated end-to-end; 4.4 validated; 4.3 authored but not live-validated; 4.5/4.6/4.7 and runtime failure/duplicate checks ⬜ |
 | **Phase 5 — Deterministic detection evaluation** | ✅ Implemented · locally validated | Labeled corpus, ground truth, confusion matrix, precision/recall/F1/FPR, runtime evaluation tests |
@@ -114,13 +114,16 @@ recurrence · auth/limit/validation error paths correct · pipeline completes wi
 
 **Goal:** real intel enrichment with quota safety and graceful degradation.
 
-**Status: partially validated — provider clients implemented, container profile and
-scoring integration still outstanding.**
+**Status: partially validated — 2.2 (static allowlist `allowlist.v1` + asset inventory
+`asset_inventory.v1`, with deterministic local wiring) is ✅ implemented · locally
+validated; the VirusTotal/MISP provider clients are implemented (fake transports only);
+the MISP container profile, the enrichment response TTL cache, the scoring v2 intel
+factor, and the late-enrichment re-score remain ⬜ outstanding.**
 
 | # | Deliverable | Status | Evidence / gap |
 | --- | --- | --- | --- |
 | 2.1 | IOC extractor | ✅ implemented (delivered early as Phase 1E/1.13) | pure, deterministic, no network I/O |
-| 2.2 | Allowlist + asset-inventory YAML loaders | ⬜ outstanding | the scoring engine (`allowlist` −20) and the decision engine (`suppress`) already honor an allowlist *match*, but no provider/loader produces one today; asset criticality comes from `agent.labels.asset_tier` in the alert |
+| 2.2 | Allowlist + asset-inventory YAML loaders | ✅ Implemented · locally validated | deterministic, versioned, non-secret static policies — `app/config/allowlists.yaml` (`allowlist.v1`) and `app/config/asset_inventory.yaml` (`asset_inventory.v1`) — **validated fail-loud at load**, and loaded only when `TRIAGE_ALLOWLIST_PATH` / `TRIAGE_ASSET_INVENTORY_PATH` are set (empty path ⇒ disabled; the shipped files contain no entries). The `allowlist` provider registers in the chain **only when configured**; matching is on exact normalized indicators plus IPv4 CIDR; the provider's `enrichment_status` is always `skipped`, so local policy adds no intel points; the existing scoring `allowlist` (−20) factor and `suppress` decision route are consumed **unchanged** — no scoring- or decision-policy change. The asset inventory is a pure fill-only normalization seam (precedence `agent_id` → IP → name; source-provided fields always win) and does **not** alter the `asset_criticality` model or weights. No network I/O, no AI/LLM. Evidence: 47 targeted tests (26 allowlist unit · 16 asset-inventory unit · 5 integration wiring) + ruff check/format + mypy + CI on Python 3.11 & 3.12 + secret scan. **Still not validated:** an operator-side run with a populated policy (no Docker-lab validation) and a corpus-level `suppress` pin (see 6.3 / coverage gap G10) |
 | 2.3 | VirusTotal v3 client: token bucket (4/min, 500/day), quota accounting, fake-server tests | 🟡 implemented, no live run | `httpx.MockTransport` fakes only; **no response TTL cache** (⬜) |
 | 2.4 | MISP client + `intel` compose profile + seeding guide | 🟡 client ✅ / profile ⬜ | `enrichment/misp.py` implemented and disabled by default; `misp/` is scaffolded only — no compose service, no seeding guide |
 | 2.5 | Scoring v2 (`threat_intel` factor) + updated goldens | ⬜ outstanding | policy is still `scoring.v1` (7 factors); IOC verdicts do not yet add intel-specific points |
@@ -130,7 +133,11 @@ scoring integration still outstanding.**
 **Acceptance (not yet met):** VT outage/quota simulations never delay ingest beyond the
 budget and always mark `enrichment_status`; a MISP-matched sample alert scores per a new
 golden; quota usage observable. Fail-open behavior, token-bucket non-blocking behavior,
-and status marking are covered by tests today.
+and status marking are covered by tests today. 2.2's own gate — deterministic local policy
+load, fail-loud validation at load, disabled-by-default configuration, no scoring/decision
+policy change — **is met** by its 47 targeted tests + CI; the **phase** gate is **not**
+met, and stays dependent on the later deliverables: 2.4 (MISP profile + seeding), the 2.3
+TTL cache, 2.5 (scoring v2 intel factor), and 2.6 (late-enrichment re-score).
 
 ---
 
@@ -410,8 +417,14 @@ Plus `SCN-17`–`SCN-24` (all negative, all `monitor`): authorized FIM, expected
 creation, non-malicious hash, custom-rule SSH/FIM/web near-misses, a non-triggering web
 request, and a two-delivery recurrence boundary that stays below rapid-burst. The labeled
 corpus is now 24 scenarios (12 positive / 12 negative). Quality thresholds on the metrics
-remain 6.6. Allowlist `suppress` remains unreachable end-to-end until an allowlist provider
-exists (Phase 2.2; coverage-doc gap G10).
+remain 6.6. An allowlist provider now exists (Phase 2.2 — static `allowlist.v1`, registered
+only when `TRIAGE_ALLOWLIST_PATH` points at a policy; it performs no matching until that
+policy has entries), so the `suppress` route is reachable in the runtime path once an
+operator configures a populated policy (loader → chain merge → decision router wiring is
+present, and the −20 factor and `suppress` route are unit-tested) — but that composition is
+not pinned by an end-to-end test, and the corpus still does not pin a `suppress` outcome.
+`docs/detection-coverage.md` gap G10 additionally still describes the loader as outstanding
+(a follow-up docs update is needed there — that file is outside this plan's edit scope).
 
 **Phase 6 exit criteria (to be refined as items land):** a documented coverage map exists
 (✅ 6.1) · ATT&CK mapping is generated from a maintained source and covered by tests
@@ -474,11 +487,17 @@ never merged at all.
 
 ## Testing Strategy
 
-**Verified locally on the current checkout (Python 3.11, 2026-09-11, after Phase 6.4):**
+**Verified locally on the checkout as of 2026-09-11, after Phase 6.4:**
 `pytest` → **998 passed** (595 unit · 346 integration · 57 evaluation, of which 52 are the
 Phase 6.1 detection-coverage validation; the 45 Phase 6.4 correlation tests are included);
 ruff check + format check, mypy `src`, and
 `check_secrets.sh` clean; `node --test app/tests/js/console_core.test.cjs` → **15 passed**.
+
+That 998 figure predates the Phase 2.2 merge. Phase 2.2 is evidenced by its own
+**47 targeted tests** (26 allowlist unit · 16 asset-inventory unit · 5 integration wiring)
+plus the same CI gate (ruff check, ruff format check, mypy, pytest on Python 3.11 & 3.12,
+secret scan). No full-suite re-count was taken for Phase 2.2, so **no updated suite total
+is claimed anywhere in this plan or the README**.
 
 | Layer | Runs on | Tooling | Gate |
 | --- | --- | --- | --- |
@@ -557,3 +576,5 @@ Recorded rather than hidden; each is a small docs-only follow-up.
 | `docs/sample-alerts/README.md` | Documents `./scripts/send_test_alert`, which is not implemented. |
 | `CHANGELOG.md` | No Phase 5 entry yet (the evaluation framework is merged but undocumented there). |
 | `misp/README.md` | Describes the `intel` compose profile as landing "in Phase 2"; it is still ⬜ outstanding. |
+| `docs/detection-coverage.md` (gap G10) | Still states that "no allowlist provider/loader exists yet (Phase 2.2 outstanding)". Phase 2.2 is now ✅ implemented · locally validated; the residual, still-true part of G10 is that the evaluation corpus does not pin a `suppress` outcome. |
+| `CHANGELOG.md` | No Phase 2.2 entry yet (the static local policy work is merged but undocumented there). |
