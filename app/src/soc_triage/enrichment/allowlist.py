@@ -135,7 +135,10 @@ def _load_yaml(path: Path) -> dict[str, Any]:
     return raw
 
 
-def _normalize_value(value: str, indicator_type: IOCType) -> tuple[str, IPv4Network | None]:
+def _normalize_value(
+    value: str,
+    indicator_type: IOCType,
+) -> tuple[str, IPv4Network | None]:
     raw = value.strip()
 
     if not raw:
@@ -189,9 +192,12 @@ def _parse_entry(raw: Any, index: int) -> AllowlistEntry:
         )
 
     raw_type = raw.get("type")
+    if not isinstance(raw_type, str):
+        raise _error(f"entry {entry_id}: invalid IOC type {raw_type!r}")
+
     try:
         indicator_type = IOCType(raw_type)
-    except (TypeError, ValueError) as exc:
+    except ValueError as exc:
         raise _error(f"entry {entry_id}: invalid IOC type {raw_type!r}") from exc
 
     raw_value = raw.get("value")
