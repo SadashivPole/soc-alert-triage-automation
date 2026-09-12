@@ -172,7 +172,9 @@ path.
 
 ## Related Sample
 
-`docs/sample-alerts/03_wazuh_fim_etc_passwd_change.json`
+- `docs/sample-alerts/03_wazuh_fim_etc_passwd_change.json`
+- `docs/sample-alerts/17_wazuh_fim_authorized_motd.json` — authorized `/etc/motd` change on a low-criticality lab workstation (Phase 6.3, SCN-17, negative)
+- `docs/sample-alerts/21_custom_fim_near_miss.json` — FIM deletion of `/tmp/lab-scratch.txt`, not parent-rule 550 (Phase 6.3, SCN-21, negative)
 
 ## MITRE ATT&CK
 

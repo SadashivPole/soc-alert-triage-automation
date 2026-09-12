@@ -242,20 +242,21 @@ Wazuh rule-level detection coverage; and a 6-fixture corpus is **not** a benchma
 
 ## Phase 6 — Detection Quality & Correlation (In Progress)
 
-**Status: 🟡 in progress — 2 of 6 items implemented.** The **detection coverage
-framework** and **cross-alert correlation** (Phase 6.4, investigation contexts) are
-implemented and locally validated (see below); the remaining items are
-🔮 planned. Full detail: [docs/detection-coverage.md](docs/detection-coverage.md) and
+**Status: 🟡 in progress — 5 of 6 items implemented.** The **detection coverage
+framework**, **ATT&CK mapping**, **24-scenario regression corpus**, **cross-alert
+correlation** (Phase 6.4, investigation contexts), and **analyst explainability** are
+implemented and locally validated (see below); detection-quality metric thresholds
+remain outstanding. Full detail: [docs/detection-coverage.md](docs/detection-coverage.md) and
 [DEVELOPMENT_PLAN.md](DEVELOPMENT_PLAN.md).
 
 | Phase 6 item | Intent | Current state |
 | --- | --- | --- |
 | **Detection coverage framework** | Track which Wazuh rules/decoders and scenarios the platform actually covers, and which are blind spots | ✅ **implemented** — [`evaluation/detection_catalog.yaml`](evaluation/detection_catalog.yaml) + [`docs/detection-coverage.md`](docs/detection-coverage.md), validated by 39 read-only tests. It makes rule → ATT&CK → scenario → expected outcome → runbook → regression test traceable and names 9 gaps. It does **not** change scoring or routing, and no custom rule has a pinned outcome yet (none is exercised by a fixture) |
 | **ATT&CK mapping** | Map detected scenarios to MITRE ATT&CK techniques for reporting and analyst context | ✅ **implemented (Phase 6.2)** — [`evaluation/attack_mappings.yaml`](evaluation/attack_mappings.yaml) registry + [`docs/attack-coverage.md`](docs/attack-coverage.md), validated by 39 static tests: technique ↔ rule/scenario/runbook traceability with explicit provenance; values recorded verbatim from the declaring sources (matrix verification explicitly `unverified`; no external ATT&CK data); the G5 fixture-vs-rule id conflict pinned as `recorded-unresolved`. Runtime unchanged — ATT&CK ids still pass through from Wazuh rule metadata as `rule.mitre`, and their *presence* contributes to the `rule_groups_mitre` score factor |
-| **Expanded regression corpus** | Grow the labeled corpus well beyond 6 fixtures (incl. label/action semantics such as UC-1's first-occurrence case) | 🟡 partially progressed (Phase 6.3) — corpus grown 6→10 scenarios / 2 negatives (recurrence escalation, benign informational baseline, critical/SEV1, low asset band) with label semantics defined and enforced; per-scenario negatives and CI quality thresholds outstanding |
+| **Expanded regression corpus** | Grow the labeled corpus well beyond 6 fixtures (incl. label/action semantics such as UC-1's first-occurrence case) | ✅ implemented (Phase 6.3) — corpus grown to 24 scenarios / 12 negatives (per-scenario negatives, custom-rule near-misses, recurrence-boundary negative) with label semantics defined and enforced; SCN-01 remains the documented UC-1 first-occurrence FN |
 | **Cross-alert correlation** | Correlate related alerts (same host/user/indicator over time) into a single investigation context | ✅ **implemented (Phase 6.4)** — deterministic, explainable *investigation contexts* grouping distinct alerts (different dedupe groups) that share evidence (shared indicator, source/destination IP, or same-agent + ATT&CK technique) within a configurable window. Read API: `GET /api/v1/correlations`. Dedupe/recurrence/incidents unchanged; user correlation unsupported (no stable canonical user field) |
 | **Analyst explainability** | Extend per-alert explanations so an analyst can see why an alert mattered and what changed | ✅ **implemented (Phase 6.5)** — deterministic, read-only `GET /api/v1/alerts/{alert_id}/explanation` (`explanation.v1`): the stored alert, detection metadata (stored `rule.mitre` verbatim), scoring factor breakdown reconciled against the authoritative score, decision reasons, dedupe/recurrence facts, correlation context and evidence, incident linkage, and audit history — explicit nulls for missing facts, never re-scoring or inferring |
-| **Detection-quality CI gates** | Fail CI when precision/recall/F1 regress beyond a threshold | 🔮 not started; the Phase 5 harness prints metrics but asserts none of them |
+| **Detection-quality CI gates** | Fail CI when precision/recall/F1 regress beyond a threshold | 🟡 partial — corpus-quality gate pins 24 scenarios and prints metrics; precision/recall/F1 values are not asserted |
 
 ## Triage Pipeline (End to End)
 
@@ -441,7 +442,7 @@ Full detail, acceptance criteria, and evidence per phase:
 | **Phase 3 — Incidents, analyst workflow & observability** | Analyst loop |  partially validated | Incidents (3.1), lifecycle + feedback (3.2), read APIs + timeline (3.3), TTL sweeper (3.4), static console (3.5), runbooks (3.6), Prometheus `/metrics` + optional Grafana (3.7);  Postgres profile (3.8), stats endpoints + digest (3.9) |
 | **Phase 4 — Real Wazuh integration & approved response** | Full integration |  partially validated | Source-audited + live-validated `full` profile and `custom-triage` integrator (4.1/4.2), agent enrollment validated (4.4), custom rules/decoders authored (4.3, not live-validated);  approval/containment runbook (4.5), TheHive CE export (4.6), failure-spool + duplicate-delivery runtime checks and 10k/day soak (4.7) |
 | **Phase 5 — Deterministic detection evaluation** | Detection quality measurement |  implemented · locally validated | Labeled corpus, ground truth, confusion matrix, precision/recall/F1/FPR, runtime evaluation tests replaying fixtures through the real ingest path |
-| **Phase 6 — Detection quality & correlation** | Coverage & correlation | 🟡 in progress (4 of 6 items) |  detection coverage framework ✅ (6.1), ATT&CK mapping ✅ (6.2), cross-alert correlation ✅ (6.4), analyst explainability ✅ (6.5); expanded regression corpus 🟡 (6.3, 10 scenarios), detection-quality CI gates 🔮 (6.6) |
+| **Phase 6 — Detection quality & correlation** | Coverage & correlation | 🟡 in progress (5 of 6 items) |  detection coverage framework ✅ (6.1), ATT&CK mapping ✅ (6.2), expanded regression corpus ✅ (6.3, 24 scenarios), cross-alert correlation ✅ (6.4), analyst explainability ✅ (6.5); detection-quality CI gates 🟡 (6.6 corpus-quality pin of 24 scenarios; precision/recall/F1 thresholds not asserted) |
 
 No release tags have been cut: `CHANGELOG.md` is still under `[Unreleased]` and the Python
 package version is `0.1.0a1`.
@@ -571,9 +572,9 @@ export; containment approval/response runbook; Phase 4 failure-spool, duplicate-
 `/metrics` hygiene, and 10k alerts/day soak validations; CI coverage threshold and nightly
 compose smoke job.
 
-**🔮 Future / planned:** the rest of Phase 6 — per-scenario negatives and further corpus
-growth (6.3), a pinned corpus-level correlation outcome, and detection-quality CI gates
-(6.6). (The detection coverage framework, the ATT&CK mapping registry, cross-alert
+**🔮 Future / planned:** a pinned corpus-level correlation outcome, and detection-quality
+CI gates that assert precision/recall/F1 thresholds (6.6). (The detection coverage
+framework, the ATT&CK mapping registry, the 24-scenario regression corpus, cross-alert
 correlation, and analyst explainability are ✅ implemented; the coverage framework's own
 blind spots are listed as gaps G1–G10 in
 [docs/detection-coverage.md](docs/detection-coverage.md).)

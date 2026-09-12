@@ -61,11 +61,17 @@ techniques:
         path: rule.mitre
       - file: app/tests/fixtures/15_ssh_failed_auth_below_threshold.json
         path: rule.mitre
+      - file: app/tests/fixtures/20_custom_ssh_near_miss.json
+        path: rule.mitre
+      - file: app/tests/fixtures/24_ssh_recurrence_below_burst.json
+        path: rule.mitre
   - id: "T1136"
     declared_names: ["Create Account: Local Account"]
     declared_tactics: ["Persistence"]
     metadata_declared_by:
       - file: app/tests/fixtures/06_wazuh_windows_user_created.json
+        path: rule.mitre
+      - file: app/tests/fixtures/18_wazuh_windows_user_created_expected.json
         path: rule.mitre
   - id: "T1190"
     declared_names: ["Exploit Public-Facing Application"]
@@ -99,6 +105,8 @@ techniques:
     declared_tactics: ["Persistence", "Privilege Escalation"]
     metadata_declared_by:
       - file: app/tests/fixtures/03_wazuh_fim_etc_passwd_change.json
+        path: rule.mitre
+      - file: app/tests/fixtures/17_wazuh_fim_authorized_motd.json
         path: rule.mitre
 
 # --------------------------------------------------------------------------------
@@ -146,6 +154,15 @@ rule_mappings:
     declared_by:
       - file: app/tests/fixtures/03_wazuh_fim_etc_passwd_change.json
         path: rule.mitre.id
+      - file: app/tests/fixtures/17_wazuh_fim_authorized_motd.json
+        path: rule.mitre.id
+  - rule_id: "553"
+    source_kind: synthetic-fixture
+    technique_ids: []
+    declared_by:
+      - file: app/tests/fixtures/21_custom_fim_near_miss.json
+        path: rule.mitre
+    note: "fixture 21 declares no rule.mitre block — absence recorded"
   - rule_id: "5710"
     source_kind: synthetic-fixture
     technique_ids: ["T1110"]
@@ -153,6 +170,8 @@ rule_mappings:
       - file: app/tests/fixtures/01_wazuh_ssh_brute_force.json
         path: rule.mitre.id
       - file: app/tests/fixtures/07_wazuh_ssh_brute_force_recurrence.json
+        path: rule.mitre.id
+      - file: app/tests/fixtures/24_ssh_recurrence_below_burst.json
         path: rule.mitre.id
   - rule_id: "5715"
     source_kind: synthetic-fixture
@@ -168,6 +187,13 @@ rule_mappings:
       - file: app/tests/fixtures/08_wazuh_ssh_session_opened.json
         path: rule.mitre
     note: "fixture 08 declares no rule.mitre block — absence recorded"
+  - rule_id: "31101"
+    source_kind: synthetic-fixture
+    technique_ids: []
+    declared_by:
+      - file: app/tests/fixtures/23_suspicious_web_non_triggering.json
+        path: rule.mitre
+    note: "fixture 23 declares no rule.mitre block — absence recorded"
   - rule_id: "31103"
     source_kind: synthetic-fixture
     technique_ids: ["T1190"]
@@ -182,6 +208,15 @@ rule_mappings:
     declared_by:
       - file: app/tests/fixtures/06_wazuh_windows_user_created.json
         path: rule.mitre.id
+      - file: app/tests/fixtures/18_wazuh_windows_user_created_expected.json
+        path: rule.mitre.id
+  - rule_id: "87103"
+    source_kind: synthetic-fixture
+    technique_ids: []
+    declared_by:
+      - file: app/tests/fixtures/19_wazuh_virustotal_no_match.json
+        path: rule.mitre
+    note: "fixture 19 declares no rule.mitre block — absence recorded"
   - rule_id: "87105"
     source_kind: synthetic-fixture
     technique_ids: ["T1204"]
@@ -197,11 +232,15 @@ rule_mappings:
     declared_by:
       - file: app/tests/fixtures/15_ssh_failed_auth_below_threshold.json
         path: rule.mitre.id
+      - file: app/tests/fixtures/20_custom_ssh_near_miss.json
+        path: rule.mitre.id
   - rule_id: "31100"
     source_kind: synthetic-fixture
     technique_ids: []
     declared_by:
       - file: app/tests/fixtures/16_ordinary_web_request.json
+        path: rule.mitre
+      - file: app/tests/fixtures/22_custom_web_near_miss.json
         path: rule.mitre
 
 # --------------------------------------------------------------------------------
@@ -280,6 +319,44 @@ scenario_mappings:
     path: rule.mitre
     technique_ids: []
     note: "fixture declares no ATT&CK ids"
+
+  - scenario_id: SCN-17
+    fixture: app/tests/fixtures/17_wazuh_fim_authorized_motd.json
+    path: rule.mitre.id
+    technique_ids: ["T1566"]
+  - scenario_id: SCN-18
+    fixture: app/tests/fixtures/18_wazuh_windows_user_created_expected.json
+    path: rule.mitre.id
+    technique_ids: ["T1136"]
+  - scenario_id: SCN-19
+    fixture: app/tests/fixtures/19_wazuh_virustotal_no_match.json
+    path: rule.mitre
+    technique_ids: []
+    note: "fixture declares no rule.mitre block — absence recorded"
+  - scenario_id: SCN-20
+    fixture: app/tests/fixtures/20_custom_ssh_near_miss.json
+    path: rule.mitre.id
+    technique_ids: ["T1110"]
+  - scenario_id: SCN-21
+    fixture: app/tests/fixtures/21_custom_fim_near_miss.json
+    path: rule.mitre
+    technique_ids: []
+    note: "fixture declares no rule.mitre block — absence recorded"
+  - scenario_id: SCN-22
+    fixture: app/tests/fixtures/22_custom_web_near_miss.json
+    path: rule.mitre
+    technique_ids: []
+    note: "fixture declares no rule.mitre block — absence recorded"
+  - scenario_id: SCN-23
+    fixture: app/tests/fixtures/23_suspicious_web_non_triggering.json
+    path: rule.mitre
+    technique_ids: []
+    note: "fixture declares no rule.mitre block — absence recorded"
+  - scenario_id: SCN-24
+    fixture: app/tests/fixtures/24_ssh_recurrence_below_burst.json
+    path: rule.mitre.id
+    technique_ids: ["T1110"]
+
 
 # --------------------------------------------------------------------------------
 # Known, unresolved conflicts between declaring sources. Both values and both

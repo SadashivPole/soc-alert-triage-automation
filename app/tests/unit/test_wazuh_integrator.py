@@ -289,11 +289,10 @@ def test_forwarding_filter_rejects_malformed_alert(alert: dict) -> None:
 def test_default_filter_matches_the_repository_sample_corpus() -> None:
     """Every sample alert is classified deterministically by rule level.
 
-    The default threshold is level >= 5, which forwards the eight actionable
-    samples and filters the three level-3 samples
-    (``02_wazuh_ssh_brute_force_success``, ``08_wazuh_ssh_session_opened``, and ``16_ordinary_web_request``)
-    as noise. Phase 6.3 added the level-3 benign baseline fixture 08, so the
-    filtered golden grew by exactly that sample.
+    The default threshold is level >= 5, which forwards the actionable
+    samples and filters the level-3 samples as noise. Phase 6.3 completion
+    added three more level-3 negatives (fixtures 19, 22, and 23) alongside
+    the existing 02 / 08 / 16 set.
     """
     config = integrator.load_config(make_env())
     samples = sorted(SAMPLE_ALERTS.glob("*.json"))
@@ -309,8 +308,11 @@ def test_default_filter_matches_the_repository_sample_corpus() -> None:
         "02_wazuh_ssh_brute_force_success.json",
         "08_wazuh_ssh_session_opened.json",
         "16_ordinary_web_request.json",
+        "19_wazuh_virustotal_no_match.json",
+        "22_custom_web_near_miss.json",
+        "23_suspicious_web_non_triggering.json",
     ]
-    assert len(forwarded) == len(samples) - 3
+    assert len(forwarded) == len(samples) - 6
 
 
 # ---------------------------------------------------------------------------

@@ -29,7 +29,7 @@ GROUND_TRUTH = REPO_ROOT / "evaluation" / "ground_truth.json"
 CORPUS = REPO_ROOT / "evaluation" / "corpus.json"
 ATTACK_MAPPINGS = REPO_ROOT / "evaluation" / "attack_mappings.yaml"
 
-EXPECTED_SCENARIO_COUNT = 16
+EXPECTED_SCENARIO_COUNT = 24
 
 _CATALOG: dict[str, Any] = yaml.safe_load(CATALOG.read_text(encoding="utf-8"))
 SCENARIOS: list[dict[str, Any]] = _CATALOG["scenarios"]
@@ -77,8 +77,8 @@ def _quality_counts() -> dict[str, int]:
     }
 
 
-def test_corpus_contains_exactly_sixteen_scenarios() -> None:
-    """The labeled evaluation corpus is pinned at sixteen scenarios."""
+def test_corpus_contains_exactly_twenty_four_scenarios() -> None:
+    """The labeled evaluation corpus is pinned at twenty-four scenarios."""
     assert len(_CORPUS["cases"]) == EXPECTED_SCENARIO_COUNT
     assert len(_corpus_fixtures()) == EXPECTED_SCENARIO_COUNT
     assert len(SCENARIOS) == EXPECTED_SCENARIO_COUNT

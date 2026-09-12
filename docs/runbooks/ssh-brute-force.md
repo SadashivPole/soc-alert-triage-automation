@@ -205,6 +205,8 @@ history in the incident record.
 
 - `docs/sample-alerts/01_wazuh_ssh_brute_force.json`
 - `docs/sample-alerts/02_wazuh_ssh_brute_force_success.json`
+- `docs/sample-alerts/20_custom_ssh_near_miss.json`
+- `docs/sample-alerts/24_ssh_recurrence_below_burst.json`
 
 ## MITRE ATT&CK
 
@@ -215,4 +217,4 @@ The primary technique represented by scenario 01 is:
 
 The technique metadata is inherited from the synthetic sample and should be
 validated against the organization's detection mapping before production use.
-Phase 6.3 regression samples: `docs/sample-alerts/11_custom_ssh_rule_100100.json`, `docs/sample-alerts/15_ssh_failed_auth_below_threshold.json`.
+Phase 6.3 regression samples: `docs/sample-alerts/11_custom_ssh_rule_100100.json`, `docs/sample-alerts/15_ssh_failed_auth_below_threshold.json`, `docs/sample-alerts/20_custom_ssh_near_miss.json`, `docs/sample-alerts/24_ssh_recurrence_below_burst.json`.
