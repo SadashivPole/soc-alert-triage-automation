@@ -316,3 +316,111 @@ scenarios:
     regression_tests:
       - app/tests/evaluation/test_evaluation.py::test_ground_truth_evaluation
     validation_status: locally-validated
+
+  # --------------------------------------------------------------------------------
+  # Phase 6.3 completion. SCN-17–SCN-24 are per-scenario negatives and near-miss /
+  # just-below-trigger cases. All are labeled negative and must stay passive.
+  # --------------------------------------------------------------------------------
+  - id: SCN-17
+    fixture: 17_wazuh_fim_authorized_motd.json
+    rule_id: "550"
+    rule_level: 7
+    rule_provenance: synthetic-fixture
+    mitre_attack: ["T1566"]
+    ground_truth: {score: 43, tier: low, action: monitor}
+    runbook: docs/runbooks/fim-critical-file.md
+    regression_tests:
+      - app/tests/evaluation/test_evaluation.py::test_ground_truth_evaluation
+      - app/tests/integration/test_scoring_pipeline.py::test_authorized_fim_modification_stays_monitor
+    validation_status: locally-validated
+
+  - id: SCN-18
+    fixture: 18_wazuh_windows_user_created_expected.json
+    rule_id: "60180"
+    rule_level: 5
+    rule_provenance: synthetic-fixture
+    mitre_attack: ["T1136"]
+    ground_truth: {score: 32, tier: low, action: monitor}
+    runbook: docs/runbooks/account-creation.md
+    regression_tests:
+      - app/tests/evaluation/test_evaluation.py::test_ground_truth_evaluation
+      - app/tests/integration/test_scoring_pipeline.py::test_expected_account_creation_stays_monitor
+    validation_status: locally-validated
+
+  - id: SCN-19
+    fixture: 19_wazuh_virustotal_no_match.json
+    rule_id: "87103"
+    rule_level: 3
+    rule_provenance: synthetic-fixture
+    mitre_attack: []
+    ground_truth: {score: 25, tier: low, action: monitor}
+    runbook: docs/runbooks/malware-hash.md
+    regression_tests:
+      - app/tests/evaluation/test_evaluation.py::test_ground_truth_evaluation
+      - app/tests/integration/test_scoring_pipeline.py::test_non_malicious_hash_event_stays_monitor
+    validation_status: locally-validated
+
+  - id: SCN-20
+    fixture: 20_custom_ssh_near_miss.json
+    rule_id: "5712"
+    rule_level: 5
+    rule_provenance: synthetic-fixture
+    mitre_attack: ["T1110"]
+    ground_truth: {score: 43, tier: low, action: monitor}
+    runbook: docs/runbooks/ssh-brute-force.md
+    regression_tests:
+      - app/tests/evaluation/test_evaluation.py::test_ground_truth_evaluation
+      - app/tests/integration/test_scoring_pipeline.py::test_custom_ssh_near_miss_stays_monitor
+    validation_status: locally-validated
+
+  - id: SCN-21
+    fixture: 21_custom_fim_near_miss.json
+    rule_id: "553"
+    rule_level: 7
+    rule_provenance: synthetic-fixture
+    mitre_attack: []
+    ground_truth: {score: 38, tier: low, action: monitor}
+    runbook: docs/runbooks/fim-critical-file.md
+    regression_tests:
+      - app/tests/evaluation/test_evaluation.py::test_ground_truth_evaluation
+      - app/tests/integration/test_scoring_pipeline.py::test_custom_fim_near_miss_stays_monitor
+    validation_status: locally-validated
+
+  - id: SCN-22
+    fixture: 22_custom_web_near_miss.json
+    rule_id: "31100"
+    rule_level: 3
+    rule_provenance: synthetic-fixture
+    mitre_attack: []
+    ground_truth: {score: 27, tier: low, action: monitor}
+    runbook: docs/runbooks/web-attack.md
+    regression_tests:
+      - app/tests/evaluation/test_evaluation.py::test_ground_truth_evaluation
+      - app/tests/integration/test_scoring_pipeline.py::test_custom_web_near_miss_stays_monitor
+    validation_status: locally-validated
+
+  - id: SCN-23
+    fixture: 23_suspicious_web_non_triggering.json
+    rule_id: "31101"
+    rule_level: 3
+    rule_provenance: synthetic-fixture
+    mitre_attack: []
+    ground_truth: {score: 27, tier: low, action: monitor}
+    runbook: docs/runbooks/web-attack.md
+    regression_tests:
+      - app/tests/evaluation/test_evaluation.py::test_ground_truth_evaluation
+      - app/tests/integration/test_scoring_pipeline.py::test_suspicious_non_triggering_web_request_stays_monitor
+    validation_status: locally-validated
+
+  - id: SCN-24
+    fixture: 24_ssh_recurrence_below_burst.json
+    rule_id: "5710"
+    rule_level: 5
+    rule_provenance: synthetic-fixture
+    mitre_attack: ["T1110"]
+    ground_truth: {score: 43, tier: low, action: monitor}
+    runbook: docs/runbooks/ssh-brute-force.md
+    regression_tests:
+      - app/tests/evaluation/test_evaluation.py::test_ground_truth_evaluation
+      - app/tests/integration/test_scoring_pipeline.py::test_recurrence_boundary_two_deliveries_do_not_escalate
+    validation_status: locally-validated

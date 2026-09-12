@@ -6,6 +6,37 @@ semantic (`v0.1.0` targeted at the end of Phase 1).
 
 ## [Unreleased]
 
+### Added — Phase 6.3 completion: detection regression expansion (corpus 16→24 scenarios)
+
+- **Eight new synthetic fixtures** (`app/tests/fixtures/`, identical copies in
+  `docs/sample-alerts/`), each with ground-truth pins, catalog entries (`SCN-17`–`SCN-24`),
+  ATT&CK registry mappings, runbook references, and focused pipeline tests. All eight are
+  labeled `negative` and stay `monitor`:
+  - `17_wazuh_fim_authorized_motd.json` — authorized `/etc/motd` FIM on a low-criticality
+    host (43/low/`monitor`)
+  - `18_wazuh_windows_user_created_expected.json` — expected onboarding account creation
+    (32/low/`monitor`)
+  - `19_wazuh_virustotal_no_match.json` — VirusTotal no-match hash event (25/low/`monitor`;
+    no live lookup claimed)
+  - `20_custom_ssh_near_miss.json` — four parent-rule 5712 failures, one below custom rule
+    100100 frequency=5 (43/low/`monitor`; synthetic near-miss shape)
+  - `21_custom_fim_near_miss.json` — FIM deletion of an unmonitored scratch file, not
+    parent-rule 550 (38/low/`monitor`)
+  - `22_custom_web_near_miss.json` — WordPress-adjacent path outside custom rule 100120
+    match alternatives (27/low/`monitor`)
+  - `23_suspicious_web_non_triggering.json` — trailing-quote query that is not rule 31103
+    (27/low/`monitor`)
+  - `24_ssh_recurrence_below_burst.json` — two deliveries stay one occurrence below
+    rapid-burst (`min_occurrences=3`); score unchanged, no ground-truth recurrence block
+- **Corpus quality gate** (`EXPECTED_SCENARIO_COUNT`) pinned at 24: 12 positive, 12
+  negative, 2 recurrence (SCN-07, SCN-14). G5 stays `recorded-unresolved`.
+- **Wazuh integrator goldens** updated for the three additional level-3 samples (19, 22,
+  23) filtered at the default `min_level=5`.
+- No change to `app/config/scoring.yaml`, `app/config/decisions.yaml`, or any runtime
+  engine code: `scoring.v1` / `decisions.v1` and existing golden outcomes are untouched.
+  Label semantics unchanged (negatives never actioned; positives follow pinned GT action;
+  SCN-01 remains the documented first-occurrence FN).
+
 ### Added — Phase 6.2: MITRE ATT&CK mapping framework
 
 - **A maintained, machine-readable ATT&CK mapping registry** — `evaluation/attack_mappings.yaml`
