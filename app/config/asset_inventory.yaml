@@ -1,0 +1,14 @@
+﻿# Static asset inventory (Phase 2.2).
+# Non-secret, version-controlled policy.
+# Loaded only when TRIAGE_ASSET_INVENTORY_PATH is configured.
+version: asset_inventory.v1
+assets: []
+
+# Example:
+# - name: web-prod-01
+#   tier: tier-1
+#   owner: platform-team
+#   agent_ids:
+#     - "001"
+#   ips:
+#     - "10.0.1.10"

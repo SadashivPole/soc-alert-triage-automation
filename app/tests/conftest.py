@@ -139,6 +139,8 @@ def settings(db_url: str) -> Settings:
         n8n_callback_token=TEST_CALLBACK_TOKEN,
         n8n_webhook_token="",
         n8n_webhook_url="",
+        triage_allowlist_path="",
+        triage_asset_inventory_path="",
     )
 
 
