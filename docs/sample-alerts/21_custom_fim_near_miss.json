@@ -1,0 +1,31 @@
+{
+  "id": "1770000000.600021",
+  "timestamp": "2026-08-29T17:55:12.000+0000",
+  "rule": {
+    "level": 7,
+    "description": "File deleted from the system",
+    "id": "553",
+    "firedtimes": 1,
+    "mail": false,
+    "groups": ["syscheck", "syscheck_file_deleted"]
+  },
+  "agent": {
+    "id": "012",
+    "name": "lab-wks-02",
+    "ip": "10.0.8.11",
+    "labels": { "asset_tier": "standard", "owner": "lab-team" }
+  },
+  "manager": { "name": "wazuh-manager" },
+  "decoder": { "name": "syscheck_deleted" },
+  "syscheck": {
+    "path": "/tmp/lab-scratch.txt",
+    "mode": "realtime",
+    "event": "deleted",
+    "md5_before": "ad1fe8f10971dee6685851e576020e77",
+    "sha256_before": "7422ebbeeffb85358d364f18ff30ed71a7f3dc73d21696b4e7130d917d7d5bd1",
+    "uname_before": "jdoe-lab",
+    "gname_before": "jdoe-lab"
+  },
+  "location": "syscheck",
+  "full_log": "File '/tmp/lab-scratch.txt' was deleted. (synthetic lab scratch file, not a monitored path for custom rule 100110)"
+}

@@ -36,7 +36,7 @@ history. Status claims elsewhere are descriptive, not authoritative.
 | **Phase 3 — Incidents, analyst workflow & observability** | 🟡 Partially validated | Incidents, lifecycle, read APIs, timeline, sweeper, console, runbooks, `/metrics` + Grafana profile all implemented; PostgreSQL profile + stats/digest ⬜ |
 | **Phase 4 — Real Wazuh integration & approved response** | 🟡 Partially validated | 4.1/4.2 source-audited + live-validated end-to-end; 4.4 validated; 4.3 authored but not live-validated; 4.5/4.6/4.7 and runtime failure/duplicate checks ⬜ |
 | **Phase 5 — Deterministic detection evaluation** | ✅ Implemented · locally validated | Labeled corpus, ground truth, confusion matrix, precision/recall/F1/FPR, runtime evaluation tests |
-| **Phase 6 — Detection quality & correlation** | 🟡 In progress (4 of 6 items implemented) | Detection coverage framework ✅ (6.1); ATT&CK mapping ✅ (6.2 — registry + rendered view + validation tests); cross-alert correlation ✅ (6.4); analyst explainability ✅ (6.5); expanded regression corpus 🟡 (6.3, 10 scenarios); detection-quality CI gates 🔮 (6.6) |
+| **Phase 6 — Detection quality & correlation** | 🟡 In progress (5 of 6 items implemented) | Detection coverage framework ✅ (6.1); ATT&CK mapping ✅ (6.2 — registry + rendered view + validation tests); expanded regression corpus ✅ (6.3, 24 scenarios); cross-alert correlation ✅ (6.4); analyst explainability ✅ (6.5); detection-quality CI gates 🟡 (6.6 — corpus-quality gate pins 24 scenarios; precision/recall/F1 thresholds still not asserted) |
 
 No release tags have been cut. The package version is `0.1.0a1` and `CHANGELOG.md` is
 still under `[Unreleased]`.
@@ -299,19 +299,20 @@ Confusion matrix: **TP 4 · FP 0 · FN 1 · TN 1** → **precision 1.0000**, **r
 **Goal:** move from "the deterministic path behaves as pinned" to "detection quality is
 continuously measured and regressions are blocked".
 
-**Status: in progress — 4 of 6 items implemented (detection coverage framework; ATT&CK
-mapping; cross-alert correlation as an investigation context; analyst explainability);
-item 6.3 is partially progressed (corpus expanded 6→10 scenarios).** Everything else
-below is still a scope, not an achievement.
+**Status: in progress — 5 of 6 items implemented (detection coverage framework; ATT&CK
+mapping; expanded regression corpus of 24 scenarios; cross-alert correlation as an
+investigation context; analyst explainability).** Item 6.6 still does not assert
+precision/recall/F1 thresholds (the corpus-quality gate pins completeness, not metric
+values). Everything else below is still a scope, not an achievement.
 
 | # | Item | Scope | Status |
 | --- | --- | --- | --- |
 | 6.1 | Detection coverage framework | A machine-readable inventory of the scenarios, Wazuh rules/decoders, and pipeline outcomes the platform covers, plus explicit blind spots | ✅ **implemented** (delivered as the Phase 6.2 implementation task) — see below |
 | 6.2 | MITRE ATT&CK mapping | Maintained mapping from scenarios/rules to ATT&CK techniques for reporting and analyst context (today ATT&CK ids only pass through from Wazuh rule metadata as `rule.mitre`, and their presence contributes to the `rule_groups_mitre` score factor) | ✅ **implemented** (registry + rendered view + validation tests; runtime untouched) — see below |
-| 6.3 | Expanded regression corpus | Grow the labeled corpus well beyond 6 fixtures; add negatives per scenario; define and document the positive/negative ↔ decision-action semantics (including the UC-1 first-occurrence case) | 🟡 **partially progressed** (Phase 6.3 task) — corpus grown 6→10 scenarios (recurrence escalation, second negative, critical/SEV1, low asset band); label semantics defined and enforced; per-scenario negatives and CI quality thresholds still outstanding — see below |
+| 6.3 | Expanded regression corpus | Grow the labeled corpus well beyond 6 fixtures; add negatives per scenario; define and document the positive/negative ↔ decision-action semantics (including the UC-1 first-occurrence case) | ✅ **implemented** — corpus grown to 24 scenarios (12 positive / 12 negative), including per-scenario negatives, custom-rule near-misses, and a just-below-trigger recurrence boundary (`SCN-17`–`SCN-24`); label semantics defined and enforced (SCN-01 remains the documented UC-1 first-occurrence FN) |
 | 6.4 | Cross-alert correlation | Correlate related alerts (same host, user, or indicator over time) into one investigation context (today only rule+agent recurrence is grouped) | ✅ **implemented** (investigation-context scope; user correlation unsupported by design — no stable canonical user field) — see below |
 | 6.5 | Analyst explainability | Extend per-alert explanations beyond today's factor-by-factor score justification, decision reasons, and incident timeline — e.g. "what changed since the last occurrence" | ✅ **implemented** (merged via PR #31) — deterministic, read-only per-alert explanations (`explanation.v1`): `GET /api/v1/alerts/{alert_id}/explanation` assembles the stored alert/detection/score/decision/dedupe/correlation/incident/audit facts with explicit nulls, never re-scoring or inferring |
-| 6.6 | Detection-quality CI gates | Fail CI when precision/recall/F1 degrade beyond an agreed threshold, on a corpus large enough to make the thresholds meaningful | 🔮 not started — coverage framework validates traceability, not quality (gap G8) |
+| 6.6 | Detection-quality CI gates | Fail CI when precision/recall/F1 degrade beyond an agreed threshold, on a corpus large enough to make the thresholds meaningful | 🟡 **partial** — `test_detection_quality_gates.py` pins corpus completeness (24 scenarios, fixture sync, regression coverage, G5 liveness) and prints TP/FP/FN/TN; precision/recall/F1 values are still printed, not asserted (gap G8: live Wazuh coverage is not measured) |
 
 ### 6.1 Detection coverage framework — what is now implemented (Phase 6.2 task)
 
@@ -384,10 +385,11 @@ design (verified by mutation checks during implementation: an altered fixture id
 removed G5 record, an altered provenance path, and a doc/registry desync each fail the
 suite); re-run the validation when rules, fixtures, ground truth, or runbooks change.
 
-### 6.3 Expanded regression corpus — what is now implemented (partial)
+### 6.3 Expanded regression corpus — what is now implemented
 
-**Status: 🟡 partially progressed. No scoring or decision-routing behavior changed; the
-expansion adds fixtures, ground-truth pins, and regression tests only.**
+**Status: ✅ implemented. No scoring or decision-routing behavior changed; the
+expansion adds fixtures, ground-truth pins, catalog/registry rows, coverage docs,
+and regression tests only.**
 
 | Scenario | What it pins | Why it exists |
 | --- | --- | --- |
@@ -404,9 +406,11 @@ severity consistency, offline `enrichment_status`), a replay-determinism test ov
 whole corpus, and recurrence boundary tests (2 occurrences and window ±1 s at unit level;
 second-delivery non-escalation at pipeline level).
 
-**Still outstanding in this item:** negatives per scenario (only `SCN-02`/`SCN-08` are
-negative), corpus growth "well beyond" 10 fixtures, and quality thresholds on the metrics
-(6.6). Allowlist `suppress` remains unreachable end-to-end until an allowlist provider
+Plus `SCN-17`–`SCN-24` (all negative, all `monitor`): authorized FIM, expected account
+creation, non-malicious hash, custom-rule SSH/FIM/web near-misses, a non-triggering web
+request, and a two-delivery recurrence boundary that stays below rapid-burst. The labeled
+corpus is now 24 scenarios (12 positive / 12 negative). Quality thresholds on the metrics
+remain 6.6. Allowlist `suppress` remains unreachable end-to-end until an allowlist provider
 exists (Phase 2.2; coverage-doc gap G10).
 
 **Phase 6 exit criteria (to be refined as items land):** a documented coverage map exists

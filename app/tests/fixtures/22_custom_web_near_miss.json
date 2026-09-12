@@ -1,0 +1,29 @@
+{
+  "id": "1770000000.600022",
+  "timestamp": "2026-08-29T18:02:40.000+0000",
+  "rule": {
+    "level": 3,
+    "description": "Web access request",
+    "id": "31100",
+    "firedtimes": 1,
+    "mail": false,
+    "groups": ["web", "accesslog"]
+  },
+  "agent": {
+    "id": "013",
+    "name": "web-prod-03",
+    "ip": "10.0.1.12",
+    "labels": { "asset_tier": "tier-1", "owner": "platform-team" }
+  },
+  "manager": { "name": "wazuh-manager" },
+  "decoder": { "name": "soc-web" },
+  "data": {
+    "srcip": "198.51.100.80",
+    "id": "1054",
+    "url": "/wp-content/themes/lab/style.css",
+    "protocol": "HTTP/1.1",
+    "status": "200"
+  },
+  "location": "/var/log/nginx/error.log",
+  "full_log": "SOC_WEB 2026-08-29T18:02:40Z GET /wp-content/themes/lab/style.css from 198.51.100.80"
+}
