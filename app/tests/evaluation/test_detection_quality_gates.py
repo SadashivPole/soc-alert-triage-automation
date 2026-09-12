@@ -21,6 +21,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+import pytest
 import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -169,3 +170,31 @@ def test_detection_quality_summary() -> None:
     print("\n=== Detection quality ===")
     for label, value in counts.items():
         print(f"{label}: {value}")
+
+
+def test_detection_quality_gate_rejects_an_artificially_degraded_metric() -> None:
+    """The quality gate must reject a metric regression."""
+    from evaluation.metrics import ConfusionMatrix, calculate_metrics
+    from tests.evaluation.detection_quality import (
+        DETECTION_QUALITY_THRESHOLDS,
+        assert_detection_quality_gate,
+    )
+
+    thresholds = DETECTION_QUALITY_THRESHOLDS
+
+    baseline = calculate_metrics(
+        ConfusionMatrix(
+            true_positive=thresholds.minimum_true_positive,
+            false_positive=thresholds.maximum_false_positive,
+            false_negative=thresholds.maximum_false_negative,
+            true_negative=thresholds.minimum_true_negative,
+        )
+    )
+
+    assert_detection_quality_gate(baseline)
+
+    degraded = dict(baseline)
+    degraded["recall"] = thresholds.minimum_recall - 0.0001
+
+    with pytest.raises(AssertionError, match="recall"):
+        assert_detection_quality_gate(degraded)

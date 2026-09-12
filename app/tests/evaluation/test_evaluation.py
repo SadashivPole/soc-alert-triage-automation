@@ -7,6 +7,7 @@ from typing import Any
 from evaluation.metrics import ConfusionMatrix, calculate_metrics
 from fastapi.testclient import TestClient
 from tests.conftest import TEST_INGEST_KEY
+from tests.evaluation.detection_quality import assert_detection_quality_gate
 
 ROOT = Path(__file__).resolve().parents[3]
 FIXTURES_DIR = ROOT / "app" / "tests" / "fixtures"
@@ -216,6 +217,7 @@ def test_ground_truth_evaluation(client: TestClient) -> None:
     )
 
     metrics = calculate_metrics(matrix)
+    assert_detection_quality_gate(metrics)
 
     print("\n=== Phase 5 Detection Evaluation ===")
 
