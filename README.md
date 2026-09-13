@@ -15,8 +15,10 @@ workflows, and a Docker lab.
 > inventory `asset_inventory.v1`, deterministic local wiring, disabled by default) and
 > Phase 2.3 (enrichment response TTL cache: SQLite-backed, per-type TTLs, disabled by
 > default) are implemented · locally validated (automated tests + CI), while the
-> remaining Phase 2 enrichment items (MISP container profile + seeding, scoring v2
-> intel factor, late-enrichment re-score) are still outstanding. **Phase 3** remains
+> remaining Phase 2 enrichment items (scoring v2 intel factor, late-enrichment
+> re-score) are still outstanding, while the optional MISP `intel` compose profile and
+> its deterministic synthetic seeding guide (Phase 2.4) are implemented and statically
+> validated (not live-started in CI — no Docker daemon in the dev sandbox). **Phase 3** remains
 > implemented with named items outstanding; **Phase 4 (real Wazuh integration)** is
 > implemented and partially live-validated; **Phase 5 (deterministic detection
 > evaluation)** is implemented and locally validated; **Phase 6 (detection quality &
@@ -100,8 +102,9 @@ This project automates that loop **defensively and transparently**:
   replaying the synthetic sample alerts).
 - **Normalize** them into one canonical alert schema.
 - **Enrich** IOCs (IPs, domains, file hashes) via **VirusTotal** (free public API) and a
-  self-hosted **MISP** instance. Clients are implemented and **disabled by default**;
-  a MISP container profile is still outstanding.
+  self-hosted **MISP** instance. Clients are implemented and **disabled by default**; the
+  optional `intel` compose profile (Phase 2.4) ships a self-hosted MISP on the internal
+  network plus a deterministic synthetic seeding guide (`misp/`).
 - **Score** risk with a **deterministic, explainable scoring engine** (rule severity,
   rule groups/MITRE presence, asset criticality, recurrence, IOC evidence, enrichment
   corroboration) — every score ships a human-readable justification, not a black-box
@@ -293,8 +296,7 @@ Status markers describe the current tree.
    factor and `suppress` route, reporting `enrichment_status: skipped` so it never adds
    intel points. Both are loaded only when `TRIAGE_ALLOWLIST_PATH` /
    `TRIAGE_ASSET_INVENTORY_PATH` point at a policy file; neither performs network I/O.
-   Outstanding: response TTL cache, MISP container profile + seeding guide,
-   late-enrichment re-score.
+   Outstanding: scoring v2 threat-intel factor, late-enrichment re-score.
 4.  **Score** — deterministic engine computes 0–100, a tier, and a factor-by-factor
    justification list; weights live in the versioned config file.
 5.  **Decide & route** — per the decision matrix: open incident (`SEV1`/`SEV2`), queue
@@ -325,7 +327,7 @@ Status markers describe the current tree.
 | **Python 3.11+ / FastAPI** | Triage API: ingest, normalize, dedupe, enrich, score, decide, REST surface |  implemented (CI on 3.11 & 3.12) | Free |
 | **n8n 1.85.0** | Workflow orchestration: notification fan-out, SLA escalation, analyst feedback form |  WF1/WF2/WF3/WF5 exported + import helper (⬜ WF6 digest) | Free, self-hosted |
 | **Wazuh 4.9.2** | SIEM/XDR: rules, decoders, FIM, agent telemetry — the alert source |  `full` profile + integrator implemented, live-validated end-to-end; custom ruleset authored but not live-validated | Free, self-hosted |
-| **MISP** | Self-hosted threat-intel platform for IOC attribute lookups |  provider implemented (disabled by default); container profile + seeding guide ⬜ outstanding | Free, self-hosted |
+| **MISP** | Self-hosted threat-intel platform for IOC attribute lookups |  provider + optional `intel` compose profile implemented (lookup-only, disabled by default); deterministic seeding guide in `misp/` — statically validated, not live-started in CI | Free, self-hosted |
 | **VirusTotal public API** | IOC enrichment (hashes, IPs, domains, URLs) |  client implemented with rate limiting/retries (disabled by default, fake-transport tested only) | Free public tier (4 req/min, 500/day) |
 | **Prometheus + Grafana** | Optional read-only observability profile (`observability`) |  implemented and runtime-validated in the lab | Free, self-hosted |
 | **TheHive 5 CE** | Case-management export |  outstanding (optional; CE only, never Premium) | Free, self-hosted |
@@ -356,7 +358,7 @@ soc-alert-triage-automation/
 │                              # Phase 6 coverage catalog: detection_catalog.yaml
 ├── n8n/                       # exported workflow JSONs (WF1/WF2/WF3/WF5) + import docs + lab SMTP credential template
 ├── wazuh/                     # manager config, custom rules/decoders, integrator script, entrypoint hook (Phase 4)
-├── misp/                      # optional MISP profile notes — scaffolded only
+├── misp/                      # optional MISP `intel` profile: seeding guide, synthetic fixture, read-only check
 ├── deploy/                    # triage-api Dockerfile, Prometheus/Grafana provisioning
 ├── docs/
 │   ├── detection-coverage.md  # Phase 6 detection coverage framework (rule → ATT&CK → scenario → outcome)
@@ -452,6 +454,7 @@ Optional profiles (strictly additive — the default stack is unchanged):
 ```bash
 docker compose --profile observability up -d   # Prometheus + Grafana (lab)
 docker compose --profile full up -d            # + real Wazuh manager 4.9.2 (lab)
+docker compose --profile intel up -d           # + self-hosted MISP (internal only)
 ```
 
 ## Development Roadmap
@@ -463,7 +466,7 @@ Full detail, acceptance criteria, and evidence per phase:
 | --- | --- | --- | --- |
 | **Phase 0 — Foundation** | Docs & scaffolding |  implemented · locally validated | ARCHITECTURE, DEVELOPMENT_PLAN, SECURITY, CONTRIBUTING, README, `.env.example`, directory tree, `check_secrets.sh` |
 | **Phase 1 — MVP triage pipeline** | Core triage loop |  implemented · locally validated | FastAPI app, ingest + normalize + dedupe, SQLite models + Alembic, scoring v1, decisions v1, n8n webhook client, compose (API+n8n+Mailpit), unit/integration tests.  `scripts/send_test_alert` simulator not implemented |
-| **Phase 2 — Enrichment & threat intelligence** | Threat intel |  partially validated | Phase 2.2 static local policies implemented · locally validated: allowlist `allowlist.v1` + asset inventory `asset_inventory.v1`, deterministic local wiring, disabled by default, 47 targeted tests; Phase 2.3 enrichment response TTL cache implemented · locally validated (SQLite-backed, 6 h hash / 1 h IP TTLs, disabled by default, fail-open, 61 targeted tests); VirusTotal + MISP provider clients implemented but exercised only with fake HTTP transports (no live lookup recorded), plus IOC extractor, fail-open chain, rate limiting/retries; ⬜ MISP container profile + seeding, scoring v2 threat-intel factor, late-enrichment re-score |
+| **Phase 2 — Enrichment & threat intelligence** | Threat intel |  partially validated | Phase 2.2 static local policies implemented · locally validated: allowlist `allowlist.v1` + asset inventory `asset_inventory.v1`, deterministic local wiring, disabled by default, 47 targeted tests; Phase 2.3 enrichment response TTL cache implemented · locally validated (SQLite-backed, 6 h hash / 1 h IP TTLs, disabled by default, fail-open, 61 targeted tests); VirusTotal + MISP provider clients implemented but exercised only with fake HTTP transports (no live lookup recorded), plus IOC extractor, fail-open chain, rate limiting/retries; Phase 2.4 MISP `intel` compose profile + deterministic synthetic seeding guide implemented and statically validated (pinned images, internal-only, secrets from env, lookup-only); ⬜ scoring v2 threat-intel factor, late-enrichment re-score |
 | **Phase 3 — Incidents, analyst workflow & observability** | Analyst loop |  partially validated | Incidents (3.1), lifecycle + feedback (3.2), read APIs + timeline (3.3), TTL sweeper (3.4), static console (3.5), runbooks (3.6), Prometheus `/metrics` + optional Grafana (3.7);  Postgres profile (3.8), stats endpoints + digest (3.9) |
 | **Phase 4 — Real Wazuh integration & approved response** | Full integration |  partially validated | Source-audited + live-validated `full` profile and `custom-triage` integrator (4.1/4.2), agent enrollment validated (4.4), custom rules/decoders authored (4.3, not live-validated);  approval/containment runbook (4.5), TheHive CE export (4.6), failure-spool + duplicate-delivery runtime checks and 10k/day soak (4.7) |
 | **Phase 5 — Deterministic detection evaluation** | Detection quality measurement |  implemented · locally validated | Labeled corpus, ground truth, confusion matrix, precision/recall/F1/FPR, runtime evaluation tests replaying fixtures through the real ingest path |
@@ -549,6 +552,31 @@ docker compose --profile observability up -d  # + Prometheus + Grafana (lab)
   committed, never inlined). See [deploy/README.md](deploy/README.md) and
   [ARCHITECTURE.md §13](ARCHITECTURE.md#13-docker--deployment-architecture).
 
+**Optional MISP `intel` profile (Phase 2.4)** — additive only; the default stack is
+unchanged and MISP never starts without `--profile intel`:
+
+```bash
+docker compose --profile intel up -d          # + self-hosted MISP (internal only)
+```
+
+- Five containers, all pinned: a one-shot `misp-preflight` guard (`busybox:1.37.0`)
+  plus `misp-db` (`mariadb:10.11.19`), `misp-redis` (`valkey/valkey:7.2.14`),
+  `misp-core` and `misp-nginx` (`ghcr.io/misp/misp-docker/*:v2.5.46`). The four
+  long-running ones join `soc-core` only and publish **no host ports** — `triage-api`
+  reaches MISP at `http://misp-nginx:8080` internally.
+- Every MISP credential comes from `.env` with no committed default, and the guard
+  aborts the profile with an explicit per-variable message when one is missing, so MISP
+  can never boot with its upstream default credentials. The platform-side
+  `MISP_URL`/`MISP_API_KEY` default to empty, so the zero-external fallback is unchanged
+  until an operator opts in.
+- **Lookup-only:** the platform reads `GET /attributes/restSearch`; it never writes,
+  publishes, or pushes to MISP. Seeding is a documented human action using only
+  synthetic documentation-range indicators — see [misp/seeding.md](misp/seeding.md)
+  and the read-only helper `misp/verify-lookups.sh`.
+- **Not live-validated:** the profile/config/fixture are statically validated by
+  tests; MISP was not started in this repository's CI (no Docker daemon in the dev
+  sandbox), so no live MISP lookup is claimed.
+
 > **Validation note:** the observability profile was runtime-validated on Windows Docker
 > Desktop — `triage-api` (`/health`, `/ready`, `/metrics` all 200), Prometheus
 > (`triage-api:8000/metrics` UP, 15 s scrape, port 9090 not host-published), and Grafana
@@ -589,7 +617,10 @@ have not been exercised against a live rule match**.
   Desktop (2026-09-06): real Windows agent enrolled and active, a real Wazuh alert
   forwarded (`status=202`), scored (`38`/`low`/`monitor`), and delivered to n8n (HTTP 200).
 - **Phase 2 enrichment** — provider logic is exercised only with fake HTTP transports; no
-  live VirusTotal or MISP lookup has been recorded. The Phase 2.2 static policies need no
+  live VirusTotal or MISP lookup has been recorded. The Phase 2.4 `intel` profile
+  (`misp-db`/`misp-redis`/`misp-core`/`misp-nginx`, pinned images, internal `soc-core`
+  only, no host ports, secrets from env) and the seeding guide/fixture are validated
+  statically only — MISP was not started, so no live lookup is claimed. The Phase 2.2 static policies need no
   transport at all (local file load + pure matching), and are validated by automated tests
   and CI only — they have not been exercised in the Docker lab, and the shipped policy files
   contain no entries. The Phase 2.3 response TTL cache is likewise validated by automated
@@ -601,8 +632,8 @@ have not been exercised against a live rule match**.
 - **Observability** — runtime-validated for Phase 3.7, with the post-Phase-4 `/metrics`
   hygiene re-check outstanding.
 
-** Outstanding (scoped, not done):** `scripts/send_test_alert` simulator; MISP compose
-profile + seeding guide; scoring v2 threat-intel factor;
+** Outstanding (scoped, not done):** `scripts/send_test_alert` simulator; scoring v2
+threat-intel factor;
 late-enrichment re-score; PostgreSQL profile; stats endpoints + daily digest workflow
 (WF6); runbook linkage from decisions; TheHive CE export; containment approval/response
 runbook; Phase 4 failure-spool, duplicate-delivery, `/metrics` hygiene, and 10k

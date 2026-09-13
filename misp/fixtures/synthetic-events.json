@@ -1,0 +1,142 @@
+[
+  {
+    "Event": {
+      "info": "SYNTHETIC LAB — SSH brute-force source IPs (documentation ranges only)",
+      "uuid": "11111111-1111-4111-8111-111111111101",
+      "date": "2026-09-01",
+      "timestamp": "1788220800",
+      "threat_level_id": "4",
+      "analysis": "0",
+      "distribution": "0",
+      "published": false,
+      "Orgc": { "name": "SOC Lab Synthetic" },
+      "Tag": [
+        { "name": "synthetic:true" },
+        { "name": "lab:documentation-ranges" },
+        { "name": "workflow:deterministic-seed" }
+      ],
+      "Attribute": [
+        {
+          "uuid": "11111111-1111-4111-8111-1111111111a1",
+          "type": "ip-src",
+          "category": "Network activity",
+          "value": "203.0.113.50",
+          "to_ids": false,
+          "timestamp": "1788220800",
+          "distribution": "0",
+          "comment": "Synthetic SSH brute-force source — RFC 5737 documentation range (SECURITY.md §5)."
+        },
+        {
+          "uuid": "11111111-1111-4111-8111-1111111111a2",
+          "type": "ip-src",
+          "category": "Network activity",
+          "value": "203.0.113.60",
+          "to_ids": false,
+          "timestamp": "1788220800",
+          "distribution": "0",
+          "comment": "Synthetic near-miss source — RFC 5737 documentation range."
+        },
+        {
+          "uuid": "11111111-1111-4111-8111-1111111111a3",
+          "type": "ip-src",
+          "category": "Network activity",
+          "value": "203.0.113.61",
+          "to_ids": false,
+          "timestamp": "1788220800",
+          "distribution": "0",
+          "comment": "Synthetic low-burst recurrence source — RFC 5737 documentation range."
+        }
+      ]
+    }
+  },
+  {
+    "Event": {
+      "info": "SYNTHETIC LAB — web attack sources + benign-string sample hashes",
+      "uuid": "11111111-1111-4111-8111-111111111102",
+      "date": "2026-09-01",
+      "timestamp": "1788220800",
+      "threat_level_id": "4",
+      "analysis": "0",
+      "distribution": "0",
+      "published": false,
+      "Orgc": { "name": "SOC Lab Synthetic" },
+      "Tag": [
+        { "name": "synthetic:true" },
+        { "name": "lab:benign-string-hashes" },
+        { "name": "tlp:clear" }
+      ],
+      "Attribute": [
+        {
+          "uuid": "11111111-1111-4111-8111-1111111111b1",
+          "type": "ip-src",
+          "category": "Network activity",
+          "value": "198.51.100.77",
+          "to_ids": false,
+          "timestamp": "1788220800",
+          "distribution": "0",
+          "comment": "Synthetic web SQL-injection source — RFC 5737 documentation range."
+        },
+        {
+          "uuid": "11111111-1111-4111-8111-1111111111b2",
+          "type": "ip-src",
+          "category": "Network activity",
+          "value": "198.51.100.78",
+          "to_ids": false,
+          "timestamp": "1788220800",
+          "distribution": "0",
+          "comment": "Synthetic web attack source — RFC 5737 documentation range."
+        },
+        {
+          "uuid": "11111111-1111-4111-8111-1111111111b3",
+          "type": "ip-src",
+          "category": "Network activity",
+          "value": "198.51.100.80",
+          "to_ids": false,
+          "timestamp": "1788220800",
+          "distribution": "0",
+          "comment": "Synthetic near-miss web source — RFC 5737 documentation range."
+        },
+        {
+          "uuid": "11111111-1111-4111-8111-1111111111b4",
+          "type": "ip-src",
+          "category": "Network activity",
+          "value": "198.51.100.81",
+          "to_ids": false,
+          "timestamp": "1788220800",
+          "distribution": "0",
+          "comment": "Synthetic non-triggering web source — RFC 5737 documentation range."
+        },
+        {
+          "uuid": "11111111-1111-4111-8111-1111111111b5",
+          "type": "md5",
+          "category": "Payload delivery",
+          "value": "bc478d7a48bfab117da4b9bdcb5aee36",
+          "to_ids": false,
+          "timestamp": "1788220800",
+          "distribution": "0",
+          "comment": "Hash of a synthetic benign string (corpus sample hash) — not a real sample."
+        },
+        {
+          "uuid": "11111111-1111-4111-8111-1111111111b6",
+          "type": "sha1",
+          "category": "Payload delivery",
+          "value": "87c151c211facd64c46da2004bccfc31f52128bd",
+          "to_ids": false,
+          "timestamp": "1788220800",
+          "distribution": "0",
+          "comment": "Hash of a synthetic benign string (corpus sample hash) — not a real sample."
+        },
+        {
+          "uuid": "11111111-1111-4111-8111-1111111111b7",
+          "type": "sha256",
+          "category": "Payload delivery",
+          "value": "23b3c5642480341d8bb98c40b6edb136f59088a7ae4e57ef6518789908769f0f",
+          "to_ids": false,
+          "timestamp": "1788220800",
+          "distribution": "0",
+          "comment": "Hash of a synthetic benign string (corpus sample hash) — not a real sample."
+        }
+      ]
+    }
+  }
+]
