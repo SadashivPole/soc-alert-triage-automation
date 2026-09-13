@@ -346,7 +346,7 @@ provenance.
 - Optional sources auto-disable when their env keys are empty — the system must run fully
   functional (scoring v1) with **zero external services**.
 
-**Implementation status of this subsystem (updated through Phase 2.3):** extraction
+**Implementation status of this subsystem (updated through Phase 2.4):** extraction
 (§7.1) and the provider interface are implemented. Of steps 1–4 above: step 1 (allowlist)
 is implemented as the Phase 2.2 static policy provider (registered only when
 `TRIAGE_ALLOWLIST_PATH` is set); step 2 (local cache) is the Phase 2.3 response TTL
@@ -355,7 +355,11 @@ cache (`enrichment_cache` table, per-type TTLs — 6 h hashes / 1 h IPs / 1 h ot
 soonest-expiring eviction, fail-open, **disabled by default** via
 `TRIAGE_ENRICHMENT_CACHE_ENABLED`, consulted before the rate limiter so hits consume no
 quota); steps 3–4 (VirusTotal v3, MISP) are implemented as HTTP providers exercised only
-with fake transports and disabled by default (empty key/URL ⇒ never called). Providers
+with fake transports and disabled by default (empty key/URL ⇒ never called); Phase 2.4
+adds the optional `intel` compose profile (§13) plus a deterministic synthetic seeding
+guide, so a self-hosted MISP can be brought up **internally** and seeded with
+documentation-range indicators only — the provider remains lookup-only
+(`GET /attributes/restSearch`) and no live MISP run has been performed. Providers
 implement the runtime-checkable `soc_triage.enrichment.providers.EnrichmentProvider`
 protocol (`name`, `enabled`, `enrich(iocs, *, context) → ProviderEnrichment`);
 `EnrichmentChain` runs them in registration order, merges payloads per indicator, and
@@ -650,7 +654,7 @@ app/src/soc_triage/
 | `n8n` | `n8nio/n8n:<pinned>` | default | soc-edge, soc-core | 5678 | orchestration |
 | `mailpit` | `axllent/mailpit:<pinned>` | default | soc-core | 8025, 1025 | SMTP sink |
 | `wazuh-manager` | `wazuh/wazuh-manager:4.x` | `full` | soc-core | 1514–1516 (agents) | real detection source |
-| `misp-*` | MISP docker stack | `intel` | soc-core | internal only | threat intel |
+| `misp-db` / `misp-redis` / `misp-core` / `misp-nginx` | `mariadb:10.11.19`, `valkey/valkey:7.2.14`, `ghcr.io/misp/misp-docker/{misp-core,misp-nginx}:v2.5.46` | `intel` (Phase 2.4) | soc-core | internal only (none published) | threat intel (lookup-only) |
 | `postgres` | `postgres:16-alpine` | `postgres` | soc-core | internal only | scalable DB |
 | `prometheus` | `prom/prometheus:v3.5.0` | `observability` | soc-core | internal only | optional scrape of `triage-api:8000/metrics` |
 | `grafana` | `grafana/grafana:12.1.0` | `observability` | soc-core | 3000 | optional dashboards (lab) |
@@ -723,6 +727,41 @@ nothing in the default stack:
   when an `<integration>` block is present.
 - **No active-response / containment configuration is mounted or defined** — the profile
   is a detection source only (SECURITY.md §1).
+
+**`intel` profile (Phase 2.4, implemented):**
+`docker compose --profile intel up -d` adds exactly five *optional* containers (four
+services plus a one-shot guard) and changes nothing in the default stack:
+
+- `misp-db` (`mariadb:10.11.19`), `misp-redis` (`valkey/valkey:7.2.14`), `misp-core` and
+  `misp-nginx` (`ghcr.io/misp/misp-docker/*:v2.5.46`) — all pinned, all profile-gated,
+  all on `soc-core` only, and **none publishes a host port** (the API reaches MISP
+  internally at `http://misp-nginx:8080`; `misp-core` serves FastCGI on 9002 and is the
+  upstream readiness probe). No default service gains a `depends_on` on them.
+- **Secret enforcement is a guard, not `${VAR:?}`.** Compose interpolates the whole
+  file — profile-gated services included — *before* it filters inactive profiles, so a
+  required-variable reference here would break the default `docker compose up -d` until
+  MISP had been configured. `misp-preflight` (`busybox:1.37.0`, pinned, `network_mode:
+  none`, read-only, no capabilities, ≤0.25 CPU / 32 MB) runs first under
+  `condition: service_completed_successfully`: it verifies that `MISP_DB_PASSWORD`,
+  `MISP_DB_ROOT_PASSWORD`, `MISP_REDIS_PASSWORD`, `MISP_ADMIN_EMAIL`,
+  `MISP_ADMIN_PASSWORD`, `MISP_ADMIN_KEY`, `MISP_GPG_PASSPHRASE` and
+  `MISP_ENCRYPTION_KEY` are all non-empty and aborts the profile naming every missing
+  value, so MISP cannot silently start with its upstream defaults
+  (`MYSQL_PASSWORD=example`, `REDIS_PASSWORD=redispassword`,
+  `GPG_PASSPHRASE=passphrase`, generated admin password/API key). The admin key is
+  operator-set (rather than auto-generated) so the seeded instance is deterministic;
+  the API authenticates with the same value via `MISP_API_KEY`, whose compose default
+  stays empty (disable-by-empty preserved).
+- **Lookup-only:** the platform reads `/attributes/restSearch` and never writes,
+  publishes or pushes to MISP. Seeding is a documented human action
+  (`misp/seeding.md`) using only synthetic documentation-range indicators
+  (SECURITY.md §5); `misp/verify-lookups.sh` verifies the seed with GETs only.
+- Healthchecks (core probes FastCGI 9002; `misp-nginx` keeps the image's own status
+  healthcheck), `no-new-privileges` on all five containers, read-only root + tmpfs +
+  `cap_drop: ALL` + non-root user for `misp-nginx`, and per-service CPU/memory limits;
+  state lives in the additive `misp-*` named volumes.
+- **Not live-validated:** profile, guide and fixture are statically validated by tests;
+  no Docker/MISP instance has been started in CI (no live lookup is claimed).
 
 **Wazuh integrator (Phase 4.2, ADR-6, implemented):**
 `wazuh/integrator/custom-triage` (shell wrapper) → `custom-triage.py` (standard library

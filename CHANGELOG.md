@@ -6,6 +6,63 @@ semantic (`v0.1.0` targeted at the end of Phase 1).
 
 ## [Unreleased]
 
+### Added — Phase 2.4: MISP `intel` compose profile + deterministic seeding guide
+
+- **An optional, strictly additive `intel` compose profile** (closing deliverable 2.4):
+  `docker compose --profile intel up -d` adds five pinned containers and changes nothing
+  in the default stack — a one-shot `misp-preflight` guard (`busybox:1.37.0`) plus
+  `misp-db` (`mariadb:10.11.19`), `misp-redis` (`valkey/valkey:7.2.14`), `misp-core` and
+  `misp-nginx` (`ghcr.io/misp/misp-docker/*:v2.5.46`). All are profile-gated
+  (`["intel"]`), the four services live **only** on the internal `soc-core` network and
+  publish **no host ports** (the Triage API reaches MISP at `http://misp-nginx:8080`
+  internally), and the guard runs with no network at all. No default service gains a
+  `depends_on` on MISP, so MISP never starts in the default profile and the zero-external
+  fallback is unchanged (ARCHITECTURE.md §7.3, §13, §14).
+- **Environment-only secrets with a fail-fast guard.** Every MISP credential comes from
+  `.env` and no default is committed (`MISP_DB_PASSWORD`, `MISP_DB_ROOT_PASSWORD`,
+  `MISP_REDIS_PASSWORD`, `MISP_ADMIN_EMAIL`, `MISP_ADMIN_PASSWORD`, `MISP_ADMIN_KEY`,
+  `MISP_GPG_PASSPHRASE`, `MISP_ENCRYPTION_KEY`); `MISP_ADMIN_KEY` is pinned rather than
+  auto-generated so first boot is deterministic, and the platform authenticates with the
+  same value through `MISP_API_KEY`. Required-variable interpolation (`${VAR:?…}`) is
+  deliberately **not** used: Compose interpolates the whole file — profile-gated services
+  included — before it filters inactive profiles, which would break the default
+  `docker compose up -d`. `misp-preflight` provides the same contract at profile start:
+  the four services `depends_on` it with `condition: service_completed_successfully`, and
+  it aborts the profile with an explicit message naming every missing value, so MISP can
+  never boot with upstream defaults (`MYSQL_PASSWORD=example`,
+  `REDIS_PASSWORD=redispassword`, `GPG_PASSPHRASE=passphrase`, generated admin
+  credentials). The `MISP_URL`/`MISP_API_KEY`/`MISP_VERIFY_TLS` pass-through on
+  `triage-api` keeps its **empty defaults**, preserving disable-by-empty.
+- **Deterministic synthetic seeding guide** (`misp/seeding.md` +
+  `misp/fixtures/synthetic-events.json`): two events with pinned UUIDs, dates and
+  timestamps, containing only RFC 5737 documentation-range IPs and hashes of synthetic
+  benign strings (`to_ids: false`, unpublished, distribution *your organisation only*),
+  aligned with the repository's synthetic corpus. `misp/verify-lookups.sh` re-reads the
+  fixture and verifies the seed with `GET /attributes/restSearch` only.
+- **Lookup-only by construction:** the integration reads `/attributes/restSearch` and
+  never writes, publishes or pushes to MISP; tests pin the request shape (GET, exact
+  parameters, empty body, header-only key), the sanitized allow-list result
+  (`match_count` + capped/sorted `event_ids`/`tags`), the failure vocabulary
+  (`not_found`/`error`/`timeout`/`rate_limited`, never raised), and that no MISP write
+  endpoint or verb exists anywhere in the code path.
+- **Phase 2.3 cache preserved:** definitive MISP verdicts (`found`/`not_found`) replay
+  byte-identically with zero outbound requests and zero rate-limiter tokens, entries stay
+  provider-scoped, and failures are never cached (still retryable).
+- **Evidence:** 57 targeted tests — 29 profile/guide/fixture/guard static checks
+  (profile gating, pinned images, no host ports, `soc-core`-only, hardening, env-only
+  secrets, the executed guard in missing/partial/complete states, fixture
+  determinism/safety, read-only helper), 27 MISP lookup-contract tests
+  (request shape, sanitization allow-list/caps, HTTP/network/malformed failures, retry,
+  cache wiring, secret safety, zero-external fallback), 1 integration MISP-outage
+  fail-open test — plus the updated compose service/volume contract assertions, the full
+  pytest suite, ruff check/format, mypy, `scripts/check_secrets.sh` and the console JS
+  tests. Documentation: `misp/README.md`, `deploy/README.md`, `README.md`,
+  `ARCHITECTURE.md` (§7.3, §13), `DEVELOPMENT_PLAN.md`, `.env.example`.
+- **Explicitly not claimed:** no Docker/MISP instance was started (no Docker daemon in the
+  development sandbox), so no live MISP lookup, seeding run, or UI import was exercised;
+  MISP was **not** live-validated. Scoring v2 (2.5) and late-enrichment re-score (2.6)
+  remain untouched.
+
 ### Added — Phase 2.3: enrichment response TTL cache
 
 - **A SQLite-backed response cache for threat-intel lookups** (ARCHITECTURE.md §7.2

@@ -32,7 +32,7 @@ history. Status claims elsewhere are descriptive, not authoritative.
 | --- | --- | --- |
 | **Phase 0 — Foundation** | ✅ Implemented · locally validated | Docs, scaffolding, secret scanner, CI |
 | **Phase 1 — MVP triage pipeline** | ✅ Implemented · locally validated | Ingest → normalize → dedupe → score → decide → notify, tests green (⬜ simulator script) |
-| **Phase 2 — Enrichment & threat intelligence** | 🟡 Partially validated | 2.2 static allowlist + asset inventory ✅ implemented · locally validated (deterministic local policy wiring, disabled by default, 47 targeted tests); 2.3 enrichment response TTL cache ✅ implemented · locally validated (SQLite-backed, per-type TTLs, disabled by default, fail-open, 61 targeted tests); VirusTotal + MISP providers implemented (fake-transport tested, disabled by default); MISP profile, scoring v2 intel factor, late-enrichment re-score ⬜ |
+| **Phase 2 — Enrichment & threat intelligence** | 🟡 Partially validated | 2.2 static allowlist + asset inventory ✅ implemented · locally validated (deterministic local policy wiring, disabled by default, 47 targeted tests); 2.3 enrichment response TTL cache ✅ implemented · locally validated (SQLite-backed, per-type TTLs, disabled by default, fail-open, 61 targeted tests); 2.4 MISP client + `intel` compose profile + deterministic seeding guide ✅ implemented · statically validated (pinned images, internal-only, env-only secrets, guard-enforced, lookup-only, 57 targeted tests — no live MISP run); VirusTotal + MISP providers fake-transport tested, disabled by default; scoring v2 intel factor, late-enrichment re-score ⬜ |
 | **Phase 3 — Incidents, analyst workflow & observability** | 🟡 Partially validated | Incidents, lifecycle, read APIs, timeline, sweeper, console, runbooks, `/metrics` + Grafana profile all implemented; PostgreSQL profile + stats/digest ⬜ |
 | **Phase 4 — Real Wazuh integration & approved response** | 🟡 Partially validated | 4.1/4.2 source-audited + live-validated end-to-end; 4.4 validated; 4.3 authored but not live-validated; 4.5/4.6/4.7 and runtime failure/duplicate checks ⬜ |
 | **Phase 5 — Deterministic detection evaluation** | ✅ Implemented · locally validated | Labeled corpus, ground truth, confusion matrix, precision/recall/F1/FPR, runtime evaluation tests |
@@ -115,18 +115,19 @@ recurrence · auth/limit/validation error paths correct · pipeline completes wi
 **Goal:** real intel enrichment with quota safety and graceful degradation.
 
 **Status: partially validated — 2.2 (static allowlist `allowlist.v1` + asset inventory
-`asset_inventory.v1`, with deterministic local wiring) and 2.3 (enrichment response TTL
-cache, SQLite-backed, disabled by default) are ✅ implemented · locally validated; the
-VirusTotal/MISP provider clients are implemented (fake transports only); the MISP
-container profile, the scoring v2 intel factor, and the late-enrichment re-score remain
-⬜ outstanding.**
+`asset_inventory.v1`, with deterministic local wiring), 2.3 (enrichment response TTL
+cache, SQLite-backed, disabled by default) and 2.4 (MISP client contract + optional
+`intel` compose profile + deterministic synthetic seeding guide) are ✅ implemented ·
+locally/statically validated; the VirusTotal/MISP provider clients remain fake-transport
+tested (no live lookup); the scoring v2 intel factor and the late-enrichment re-score
+remain ⬜ outstanding.**
 
 | # | Deliverable | Status | Evidence / gap |
 | --- | --- | --- | --- |
 | 2.1 | IOC extractor | ✅ implemented (delivered early as Phase 1E/1.13) | pure, deterministic, no network I/O |
 | 2.2 | Allowlist + asset-inventory YAML loaders | ✅ Implemented · locally validated | deterministic, versioned, non-secret static policies — `app/config/allowlists.yaml` (`allowlist.v1`) and `app/config/asset_inventory.yaml` (`asset_inventory.v1`) — **validated fail-loud at load**, and loaded only when `TRIAGE_ALLOWLIST_PATH` / `TRIAGE_ASSET_INVENTORY_PATH` are set (empty path ⇒ disabled; the shipped files contain no entries). The `allowlist` provider registers in the chain **only when configured**; matching is on exact normalized indicators plus IPv4 CIDR; the provider's `enrichment_status` is always `skipped`, so local policy adds no intel points; the existing scoring `allowlist` (−20) factor and `suppress` decision route are consumed **unchanged** — no scoring- or decision-policy change. The asset inventory is a pure fill-only normalization seam (precedence `agent_id` → IP → name; source-provided fields always win) and does **not** alter the `asset_criticality` model or weights. No network I/O, no AI/LLM. Evidence: 47 targeted tests (26 allowlist unit · 16 asset-inventory unit · 5 integration wiring) + ruff check/format + mypy + CI on Python 3.11 & 3.12 + secret scan. **Still not validated:** an operator-side run with a populated policy (no Docker-lab validation) and a corpus-level `suppress` pin (see 6.3 / coverage gap G10) |
 | 2.3 | VirusTotal v3 client: token bucket (4/min, 500/day), quota accounting, fake-server tests; response TTL cache | ✅ implemented · locally validated (no live run) | client: `httpx.MockTransport` fakes only; **TTL cache**: `enrichment_cache` table (migration `c7d8e9f0a1b2`) + `PersistentEnrichmentCache` — per-type TTLs per ARCHITECTURE §7.2 (6 h hashes / 1 h IPs / 1 h other), provider-scoped keys, definitive verdicts only (failures stay retryable), byte-identical replay, bounded (`max_entries`, soonest-expiring eviction), fail-open, **disabled by default** (`TRIAGE_ENRICHMENT_CACHE_ENABLED`), 61 targeted tests (24 cache unit · 19 provider-cache unit · 12 wiring/migration integration · 6 config); no live-provider run yet |
-| 2.4 | MISP client + `intel` compose profile + seeding guide | 🟡 client ✅ / profile ⬜ | `enrichment/misp.py` implemented and disabled by default; `misp/` is scaffolded only — no compose service, no seeding guide |
+| 2.4 | MISP client + `intel` compose profile + seeding guide | ✅ Implemented · statically validated (no live MISP run) | `enrichment/misp.py` (lookup-only `GET /attributes/restSearch`, sanitized provenance, disabled by default, Phase 2.3 cache preserved) + an optional `intel` compose profile — `misp-db` (`mariadb:10.11.19`), `misp-redis` (`valkey/valkey:7.2.14`), `misp-core`/`misp-nginx` (`ghcr.io/misp/misp-docker/*:v2.5.46`) plus a one-shot `misp-preflight` guard (`busybox:1.37.0`) — pinned, profile-gated, `soc-core`-only with **no host ports** (guard: no network), every credential from `.env` with no committed default, enforced by the guard via `service_completed_successfully` (no `${VAR:?}`: Compose interpolates the whole file before profile filtering, which would break the default stack), `triage-api` MISP vars still default-empty (disable-by-empty preserved). Deterministic seeding guide `misp/seeding.md` + pinned synthetic fixture `misp/fixtures/synthetic-events.json` (documentation ranges only, fixed UUIDs/timestamps, `to_ids: false`, unpublished) + read-only verification helper `misp/verify-lookups.sh`. Evidence: 57 targeted tests (29 profile/guide/fixture/guard static — including the executed `misp-preflight` guard in missing/partial/complete states · 27 MISP lookup contract: request shape, sanitization allow-list/caps, failure modes, cache wiring, secret safety, zero-external fallback · 1 integration MISP-outage fail-open) + the updated compose service/volume contract assertions + full suite + ruff + mypy + secret scan. **Still not validated:** MISP was never started (no Docker daemon in the sandbox) — no live lookup, seeding or UI import has been exercised |
 | 2.5 | Scoring v2 (`threat_intel` factor) + updated goldens | ⬜ outstanding | policy is still `scoring.v1` (7 factors); IOC verdicts do not yet add intel-specific points |
 | 2.6 | Late-enrichment background re-score | ⬜ outstanding | no re-score loop exists |
 | 2.7 | WF2 message includes IOC verdict table | 🟡 partial | WF2 renders IOC/enrichment summaries grouped by type; no separate per-provider verdict table |
@@ -140,8 +141,12 @@ policy change — **is met** by its 47 targeted tests + CI. 2.3's own gate — c
 default, definitive-verdicts-only caching, byte-identical replay, provider-scoped keys,
 quota savings without token consumption, fail-open on any cache failure, no scoring/decision
 policy change, recovery-safe migration — **is met** by its 61 targeted tests + CI (no
-live-provider run yet). The **phase** gate is **not** met, and stays dependent on the
-later deliverables: 2.4 (MISP profile + seeding), 2.5 (scoring v2 intel factor), and 2.6
+live-provider run yet). 2.4's own gate — profile-gated and absent from the default stack,
+pinned images, internal-only networking, env-only secrets, lookup-only request contract,
+fail-open and cache preservation, synthetic-only deterministic seed — **is met** by its
+57 targeted tests + CI, with the explicit caveat that no Docker/MISP instance was started
+(no live lookup or seeding is claimed). The **phase** gate is **not** met, and stays
+dependent on the later deliverables: 2.5 (scoring v2 intel factor) and 2.6
 (late-enrichment re-score).
 
 ---
@@ -550,7 +555,7 @@ deterministic seeds for any randomized behavior (jitter tests use seeded RNG).
 | Risk | Impact | Mitigation |
 | --- | --- | --- |
 | VirusTotal public quota exhausted mid-demo | enrichment gaps | non-blocking token bucket ✅ (an exhausted quota marks lookups `rate_limited` instead of stalling the pipeline) + `soc_triage_enrichment_provider_outcomes` counters; response TTL cache ✅ (repeat indicators served from `enrichment_cache` without consuming tokens; disabled by default); zero-intel fallback mode is a *feature* demo |
-| MISP docker stack is heavy and not yet containerized (RAM/time) | lab friction | optional profile by design, VT-only mode; document sizing when the profile lands |
+| MISP docker stack is heavy (RAM/time) | lab friction | optional `intel` profile by design and internal-only; VT-only mode still works; `misp/seeding.md` documents the workstation-sized limits, the 180 s first-boot health period, and the no-feeds/no-modules determinism choices |
 | External providers only ever tested with fake transports | live-API surprises | explicit status labelling (no live VT/MISP call is claimed anywhere) and a planned live smoke check |
 | n8n breaking API changes between versions | workflow imports fail | pin the n8n image tag; workflows exported per version; static/security tests in CI |
 | Wazuh integrator behaviour differs across 4.x minors | lost alerts | version pinned in compose; source-audited against the pinned image; live-validated once; ⬜ soak + failure-recovery runtime checks |
@@ -583,6 +588,5 @@ Recorded rather than hidden; each is a small docs-only follow-up.
 | `app/README.md` | Declares "Status: Phase 1E", which predates Phases 2–5. |
 | `docs/sample-alerts/README.md` | Documents `./scripts/send_test_alert`, which is not implemented. |
 | `CHANGELOG.md` | No Phase 5 entry yet (the evaluation framework is merged but undocumented there). |
-| `misp/README.md` | Describes the `intel` compose profile as landing "in Phase 2"; it is still ⬜ outstanding. |
 | `docs/detection-coverage.md` (gap G10) | Still states that "no allowlist provider/loader exists yet (Phase 2.2 outstanding)". Phase 2.2 is now ✅ implemented · locally validated; the residual, still-true part of G10 is that the evaluation corpus does not pin a `suppress` outcome. |
 | `CHANGELOG.md` | No Phase 2.2 entry yet (the static local policy work is merged but undocumented there). |
