@@ -6,6 +6,56 @@ semantic (`v0.1.0` targeted at the end of Phase 1).
 
 ## [Unreleased]
 
+### Added — Phase 2.5: deterministic scoring v2 (`threat_intel` factor) + updated goldens
+
+- **A threat-intelligence factor in the deterministic scoring engine** (ARCHITECTURE.md §8.2,
+  closing deliverable 2.5): `app/config/scoring.yaml` now reports `engine_version: scoring.v2`
+  and carries a `threat_intel` block (max 25) with per-provider weights — VirusTotal
+  `malicious >= 10 → 15`, `positive below 10 → 8`, `suspicious-only → 4`; MISP
+  `matched attribute/event → 10` plus a `+5` threat-actor tag bonus
+  (`apt`/`threat-actor`/`intrusion-set`). Awards are summed across indicators and capped at the
+  factor max, so a corroborated alert can now reach the critical band on intel evidence alone.
+- **The factor is evidence-only and stays pure.** `scoring/engine.py` reads nothing but the
+  *sanitized* `IOC.enrichment[provider]` payloads enrichment already attached
+  (`enrichment/threat_intel.py`'s `LookupRecord` shape), so scoring performs no I/O, no clock
+  read and no randomness exactly as before — no provider call, no raw upstream body, no new
+  failure surface. Every indicator is folded in sorted-key order with one award per provider per
+  indicator, so points, tier and explanation text are independent of enrichment order.
+- **Fail-safe by construction.** A provider that is disabled, absent, `error`, `timeout` or
+  `rate_limited` — or a payload with a malformed, missing or non-mapping `result`, a non-integer
+  or negative count, or an indicator type neither provider handles (email) — contributes 0. The
+  engine is total for any policy-shaped data, and the `RiskScorer` degraded fallback is unchanged.
+- **Explanation text cannot leak provider content** (SECURITY.md §7). The `detail` string quotes
+  aggregate counts, at most `detail_max_iocs` (3) indicator keys, and only tag values matching a
+  conservative character class; a tag that looks like payload text still earns its bonus but is
+  never quoted. MISP event ids are deliberately not reproduced.
+- **Backward compatibility is a tested contract, not a claim.** `threat_intel` is *optional* in
+  the policy schema: a policy without the block yields the original 7-factor `scoring.v1` set
+  byte-for-byte (asserted both at unit level — the bundled v2 policy minus its intel block
+  reproduces every v1 factor exactly, differing only by the intel award — and end-to-end, where
+  all 24 shipped sample alerts score identically to their pre-2.5 goldens because nothing in the
+  offline path attaches a payload). `evaluation/ground_truth.json` therefore needed **no** score
+  changes; the *contract* goldens were re-pinned deliberately (engine version and the ordered
+  factor set) in the ingest pipeline, explanation, evaluation and scoring-config suites.
+- **Fail-loud policy validation.** Intel bands must be monotonic (`high ≥ low ≥ suspicious-only`)
+  and every band must fit under the factor cap, so a typo in `scoring.yaml` cannot silently clip
+  an award or make the documented maximum unreachable; threat-actor tags are normalized to
+  lowercase and matched as an exact-or-`prefix:` form (so `apt:38` counts, `capture` does not).
+- **Explicitly not applied:** the §8.2 *rescaling* of the pre-existing weights
+  (40→30 · 15→10 · 25→20 · 20→15 · −20→−25) is a separate, consciously re-pinned golden change
+  and remains open; it is called out in ARCHITECTURE.md §8.2 and `scoring.yaml` rather than being
+  smuggled into this commit. Decision routing, tier bands and `enrichment_status` are untouched.
+- Evidence: 56 new targeted tests (`app/tests/unit/test_scoring_threat_intel.py` 52 · policy
+  schema/back-compat 3 in `test_scoring_config.py` · 1 offline pipeline golden in
+  `test_scoring_pipeline.py`), the re-pinned contract goldens, the full 1376-test suite,
+  ruff check/format, mypy, `scripts/check_secrets.sh` and the console JS tests. Documentation:
+  `ARCHITECTURE.md` (§8.2 status note, §5 example detail), `DEVELOPMENT_PLAN.md`, `README.md`,
+  `docs/detection-coverage.md`.
+- **Explicitly not claimed:** no live VirusTotal or MISP lookup was performed — intel verdicts are
+  exercised only as the sanitized payloads the fake-transport providers emit, and there was no
+  Docker-lab operator run with populated intel. Late-enrichment re-score (2.6) remains
+  outstanding.
+
 ### Added — Phase 2.4: MISP `intel` compose profile + deterministic seeding guide
 
 - **An optional, strictly additive `intel` compose profile** (closing deliverable 2.4):
@@ -60,8 +110,8 @@ semantic (`v0.1.0` targeted at the end of Phase 1).
   `ARCHITECTURE.md` (§7.3, §13), `DEVELOPMENT_PLAN.md`, `.env.example`.
 - **Explicitly not claimed:** no Docker/MISP instance was started (no Docker daemon in the
   development sandbox), so no live MISP lookup, seeding run, or UI import was exercised;
-  MISP was **not** live-validated. Scoring v2 (2.5) and late-enrichment re-score (2.6)
-  remain untouched.
+  MISP was **not** live-validated. Late-enrichment re-score (2.6) remains untouched; scoring v2
+  (2.5) is delivered by the entry above.
 
 ### Added — Phase 2.3: enrichment response TTL cache
 

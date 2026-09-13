@@ -120,7 +120,9 @@ cache, SQLite-backed, disabled by default) and 2.4 (MISP client contract + optio
 `intel` compose profile + deterministic synthetic seeding guide) are ✅ implemented ·
 locally/statically validated; the VirusTotal/MISP provider clients remain fake-transport
 tested (no live lookup); the scoring v2 intel factor and the late-enrichment re-score
-remain ⬜ outstanding.**
+2.5 (scoring v2 intel factor) is ✅ implemented · locally validated at payload level (no live
+VT/MISP run), with the §8.2 weight rescaling recorded as an explicit open item; only the
+late-enrichment re-score (2.6) remains ⬜ outstanding.**
 
 | # | Deliverable | Status | Evidence / gap |
 | --- | --- | --- | --- |
@@ -128,13 +130,15 @@ remain ⬜ outstanding.**
 | 2.2 | Allowlist + asset-inventory YAML loaders | ✅ Implemented · locally validated | deterministic, versioned, non-secret static policies — `app/config/allowlists.yaml` (`allowlist.v1`) and `app/config/asset_inventory.yaml` (`asset_inventory.v1`) — **validated fail-loud at load**, and loaded only when `TRIAGE_ALLOWLIST_PATH` / `TRIAGE_ASSET_INVENTORY_PATH` are set (empty path ⇒ disabled; the shipped files contain no entries). The `allowlist` provider registers in the chain **only when configured**; matching is on exact normalized indicators plus IPv4 CIDR; the provider's `enrichment_status` is always `skipped`, so local policy adds no intel points; the existing scoring `allowlist` (−20) factor and `suppress` decision route are consumed **unchanged** — no scoring- or decision-policy change. The asset inventory is a pure fill-only normalization seam (precedence `agent_id` → IP → name; source-provided fields always win) and does **not** alter the `asset_criticality` model or weights. No network I/O, no AI/LLM. Evidence: 47 targeted tests (26 allowlist unit · 16 asset-inventory unit · 5 integration wiring) + ruff check/format + mypy + CI on Python 3.11 & 3.12 + secret scan. **Still not validated:** an operator-side run with a populated policy (no Docker-lab validation) and a corpus-level `suppress` pin (see 6.3 / coverage gap G10) |
 | 2.3 | VirusTotal v3 client: token bucket (4/min, 500/day), quota accounting, fake-server tests; response TTL cache | ✅ implemented · locally validated (no live run) | client: `httpx.MockTransport` fakes only; **TTL cache**: `enrichment_cache` table (migration `c7d8e9f0a1b2`) + `PersistentEnrichmentCache` — per-type TTLs per ARCHITECTURE §7.2 (6 h hashes / 1 h IPs / 1 h other), provider-scoped keys, definitive verdicts only (failures stay retryable), byte-identical replay, bounded (`max_entries`, soonest-expiring eviction), fail-open, **disabled by default** (`TRIAGE_ENRICHMENT_CACHE_ENABLED`), 61 targeted tests (24 cache unit · 19 provider-cache unit · 12 wiring/migration integration · 6 config); no live-provider run yet |
 | 2.4 | MISP client + `intel` compose profile + seeding guide | ✅ Implemented · statically validated (no live MISP run) | `enrichment/misp.py` (lookup-only `GET /attributes/restSearch`, sanitized provenance, disabled by default, Phase 2.3 cache preserved) + an optional `intel` compose profile — `misp-db` (`mariadb:10.11.19`), `misp-redis` (`valkey/valkey:7.2.14`), `misp-core`/`misp-nginx` (`ghcr.io/misp/misp-docker/*:v2.5.46`) plus a one-shot `misp-preflight` guard (`busybox:1.37.0`) — pinned, profile-gated, `soc-core`-only with **no host ports** (guard: no network), every credential from `.env` with no committed default, enforced by the guard via `service_completed_successfully` (no `${VAR:?}`: Compose interpolates the whole file before profile filtering, which would break the default stack), `triage-api` MISP vars still default-empty (disable-by-empty preserved). Deterministic seeding guide `misp/seeding.md` + pinned synthetic fixture `misp/fixtures/synthetic-events.json` (documentation ranges only, fixed UUIDs/timestamps, `to_ids: false`, unpublished) + read-only verification helper `misp/verify-lookups.sh`. Evidence: 57 targeted tests (29 profile/guide/fixture/guard static — including the executed `misp-preflight` guard in missing/partial/complete states · 27 MISP lookup contract: request shape, sanitization allow-list/caps, failure modes, cache wiring, secret safety, zero-external fallback · 1 integration MISP-outage fail-open) + the updated compose service/volume contract assertions + full suite + ruff + mypy + secret scan. **Still not validated:** MISP was never started (no Docker daemon in the sandbox) — no live lookup, seeding or UI import has been exercised |
-| 2.5 | Scoring v2 (`threat_intel` factor) + updated goldens | ⬜ outstanding | policy is still `scoring.v1` (7 factors); IOC verdicts do not yet add intel-specific points |
+| 2.5 | Scoring v2 (`threat_intel` factor) + updated goldens | ✅ Implemented · locally validated | The policy is now `scoring.v2` and carries a **config-driven `threat_intel` factor** (`app/config/scoring.yaml`, max 25) implementing ARCHITECTURE.md §8.2's intel row exactly: per-indicator VirusTotal awards read from the *sanitized* `last_analysis_stats` payload (malicious ≥10 → 15 · positive-below-10 → 8 · suspicious-only → 4) plus MISP awards (matched attribute/event → 10, threat-actor tag → +5; `apt`/`threat-actor`/`intrusion-set`, prefix-matched so `apt:38` counts and `capture` does not), summed across indicators and capped at 25. **Pure and offline** — the engine reads only `IOC.enrichment[provider]` and never a live service, so ingest gains no I/O; unavailable intel (provider disabled, `error`/`timeout`/`rate_limited`), absent or malformed payloads and unhandled indicator types contribute 0, and no payload shape can raise. The factor is **optional in the schema**: a policy without the block keeps the 7-factor `scoring.v1` set byte-identically (asserted at unit *and* pipeline level). Determinism: indicators are folded in sorted-key order, one award per provider per indicator, so points, tier and explanation text are independent of enrichment order. Explanation safety: the detail quotes aggregate counts, at most `detail_max_iocs` (3) indicator keys, and only tag values matching a conservative shape — upstream free text (e.g. a log line smuggled into a MISP tag) can never reach a stored justification (SECURITY.md §7). Validation is fail-loud: bands must be monotonic and must fit under the factor cap. Goldens updated deliberately: `evaluation/ground_truth.json` scores are **unchanged** (no fixture carries an enrichment payload), while the response-contract goldens (`scoring.v1` → `scoring.v2`, 7 → 8 ordered factors) were re-pinned in the ingest, explanation, evaluation and scoring-config suites. **Explicitly not applied:** the §8.2 *rescaling* of the pre-existing weights (40→30 · 15→10 · 25→20 · 20→15 · −20→−25) — a separate golden change, still open. Evidence: 56 new targeted tests (52 factor unit · 3 policy-schema/back-compat unit · 1 offline pipeline golden) + the re-pinned contract goldens + the full 1376-test suite + ruff check/format + mypy + secret scan + console JS tests. **Still not validated:** no live VT/MISP run — intel verdicts are exercised only as the sanitized payloads the fake-transport providers emit, and no Docker-lab operator run with populated intel |
 | 2.6 | Late-enrichment background re-score | ⬜ outstanding | no re-score loop exists |
 | 2.7 | WF2 message includes IOC verdict table | 🟡 partial | WF2 renders IOC/enrichment summaries grouped by type; no separate per-provider verdict table |
 
-**Acceptance (not yet met):** VT outage/quota simulations never delay ingest beyond the
-budget and always mark `enrichment_status`; a MISP-matched sample alert scores per a new
-golden; quota usage observable. Fail-open behavior, token-bucket non-blocking behavior,
+**Acceptance (partly met):** VT outage/quota simulations never delay ingest beyond the
+budget and always mark `enrichment_status`; an intel-matched alert now scores per a **new
+golden** (2.5: `test_golden_matched_malware_alert_assessment` pins the full 8-factor `scoring.v2`
+assessment, and `test_offline_ingest_keeps_the_intel_factor_neutral` pins every shipped sample at
+intel 0); quota usage is observable. Fail-open behavior, token-bucket non-blocking behavior,
 and status marking are covered by tests today. 2.2's own gate — deterministic local policy
 load, fail-loud validation at load, disabled-by-default configuration, no scoring/decision
 policy change — **is met** by its 47 targeted tests + CI. 2.3's own gate — cache-disabled
@@ -146,8 +150,10 @@ pinned images, internal-only networking, env-only secrets, lookup-only request c
 fail-open and cache preservation, synthetic-only deterministic seed — **is met** by its
 57 targeted tests + CI, with the explicit caveat that no Docker/MISP instance was started
 (no live lookup or seeding is claimed). The **phase** gate is **not** met, and stays
-dependent on the later deliverables: 2.5 (scoring v2 intel factor) and 2.6
-(late-enrichment re-score).
+dependent on 2.6 (late-enrichment re-score). 2.5's own gate — deterministic,
+config-driven intel factor, sanitized-payload-only reads, fail-safe on unavailable intel,
+§8.2 weights, updated goldens, scoring still I/O-free and version-marked — **is met** by its
+56 targeted tests + CI, with the §8.2 weight *rescaling* left as a documented open item.
 
 ---
 
@@ -417,7 +423,7 @@ and regression tests only.**
 
 Plus: corpus label semantics defined and enforced (`positive` scenarios must never be
 suppressed; `negative` scenarios must never be actioned — `SCN-01` remains the documented
-UC-1 first-occurrence FN), harness assertions for the stable scoring.v1/decisions.v1
+UC-1 first-occurrence FN), harness assertions for the stable scoring.v2/decisions.v1
 contract (engine version, non-degraded factor set and order, decision reasons shape,
 severity consistency, offline `enrichment_status`), a replay-determinism test over the
 whole corpus, and recurrence boundary tests (2 occurrences and window ±1 s at unit level;
@@ -486,7 +492,7 @@ free-text/`full_log` similarity; any ML/LLM similarity score. Allowlisted indica
 excluded from evidence.
 
 **Deliberate scope limits (blind spots, not gaps in implementation):** correlation does not
-feed `scoring.v1`/`decisions.v1`; contexts have no lifecycle (no TTL sweeper — bounded growth
+feed `scoring.v2`/`decisions.v1`; contexts have no lifecycle (no TTL sweeper — bounded growth
 is a deployment concern); a context may span longer than one window when evidence chains
 transitively (each pairwise link stays window-bounded and carries its own evidence); contexts
 merge only when a *newly ingested alert* presents qualifying evidence bridging them
