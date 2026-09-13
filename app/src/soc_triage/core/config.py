@@ -162,6 +162,38 @@ class Settings(BaseSettings):
         alias="TRIAGE_ASSET_INVENTORY_PATH",
     )
 
+    # ------------------------------------------------------------------
+    # Phase 2.3 — enrichment response TTL cache
+    # ------------------------------------------------------------------
+    # SQLite-backed response cache for threat-intel lookups (ARCHITECTURE.md
+    # §7.2 step 2). Definitive verdicts (found / not_found) are replayed
+    # byte-identically until their per-type TTL expires, so repeat
+    # indicators never burn provider quota; a cache hit consumes no
+    # rate-limiter token. Errors/timeouts/rate-limited lookups are NEVER
+    # cached, so transient failures stay retryable. Disabled by default
+    # (Phase 2.2 convention); the cache is fail-open — any cache failure
+    # degrades to a normal lookup and can never break enrichment, scoring,
+    # or decisions (it never feeds them on its own).
+    triage_enrichment_cache_enabled: bool = Field(
+        default=False, alias="TRIAGE_ENRICHMENT_CACHE_ENABLED"
+    )
+    # Hard cap on cached rows; overflow evicts soonest-expiring entries.
+    triage_enrichment_cache_max_entries: int = Field(
+        default=4096, alias="TRIAGE_ENRICHMENT_CACHE_MAX_ENTRIES", ge=1
+    )
+    # TTL for MD5/SHA1/SHA256 verdicts — ARCHITECTURE.md §7.2 pins 6 h.
+    triage_enrichment_cache_hash_ttl_seconds: int = Field(
+        default=21600, alias="TRIAGE_ENRICHMENT_CACHE_HASH_TTL_SECONDS", ge=1
+    )
+    # TTL for IPv4 verdicts — ARCHITECTURE.md §7.2 pins 1 h.
+    triage_enrichment_cache_ipv4_ttl_seconds: int = Field(
+        default=3600, alias="TRIAGE_ENRICHMENT_CACHE_IPV4_TTL_SECONDS", ge=1
+    )
+    # TTL for types §7.2 does not pin explicitly (domain, URL, email).
+    triage_enrichment_cache_default_ttl_seconds: int = Field(
+        default=3600, alias="TRIAGE_ENRICHMENT_CACHE_DEFAULT_TTL_SECONDS", ge=1
+    )
+
     @property
     def cors_origins(self) -> list[str]:
         """Parse the comma-separated CORS origins into a clean list."""

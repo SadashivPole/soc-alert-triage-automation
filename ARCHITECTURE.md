@@ -346,16 +346,23 @@ provenance.
 - Optional sources auto-disable when their env keys are empty — the system must run fully
   functional (scoring v1) with **zero external services**.
 
-**Phase 1E status of this subsystem:** extraction (§7.1) and the provider interface are
-implemented; steps 1–4 below are **not**. Providers implement the runtime-checkable
-`soc_triage.enrichment.providers.EnrichmentProvider` protocol (`name`, `enabled`,
-`enrich(iocs, *, context) → ProviderEnrichment`); `EnrichmentChain` runs them in
-registration order, merges payloads per indicator, and aggregates
-`enrichment_status: complete|partial|failed|skipped`. A provider that raises is recorded
-as `failed` (exception *type* only, never its message) and skipped — enrichment never
-blocks ingestion. The only registered provider today is the offline, disabled-by-default
-`NoOpEnrichmentProvider`, so VirusTotal/MISP lookups arrive in Phase 2 without changing
-the orchestration.
+**Implementation status of this subsystem (updated through Phase 2.3):** extraction
+(§7.1) and the provider interface are implemented. Of steps 1–4 above: step 1 (allowlist)
+is implemented as the Phase 2.2 static policy provider (registered only when
+`TRIAGE_ALLOWLIST_PATH` is set); step 2 (local cache) is the Phase 2.3 response TTL
+cache (`enrichment_cache` table, per-type TTLs — 6 h hashes / 1 h IPs / 1 h other types
+— provider-scoped keys, definitive verdicts only, byte-identical replay, bounded with
+soonest-expiring eviction, fail-open, **disabled by default** via
+`TRIAGE_ENRICHMENT_CACHE_ENABLED`, consulted before the rate limiter so hits consume no
+quota); steps 3–4 (VirusTotal v3, MISP) are implemented as HTTP providers exercised only
+with fake transports and disabled by default (empty key/URL ⇒ never called). Providers
+implement the runtime-checkable `soc_triage.enrichment.providers.EnrichmentProvider`
+protocol (`name`, `enabled`, `enrich(iocs, *, context) → ProviderEnrichment`);
+`EnrichmentChain` runs them in registration order, merges payloads per indicator, and
+aggregates `enrichment_status: complete|partial|failed|skipped`. A provider that raises
+is recorded as `failed` (exception *type* only, never its message) and skipped —
+enrichment never blocks ingestion. With no intel keys configured the registered chain
+still performs zero external calls and reports `enrichment_status: skipped`.
 
 ---
 

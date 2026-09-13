@@ -37,6 +37,12 @@ from ..models.ioc import (
     ioc_key,
     ioc_sort_key,
 )
+from .cache import (
+    CACHEABLE_STATUSES,
+    CacheStats,
+    EnrichmentCachePolicy,
+    PersistentEnrichmentCache,
+)
 from .chain import EnrichmentChain, EnrichmentOutcome, ProviderOutcome
 from .extractor import extract_iocs, extract_iocs_from_text
 from .misp import MISPProvider
@@ -55,18 +61,22 @@ from .providers import (
 from .threat_intel import (
     LookupRecord,
     LookupStatus,
+    ResponseCache,
     RetryConfig,
     TokenBucket,
 )
 from .virustotal import VirusTotalProvider
 
 __all__ = [
+    "CACHEABLE_STATUSES",
     "DEFAULT_IOC_POLICY",
     "DOCUMENTATION_IPV4_NETWORKS",
     "EXTRACTOR_TEXT_SCAN",
     "EXTRACTOR_TYPED_FIELD",
     "HASH_LENGTHS",
     "IOC",
+    "CacheStats",
+    "EnrichmentCachePolicy",
     "EnrichmentChain",
     "EnrichmentContext",
     "EnrichmentOutcome",
@@ -79,8 +89,10 @@ __all__ = [
     "LookupStatus",
     "MISPProvider",
     "NoOpEnrichmentProvider",
+    "PersistentEnrichmentCache",
     "ProviderEnrichment",
     "ProviderOutcome",
+    "ResponseCache",
     "RetryConfig",
     "TokenBucket",
     "VirusTotalProvider",
