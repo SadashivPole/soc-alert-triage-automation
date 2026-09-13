@@ -14,9 +14,11 @@ workflows, and a Docker lab.
 > validated** — Phase 2.2 (static local policy wiring: allowlist `allowlist.v1` + asset
 > inventory `asset_inventory.v1`, deterministic local wiring, disabled by default) and
 > Phase 2.3 (enrichment response TTL cache: SQLite-backed, per-type TTLs, disabled by
-> default) are implemented · locally validated (automated tests + CI), while the
-> remaining Phase 2 enrichment items (scoring v2 intel factor, late-enrichment
-> re-score) are still outstanding, while the optional MISP `intel` compose profile and
+> default) are implemented · locally validated (automated tests + CI), and Phase 2.5
+> (deterministic `scoring.v2`: a config-driven `threat_intel` factor over the sanitized
+> VT/MISP verdicts, goldens re-pinned) is implemented · locally validated (payload-level,
+> no live intel run); only the late-enrichment re-score (2.6) remains outstanding. The
+> optional MISP `intel` compose profile and
 > its deterministic synthetic seeding guide (Phase 2.4) are implemented and statically
 > validated (not live-started in CI — no Docker daemon in the dev sandbox). **Phase 3** remains
 > implemented with named items outstanding; **Phase 4 (real Wazuh integration)** is
@@ -28,7 +30,7 @@ workflows, and a Docker lab.
 > [DEVELOPMENT_PLAN.md](DEVELOPMENT_PLAN.md).
 >
 > The **authoritative triage path is deterministic**: alert → ingest → normalize → dedupe
-> → enrich → **deterministic risk scoring (`scoring.v1`)** → **deterministic decision
+> → enrich → **deterministic risk scoring (`scoring.v2`)** → **deterministic decision
 > routing (`decisions.v1`)** → incident / notification / audit. Every score ships a
 > factor-by-factor human-readable justification.
 >
@@ -161,7 +163,7 @@ flowchart LR
     subgraph triage["Triage API — Python / FastAPI"]
         IN["Ingest & normalize\n+ dedupe"]
         ER["Enrichment\n(VirusTotal, MISP,\nallowlist, fail-open)"]
-        SC["Deterministic risk scoring\n(scoring.v1 + justifications)"]
+        SC["Deterministic risk scoring\n(scoring.v2 + justifications)"]
         DE["Deterministic decision engine\n(route / incident /\nsuppress)"]
         DB[("SQLite → PostgreSQL\nplanned\nalerts · incidents · audit")]
     end
@@ -189,7 +191,7 @@ human-authored heuristic participates in the numeric score or the routing decisi
 
 | Layer | Where it lives | Behavior |
 | --- | --- | --- |
-| Scoring policy | [`app/config/scoring.yaml`](app/config/scoring.yaml) — `engine_version: scoring.v1` | Schema-validated, versioned, reviewable diff. Seven capped factors: `rule_severity` (0–40), `rule_groups_mitre` (0–15), `asset_criticality` (0–25), `recurrence_velocity` (0–20), `ioc_evidence` (0–15), `enrichment_status` (0–5), `allowlist` (−20). Score is clamped to 0–100 with `informational / low / medium / high / critical` tier bands. |
+| Scoring policy | [`app/config/scoring.yaml`](app/config/scoring.yaml) — `engine_version: scoring.v2` | Schema-validated, versioned, reviewable diff. Eight capped factors: `rule_severity` (0–40), `rule_groups_mitre` (0–15), `asset_criticality` (0–25), `recurrence_velocity` (0–20), `ioc_evidence` (0–15), `enrichment_status` (0–5), `threat_intel` (0–25) and `allowlist` (−20). `threat_intel` awards VT/MISP verdicts on the indicators (malicious ≥10 → 15 · positive-below-10 → 8 · suspicious-only → 4 · MISP event match → 10 · threat-actor tag → +5, capped at 25) from the **sanitized enrichment payloads only** — never a live lookup — and scores 0 when intel is unavailable. The block is optional: without it the engine emits the 7-factor `scoring.v1` set unchanged. Score is clamped to 0–100 with `informational / low / medium / high / critical` tier bands. |
 | Scoring engine | [`app/src/soc_triage/scoring/engine.py`](app/src/soc_triage/scoring/engine.py) | **Pure function**, no I/O, no clock, no network: the same alert + policy always yields the same score, tier, factor breakdown, and summary text. Unavailable enrichment contributes 0 (fail-safe). |
 | Decision policy | [`app/config/decisions.yaml`](app/config/decisions.yaml) — `policy_version: decisions.v1` | Tier → action matrix: `informational`/`low` → `monitor`, `medium` → `queue_l1`, `high` → `open_incident` (`SEV2`), `critical` → `open_incident` (`SEV1`), allowlisted source → `suppress`. |
 | Decision engine | [`app/src/soc_triage/decisions/router.py`](app/src/soc_triage/decisions/router.py) | Pure function over `(RiskAssessment, CanonicalAlert, DecisionPolicy)`; returns the action, optional severity, and human-readable reasons. **It performs no response action** — containment is a proposal that requires explicit analyst approval and is audit-logged. |
@@ -296,9 +298,11 @@ Status markers describe the current tree.
    factor and `suppress` route, reporting `enrichment_status: skipped` so it never adds
    intel points. Both are loaded only when `TRIAGE_ALLOWLIST_PATH` /
    `TRIAGE_ASSET_INVENTORY_PATH` point at a policy file; neither performs network I/O.
-   Outstanding: scoring v2 threat-intel factor, late-enrichment re-score.
+   Outstanding: late-enrichment re-score (2.6).
 4.  **Score** — deterministic engine computes 0–100, a tier, and a factor-by-factor
-   justification list; weights live in the versioned config file.
+   justification list; weights live in the versioned config file. Phase 2.5 adds the
+   `threat_intel` factor: it folds the sanitized VT/MISP verdicts attached to indicators
+   into intel-specific points (scoring stays I/O-free, and unavailable intel scores 0).
 5.  **Decide & route** — per the decision matrix: open incident (`SEV1`/`SEV2`), queue
    for L1, monitor, or suppress allowlisted sources. No autonomous response action.
 6.  **Notify** — the API calls an n8n webhook; n8n fans out to email (Mailpit sink in
@@ -351,7 +355,7 @@ soc-alert-triage-automation/
 ├── app/                       # Triage API (Python/FastAPI)
 │   ├── src/soc_triage/        # api · core · models · ingest · enrichment · scoring · decisions · notifications
 │   ├── console/               # static SOC console (Phase 3.5): index.html · styles.css · console.js · console-core.js
-│   ├── config/                # scoring.yaml (scoring.v1) · decisions.yaml (decisions.v1)
+│   ├── config/                # scoring.yaml (scoring.v2) · decisions.yaml (decisions.v1)
 │   ├── alembic/               # migrations
 │   └── tests/                 # unit/ · integration/ · evaluation/ · js/ · fixtures/
 ├── evaluation/                # Phase 5 evaluation: corpus.json · ground_truth.json · metrics.py · evaluator.py
@@ -466,7 +470,7 @@ Full detail, acceptance criteria, and evidence per phase:
 | --- | --- | --- | --- |
 | **Phase 0 — Foundation** | Docs & scaffolding |  implemented · locally validated | ARCHITECTURE, DEVELOPMENT_PLAN, SECURITY, CONTRIBUTING, README, `.env.example`, directory tree, `check_secrets.sh` |
 | **Phase 1 — MVP triage pipeline** | Core triage loop |  implemented · locally validated | FastAPI app, ingest + normalize + dedupe, SQLite models + Alembic, scoring v1, decisions v1, n8n webhook client, compose (API+n8n+Mailpit), unit/integration tests.  `scripts/send_test_alert` simulator not implemented |
-| **Phase 2 — Enrichment & threat intelligence** | Threat intel |  partially validated | Phase 2.2 static local policies implemented · locally validated: allowlist `allowlist.v1` + asset inventory `asset_inventory.v1`, deterministic local wiring, disabled by default, 47 targeted tests; Phase 2.3 enrichment response TTL cache implemented · locally validated (SQLite-backed, 6 h hash / 1 h IP TTLs, disabled by default, fail-open, 61 targeted tests); VirusTotal + MISP provider clients implemented but exercised only with fake HTTP transports (no live lookup recorded), plus IOC extractor, fail-open chain, rate limiting/retries; Phase 2.4 MISP `intel` compose profile + deterministic synthetic seeding guide implemented and statically validated (pinned images, internal-only, secrets from env, lookup-only); ⬜ scoring v2 threat-intel factor, late-enrichment re-score |
+| **Phase 2 — Enrichment & threat intelligence** | Threat intel |  partially validated | Phase 2.2 static local policies implemented · locally validated: allowlist `allowlist.v1` + asset inventory `asset_inventory.v1`, deterministic local wiring, disabled by default, 47 targeted tests; Phase 2.3 enrichment response TTL cache implemented · locally validated (SQLite-backed, 6 h hash / 1 h IP TTLs, disabled by default, fail-open, 61 targeted tests); VirusTotal + MISP provider clients implemented but exercised only with fake HTTP transports (no live lookup recorded), plus IOC extractor, fail-open chain, rate limiting/retries; Phase 2.4 MISP `intel` compose profile + deterministic synthetic seeding guide implemented and statically validated (pinned images, internal-only, secrets from env, lookup-only); Phase 2.5 deterministic `scoring.v2` `threat_intel` factor implemented · locally validated (sanitized-payload driven, fail-safe, 56 targeted tests, goldens re-pinned); ⬜ late-enrichment re-score |
 | **Phase 3 — Incidents, analyst workflow & observability** | Analyst loop |  partially validated | Incidents (3.1), lifecycle + feedback (3.2), read APIs + timeline (3.3), TTL sweeper (3.4), static console (3.5), runbooks (3.6), Prometheus `/metrics` + optional Grafana (3.7);  Postgres profile (3.8), stats endpoints + digest (3.9) |
 | **Phase 4 — Real Wazuh integration & approved response** | Full integration |  partially validated | Source-audited + live-validated `full` profile and `custom-triage` integrator (4.1/4.2), agent enrollment validated (4.4), custom rules/decoders authored (4.3, not live-validated);  approval/containment runbook (4.5), TheHive CE export (4.6), failure-spool + duplicate-delivery runtime checks and 10k/day soak (4.7) |
 | **Phase 5 — Deterministic detection evaluation** | Detection quality measurement |  implemented · locally validated | Labeled corpus, ground truth, confusion matrix, precision/recall/F1/FPR, runtime evaluation tests replaying fixtures through the real ingest path |
@@ -589,7 +593,9 @@ docker compose --profile intel up -d          # + self-hosted MISP (internal onl
 Consolidated, evidence-based view of where the project really stands.
 
 ** Implemented and locally validated (automated tests, CI):** ingest/normalize/dedupe,
-SQLite persistence + migrations, audit log, deterministic scoring `scoring.v1`,
+SQLite persistence + migrations, audit log, deterministic scoring `scoring.v2`
+(Phase 2.5: `threat_intel` factor over sanitized VT/MISP verdicts, config-driven,
+fail-safe on unavailable intel, 56 targeted tests),
 deterministic decisions `decisions.v1`, the **Phase 2.2 static local policies** (allowlist
 `allowlist.v1` + asset inventory `asset_inventory.v1` — deterministic local file loading
 and matching, disabled by default, 47 targeted unit/integration tests; automated tests +
@@ -632,9 +638,10 @@ have not been exercised against a live rule match**.
 - **Observability** — runtime-validated for Phase 3.7, with the post-Phase-4 `/metrics`
   hygiene re-check outstanding.
 
-** Outstanding (scoped, not done):** `scripts/send_test_alert` simulator; scoring v2
-threat-intel factor;
-late-enrichment re-score; PostgreSQL profile; stats endpoints + daily digest workflow
+** Outstanding (scoped, not done):** `scripts/send_test_alert` simulator;
+late-enrichment re-score; the ARCHITECTURE.md §8.2 `scoring.v2` weight *rescaling*
+(the intel factor itself is implemented; the pre-existing weights are unchanged);
+PostgreSQL profile; stats endpoints + daily digest workflow
 (WF6); runbook linkage from decisions; TheHive CE export; containment approval/response
 runbook; Phase 4 failure-spool, duplicate-delivery, `/metrics` hygiene, and 10k
 alerts/day soak validations; CI coverage threshold and nightly compose smoke job.

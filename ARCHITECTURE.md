@@ -215,7 +215,7 @@ stateDiagram-v2
       { "name": "rule_severity", "points": 26, "max": 30,
         "detail": "Wazuh level 5 → band 5-6" },
       { "name": "threat_intel", "points": 19, "max": 25,
-        "detail": "VT malicious=38/70; MISP event 1024 tags: apt" }
+        "detail": "Virustotal: 1 indicator(s) with malicious verdicts [sha256:23b3c564…], max 38 engine(s) flagging; MISP: 1 indicator(s) matched events [ipv4:203.0.113.50]; threat-actor tags apt → 19/25" }
     ]
   },
   "decision": { "action": "open_incident", "severity": "SEV2",
@@ -396,6 +396,18 @@ change, and every change is a reviewable diff.
 | `recurrence_velocity` | 15 | as above |
 | `threat_intel` | 25 | VT: malicious≥10→15 · 2–9→8 · suspicious-only→4. MISP: event match→10, `apt`/threat-actor tag→+5 (factor cap 25) |
 | `allowlist_modifier` | −25 | as above |
+
+**Status (Phase 2.5).** The `threat_intel` factor above is **implemented**: the shipped policy
+carries it with exactly these weights (VT ≥10→15 · positive-below-10→8 · suspicious-only→4 ·
+MISP event match→10, threat-actor tag +5; factor cap 25) and reports `scoring.v2`. It reads
+only the sanitized `IOC.enrichment[provider]` payloads (never a live service), sums
+per-indicator awards across both providers, and contributes 0 whenever intel is unavailable or
+malformed — so scoring stays pure and fail-safe (§16). The factor is optional in the schema: a
+policy without the `threat_intel` block keeps the 7-factor §8.1 set unchanged, which is what
+keeps every pre-2.5 assessment interpretable. The **rescaling** of the other weights in this
+table (40→30 · 15→10 · 25→20 · 20→15 · −20→−25) is deliberately **not** applied yet: it is a
+separate, consciously re-pinned golden change, so `scoring.v2` currently combines the §8.1
+weights with the new factor.
 
 ### 8.3 Tiers & output
 

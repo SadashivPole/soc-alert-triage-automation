@@ -2,8 +2,15 @@
 # Non-secret, versioned, schema-validated on load. Tuning this file is a
 # reviewable diff; changing a weight here changes the scores the golden tests
 # pin, so any edit must be accompanied by an intentional golden update.
+#
+# scoring.v2 = scoring.v1's six evidence factors and the allowlist modifier,
+# plus the Phase 2.5 `threat_intel` factor. The pre-2.5 weights are
+# intentionally NOT rescaled yet: the ARCHITECTURE.md §8.2 rescaling
+# (rule_severity 40→30 etc.) is a separate, deliberate golden change and is
+# still open. Bumping the version here records the real contract change — one
+# more factor in every assessment.
 
-engine_version: scoring.v1
+engine_version: scoring.v2
 
 # Wazuh rule.level → points (band map). Levels outside all bands score 0.
 rule_severity:
@@ -64,6 +71,35 @@ enrichment_status:
     partial: 2
     skipped: 0
     failed: 0
+
+# Threat-intelligence verdicts (Phase 2.5). Reads ONLY the sanitized provider
+# payloads enrichment already attached to indicators — no live lookups here,
+# and no network I/O. Per-indicator awards from both providers are summed and
+# capped at `max`; a disabled/failed/timed-out/rate-limited lookup scores 0, so
+# an intel outage can only lower this factor, never corrupt it (§16).
+# Deleting the whole block reverts the engine to the 7-factor scoring.v1 set.
+threat_intel:
+  max: 25
+  # Bounds the factor explanation: at most this many indicator keys are quoted
+  # (the points are always computed over every indicator).
+  detail_max_iocs: 3
+  # Indicator types the intel providers can answer for (email is never looked
+  # up); other indicators are skipped without inspection.
+  handled_types: [ipv4, domain, url, md5, sha1, sha256]
+  # VirusTotal `last_analysis_stats` bands (provider key: IOC.enrichment.virustotal).
+  virustotal:
+    provider: virustotal
+    malicious_high_min: 10   # malicious >= 10 → malicious_high_points
+    malicious_high_points: 15
+    malicious_low_points: 8  # any positive count below the high band → 8
+    suspicious_min: 1
+    suspicious_only_points: 4  # no malicious verdicts, suspicious >= 1 → 4
+  # MISP attribute matches (provider key: IOC.enrichment.misp).
+  misp:
+    provider: misp
+    event_match_points: 10       # at least one matched attribute/event
+    threat_actor_bonus_points: 5 # plus a threat-actor tag on that match
+    threat_actor_tags: [apt, threat-actor, intrusion-set]
 
 # Subtract points when a source is allowlisted (floor at 0 overall).
 allowlist:

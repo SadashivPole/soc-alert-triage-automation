@@ -177,7 +177,7 @@ pinned as a machine-readable, test-validated discrepancy
 (`known_discrepancies` → `G5`, status `recorded-unresolved`) in the registry,
 and the validation test fails if either source changes without the record
 being updated — or if the record is removed while the conflict persists.
-There is **no scoring impact**: `scoring.v1` counts ATT&CK *presence* only (the
+There is **no scoring impact**: the scoring engine counts ATT&CK *presence* only (the
 `rule_groups_mitre` factor); technique identity never influences a score,
 tier, or action. Resolving the conflict requires a deliberate change to one of
 the two source files, accompanied by updates to the registry, the detection

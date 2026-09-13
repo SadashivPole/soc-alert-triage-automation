@@ -21,7 +21,7 @@ from uuid import UUID
 
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import sessionmaker
-from tests.conftest import TEST_INGEST_KEY
+from tests.conftest import TEST_INGEST_KEY, V2_FACTOR_NAMES
 
 from soc_triage.db.session import session_scope
 from soc_triage.models.repositories import AlertRepository, AuditRepository
@@ -64,17 +64,9 @@ def test_ingest_response_carries_score_and_decision(client: TestClient) -> None:
     risk = body["risk"]
     assert risk["score"] == 43
     assert risk["tier"] == "low"
-    assert risk["engine_version"] == "scoring.v1"
+    assert risk["engine_version"] == "scoring.v2"
     assert risk["degraded"] is False
-    assert {f["name"] for f in risk["factors"]} == {
-        "rule_severity",
-        "rule_groups_mitre",
-        "asset_criticality",
-        "recurrence_velocity",
-        "ioc_evidence",
-        "enrichment_status",
-        "allowlist_modifier",
-    }
+    assert [f["name"] for f in risk["factors"]] == list(V2_FACTOR_NAMES)
     assert risk["summary"]
 
     decision = body["decision"]
@@ -104,6 +96,27 @@ def test_fim_critical_asset_scores_medium_and_queues_l1(client: TestClient) -> N
     assert body["risk"]["score"] == 63
     assert body["risk"]["tier"] == "medium"
     assert body["decision"]["action"] == "queue_l1"
+
+
+def test_offline_ingest_keeps_the_intel_factor_neutral(client: TestClient) -> None:
+    """Phase 2.5 through the real pipeline with **no** intel configured.
+
+    Nothing contacts a provider, so every indicator carries no VT/MISP payload
+    and the new factor must be present-but-neutral for *every* sample: the
+    scoring.v2 goldens equal their scoring.v1 values exactly (backward
+    compatibility is enforced end-to-end, not just at unit level).
+    """
+    for path in sorted(FIXTURES_DIR.glob("*.json")):
+        body = _ingest(client, _load_sample(path.name))
+        names = [f["name"] for f in body["risk"]["factors"]]
+        assert names == list(V2_FACTOR_NAMES), path.name
+        intel = next(f for f in body["risk"]["factors"] if f["name"] == "threat_intel")
+        assert intel["points"] == 0, path.name
+        assert intel["max"] == 25, path.name
+        assert body["normalized"]["enrichment_status"] == "skipped", path.name
+        assert body["risk"]["engine_version"] == "scoring.v2", path.name
+        # Detail text never leaks provider payload content.
+        assert "full_log" not in intel["detail"]
 
 
 def test_every_sample_alert_scores_within_0_100(client: TestClient) -> None:

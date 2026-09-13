@@ -9,7 +9,7 @@ fallback. No external services are involved — the engine is pure.
 from __future__ import annotations
 
 import pytest
-from tests.conftest import make_canonical_alert, make_ioc
+from tests.conftest import V2_FACTOR_NAMES, make_canonical_alert, make_ioc
 
 from soc_triage.models.assessment import RiskTier, ScoreFactor
 from soc_triage.models.canonical import CanonicalAlert
@@ -368,20 +368,12 @@ def test_every_factor_has_a_non_empty_explanation() -> None:
         enrichment_status="partial",
     )
     result = score_alert(alert, policy=POLICY)
-    assert {f.name for f in result.factors} == {
-        "rule_severity",
-        "rule_groups_mitre",
-        "asset_criticality",
-        "recurrence_velocity",
-        "ioc_evidence",
-        "enrichment_status",
-        "allowlist_modifier",
-    }
+    assert [f.name for f in result.factors] == list(V2_FACTOR_NAMES)
     for factor in result.factors:
         assert factor.detail.strip(), factor.name
     assert result.summary
     assert f"Score {result.score}" in result.summary
-    assert result.engine_version == "scoring.v1"
+    assert result.engine_version == POLICY.engine_version
 
 
 def test_result_is_frozen() -> None:
@@ -420,12 +412,4 @@ def test_risk_scorer_returns_normal_result_when_healthy() -> None:
     scorer = RiskScorer(POLICY)
     result = scorer.score(make_canonical_alert(asset_tier="tier-1"))
     assert result.degraded is False
-    assert set(f.name for f in result.factors) == {
-        "rule_severity",
-        "rule_groups_mitre",
-        "asset_criticality",
-        "recurrence_velocity",
-        "ioc_evidence",
-        "enrichment_status",
-        "allowlist_modifier",
-    }
+    assert [f.name for f in result.factors] == list(V2_FACTOR_NAMES)

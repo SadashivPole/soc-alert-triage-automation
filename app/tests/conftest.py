@@ -31,6 +31,27 @@ from soc_triage.models.ioc import IOC, IOCType
 TEST_INGEST_KEY = "test-ingest-key-not-a-real-secret"
 TEST_CALLBACK_TOKEN = "test-callback-token-not-a-real-secret"
 
+#: The pre-Phase-2.5 factor set (``scoring.v1``). Policies that do not
+#: configure ``threat_intel`` must keep emitting exactly these, in this order —
+#: the backward-compatibility contract of the 2.5 change.
+LEGACY_FACTOR_NAMES: tuple[str, ...] = (
+    "rule_severity",
+    "rule_groups_mitre",
+    "asset_criticality",
+    "recurrence_velocity",
+    "ioc_evidence",
+    "enrichment_status",
+    "allowlist_modifier",
+)
+
+#: The ``scoring.v2`` factor order: the legacy set with the intel factor
+#: inserted before the subtractive allowlist modifier (ARCHITECTURE.md §8.2).
+V2_FACTOR_NAMES: tuple[str, ...] = (
+    *LEGACY_FACTOR_NAMES[:6],
+    "threat_intel",
+    "allowlist_modifier",
+)
+
 
 def make_canonical_alert(
     *,
@@ -106,18 +127,76 @@ def make_ioc(
     *,
     type: IOCType = IOCType.IPV4,
     allowlisted: bool = False,
+    enrichment: dict | None = None,
 ) -> IOC:
-    """Build an indicator, optionally marked allowlisted."""
-    enrichment: dict = {}
+    """Build an indicator, optionally marked allowlisted.
+
+    ``enrichment`` merges provider payloads (Phase 2.5 scoring consumes the
+    ``virustotal`` / ``misp`` entries) on top of the allowlist marker, so a
+    test can attach intel verdicts without touching provider internals.
+    """
+    payload: dict = {}
 
     if allowlisted:
-        enrichment = {"allowlist": {"matched": True}}
+        payload = {"allowlist": {"matched": True}}
+    if enrichment:
+        payload = {**payload, **enrichment}
 
     return IOC(
         type=type,
         value=value,
-        enrichment=enrichment,
+        enrichment=payload,
     )
+
+
+def make_vt_payload(
+    *,
+    malicious: int = 0,
+    suspicious: int = 0,
+    harmless: int = 0,
+    undetected: int = 0,
+    lookup_status: str = "found",
+) -> dict:
+    """A VirusTotal lookup record shaped exactly like the provider's output.
+
+    Mirrors ``enrichment/threat_intel.py``'s :class:`LookupRecord` JSON dump
+    (provider / indicator_type / lookup_status / timestamp / sanitized
+    ``result``) so scoring tests exercise the real payload contract.
+    """
+    return {
+        "provider": "virustotal",
+        "indicator_type": "sha256",
+        "lookup_status": lookup_status,
+        "timestamp": "2026-08-29T10:15:00+00:00",
+        "result": {
+            "malicious": malicious,
+            "suspicious": suspicious,
+            "harmless": harmless,
+            "undetected": undetected,
+            "reputation": -1 if malicious else 0,
+        },
+    }
+
+
+def make_misp_payload(
+    *,
+    match_count: int = 1,
+    event_ids: list[str] | None = None,
+    tags: list[str] | None = None,
+    lookup_status: str = "found",
+) -> dict:
+    """A MISP lookup record shaped exactly like the provider's output."""
+    return {
+        "provider": "misp",
+        "indicator_type": "ipv4",
+        "lookup_status": lookup_status,
+        "timestamp": "2026-08-29T10:15:00+00:00",
+        "result": {
+            "match_count": match_count,
+            "event_ids": sorted(event_ids or [])[:5],
+            "tags": sorted(set(tags or []))[:5],
+        },
+    }
 
 
 @pytest.fixture
