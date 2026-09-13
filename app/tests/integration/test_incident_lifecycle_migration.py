@@ -36,7 +36,7 @@ from soc_triage.main import create_app
 from soc_triage.models.repositories import IncidentRepository
 
 PREVIOUS_REVISION = "d4e5f6a7b8c9"  # Phase 3.1 head
-HEAD_REVISION = "f9a0b1c2d3e4"  # current migration head (Phase 6.4)
+HEAD_REVISION = "c7d8e9f0a1b2"  # current migration head (Phase 2.3 enrichment cache)
 
 ALERT_ID = "00000000-0000-0000-0000-000000000001"
 INCIDENT_ID = "INC-2026-08-29-0001"

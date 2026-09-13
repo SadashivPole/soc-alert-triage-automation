@@ -6,6 +6,57 @@ semantic (`v0.1.0` targeted at the end of Phase 1).
 
 ## [Unreleased]
 
+### Added — Phase 2.3: enrichment response TTL cache
+
+- **A SQLite-backed response cache for threat-intel lookups** (ARCHITECTURE.md §7.2
+  step 2, closing the last outstanding item of deliverable 2.3): new
+  `app/src/soc_triage/enrichment/cache.py` (`EnrichmentCachePolicy`, `CacheStats`,
+  `PersistentEnrichmentCache`) and a new `enrichment_cache` table (migration
+  `c7d8e9f0a1b2`, recovery-safe in the same style as `f9a0b1c2d3e4`).
+- **Semantics, as designed in ARCHITECTURE.md §7.2:**
+  - per-type TTLs pinned to the architecture — **6 h for MD5/SHA1/SHA256, 1 h for
+    IPv4, 1 h for the types §7.2 does not pin (domain/URL/email)** — configurable via
+    `TRIAGE_ENRICHMENT_CACHE_{HASH,IPV4,DEFAULT}_TTL_SECONDS`;
+  - **definitive verdicts only**: `found` / `not_found` are cached; `error` /
+    `timeout` / `rate_limited` are never cached, so transient failures stay retryable;
+  - **byte-identical replay**: a hit returns the stored sanitized `LookupRecord`
+    unchanged — including its original timestamp; freshness is measured from the
+    original lookup time, so a restored database never extends a verdict's validity;
+  - **provider-scoped keys** `(provider, indicator_type, indicator_value)`: a
+    VirusTotal verdict is never served for a MISP lookup;
+  - **quota savings**: the cache is consulted *before* the token bucket, so a hit
+    issues zero outbound requests and consumes zero rate-limiter tokens;
+  - **bounded**: `TRIAGE_ENRICHMENT_CACHE_MAX_ENTRIES` (default 4096); overflow evicts
+    soonest-expiring entries deterministically (`expires_at`, then `id`);
+  - **fail-open**: any database failure degrades to a normal lookup (counted under
+    `stats.failures`, logged by exception *type* only); malformed stored payloads
+    self-heal to a miss; the provider additionally guards the cache contract.
+- **Disabled by default** (`TRIAGE_ENRICHMENT_CACHE_ENABLED`, Phase 2.2 convention):
+  with the flag off, the providers keep the pre-2.3 path byte-for-byte, and the
+  zero-external fallback is unchanged. The table schema migrates regardless (the flag
+  gates *use*, not schema). Only sanitized records and normalized indicator values are
+  stored — never raw upstream bodies, never API keys (SECURITY.md §2, §5, §7).
+- **Wiring:** the same cache instance is shared by the VirusTotal and MISP providers;
+  `app.state.enrichment_cache` exposes it; provider notes report
+  `"<provider>: N served from cache"` and the lookup log event gains `cache_hits` /
+  `outbound_lookups` counts. No scoring, decision, dedupe, correlation, incident, or
+  metrics-catalog behavior changed — the cache never feeds `scoring.v1` /
+  `decisions.v1` on its own.
+- **Evidence:** 61 targeted tests — 24 cache unit (policy/TTL boundaries, provider &
+  type scoping, expiry/eviction/purge/clear, fail-open, malformed-payload self-heal,
+  repr hygiene), 19 provider-cache unit (hit/miss/retry semantics over
+  `httpx.MockTransport` fakes — no network — including token non-consumption, expired
+  re-lookup, broken-cache degradation, and the uncached baseline), 12
+  wiring/migration integration (disabled default, enabled wiring, end-to-end
+  two-alert cache replay with zero additional outbound requests, fresh/idempotent/
+  recovery/incompatible/downgrade migration contract), and 6 settings tests — plus the
+  standard CI gate (ruff check, ruff format check, mypy, pytest on Python 3.11, secret
+  scan). The migration-head pins in the existing migration tests were updated to
+  `c7d8e9f0a1b2`.
+- **Explicitly not claimed:** no live VirusTotal/MISP lookup has been performed
+  (fake transports only); the cache has not been exercised in the Docker lab;
+  `docs/detection-coverage.md` is untouched (the cache is not a detection).
+
 ### Added — Phase 6.3 completion: detection regression expansion (corpus 16→24 scenarios)
 
 - **Eight new synthetic fixtures** (`app/tests/fixtures/`, identical copies in

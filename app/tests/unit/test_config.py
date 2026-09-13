@@ -24,6 +24,11 @@ _CONFIG_VARIABLES = (
     "N8N_RETRY_BACKOFF_SECONDS",
     "METRICS_ENABLED",
     "METRICS_SCRAPE_TOKEN",
+    "TRIAGE_ENRICHMENT_CACHE_ENABLED",
+    "TRIAGE_ENRICHMENT_CACHE_MAX_ENTRIES",
+    "TRIAGE_ENRICHMENT_CACHE_HASH_TTL_SECONDS",
+    "TRIAGE_ENRICHMENT_CACHE_IPV4_TTL_SECONDS",
+    "TRIAGE_ENRICHMENT_CACHE_DEFAULT_TTL_SECONDS",
 )
 
 
@@ -132,4 +137,70 @@ def test_explicit_placeholder_kwargs_override_env_file_and_environment(
             soc_env="production",
             triage_ingest_api_key="change-me-generate-a-long-random-value",
             n8n_callback_token="change-me-generate-a-long-random-value",
+        )
+
+
+# ---------------------------------------------------------------------------
+# Phase 2.3 — enrichment response TTL cache configuration
+# ---------------------------------------------------------------------------
+
+
+def test_enrichment_cache_defaults_disabled_with_architecture_ttls(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Disabled by default; TTL defaults pin ARCHITECTURE.md §7.2 (6 h / 1 h)."""
+    _clear_environment(monkeypatch)
+    settings = Settings(
+        soc_env="test",
+        triage_ingest_api_key="test-ingest-key-not-a-real-secret",
+        n8n_callback_token="test-callback-token-not-a-real-secret",
+    )
+
+    assert settings.triage_enrichment_cache_enabled is False
+    assert settings.triage_enrichment_cache_max_entries == 4096
+    assert settings.triage_enrichment_cache_hash_ttl_seconds == 6 * 3600
+    assert settings.triage_enrichment_cache_ipv4_ttl_seconds == 3600
+    assert settings.triage_enrichment_cache_default_ttl_seconds == 3600
+
+
+def test_enrichment_cache_environment_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
+    _clear_environment(monkeypatch)
+    monkeypatch.setenv("TRIAGE_ENRICHMENT_CACHE_ENABLED", "1")
+    monkeypatch.setenv("TRIAGE_ENRICHMENT_CACHE_MAX_ENTRIES", "128")
+    monkeypatch.setenv("TRIAGE_ENRICHMENT_CACHE_HASH_TTL_SECONDS", "7200")
+    monkeypatch.setenv("TRIAGE_ENRICHMENT_CACHE_IPV4_TTL_SECONDS", "1800")
+    monkeypatch.setenv("TRIAGE_ENRICHMENT_CACHE_DEFAULT_TTL_SECONDS", "900")
+
+    settings = Settings(
+        soc_env="test",
+        triage_ingest_api_key="test-ingest-key-not-a-real-secret",
+        n8n_callback_token="test-callback-token-not-a-real-secret",
+    )
+
+    assert settings.triage_enrichment_cache_enabled is True
+    assert settings.triage_enrichment_cache_max_entries == 128
+    assert settings.triage_enrichment_cache_hash_ttl_seconds == 7200
+    assert settings.triage_enrichment_cache_ipv4_ttl_seconds == 1800
+    assert settings.triage_enrichment_cache_default_ttl_seconds == 900
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"triage_enrichment_cache_max_entries": 0},
+        {"triage_enrichment_cache_hash_ttl_seconds": 0},
+        {"triage_enrichment_cache_ipv4_ttl_seconds": -1},
+        {"triage_enrichment_cache_default_ttl_seconds": 0},
+    ],
+)
+def test_enrichment_cache_rejects_non_positive_bounds(
+    monkeypatch: pytest.MonkeyPatch, kwargs: dict
+) -> None:
+    _clear_environment(monkeypatch)
+    with pytest.raises(ValidationError):
+        Settings(
+            soc_env="test",
+            triage_ingest_api_key="test-ingest-key-not-a-real-secret",
+            n8n_callback_token="test-callback-token-not-a-real-secret",
+            **kwargs,
         )

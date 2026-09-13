@@ -12,9 +12,10 @@ workflows, and a Docker lab.
 
 > **Project status (honest).** Phase 0 and Phase 1 are complete. **Phase 2 is partially
 > validated** — Phase 2.2 (static local policy wiring: allowlist `allowlist.v1` + asset
-> inventory `asset_inventory.v1`, deterministic local wiring, disabled by default) is
-> implemented · locally validated (automated tests + CI), while the remaining Phase 2
-> enrichment items (MISP container profile + seeding, enrichment TTL cache, scoring v2
+> inventory `asset_inventory.v1`, deterministic local wiring, disabled by default) and
+> Phase 2.3 (enrichment response TTL cache: SQLite-backed, per-type TTLs, disabled by
+> default) are implemented · locally validated (automated tests + CI), while the
+> remaining Phase 2 enrichment items (MISP container profile + seeding, scoring v2
 > intel factor, late-enrichment re-score) are still outstanding. **Phase 3** remains
 > implemented with named items outstanding; **Phase 4 (real Wazuh integration)** is
 > implemented and partially live-validated; **Phase 5 (deterministic detection
@@ -462,7 +463,7 @@ Full detail, acceptance criteria, and evidence per phase:
 | --- | --- | --- | --- |
 | **Phase 0 — Foundation** | Docs & scaffolding |  implemented · locally validated | ARCHITECTURE, DEVELOPMENT_PLAN, SECURITY, CONTRIBUTING, README, `.env.example`, directory tree, `check_secrets.sh` |
 | **Phase 1 — MVP triage pipeline** | Core triage loop |  implemented · locally validated | FastAPI app, ingest + normalize + dedupe, SQLite models + Alembic, scoring v1, decisions v1, n8n webhook client, compose (API+n8n+Mailpit), unit/integration tests.  `scripts/send_test_alert` simulator not implemented |
-| **Phase 2 — Enrichment & threat intelligence** | Threat intel |  partially validated | Phase 2.2 static local policies implemented · locally validated: allowlist `allowlist.v1` + asset inventory `asset_inventory.v1`, deterministic local wiring, disabled by default, 47 targeted tests; VirusTotal + MISP provider clients implemented but exercised only with fake HTTP transports (no live lookup recorded), plus IOC extractor, fail-open chain, rate limiting/retries; ⬜ MISP container profile + seeding, enrichment TTL cache, scoring v2 threat-intel factor, late-enrichment re-score |
+| **Phase 2 — Enrichment & threat intelligence** | Threat intel |  partially validated | Phase 2.2 static local policies implemented · locally validated: allowlist `allowlist.v1` + asset inventory `asset_inventory.v1`, deterministic local wiring, disabled by default, 47 targeted tests; Phase 2.3 enrichment response TTL cache implemented · locally validated (SQLite-backed, 6 h hash / 1 h IP TTLs, disabled by default, fail-open, 61 targeted tests); VirusTotal + MISP provider clients implemented but exercised only with fake HTTP transports (no live lookup recorded), plus IOC extractor, fail-open chain, rate limiting/retries; ⬜ MISP container profile + seeding, scoring v2 threat-intel factor, late-enrichment re-score |
 | **Phase 3 — Incidents, analyst workflow & observability** | Analyst loop |  partially validated | Incidents (3.1), lifecycle + feedback (3.2), read APIs + timeline (3.3), TTL sweeper (3.4), static console (3.5), runbooks (3.6), Prometheus `/metrics` + optional Grafana (3.7);  Postgres profile (3.8), stats endpoints + digest (3.9) |
 | **Phase 4 — Real Wazuh integration & approved response** | Full integration |  partially validated | Source-audited + live-validated `full` profile and `custom-triage` integrator (4.1/4.2), agent enrollment validated (4.4), custom rules/decoders authored (4.3, not live-validated);  approval/containment runbook (4.5), TheHive CE export (4.6), failure-spool + duplicate-delivery runtime checks and 10k/day soak (4.7) |
 | **Phase 5 — Deterministic detection evaluation** | Detection quality measurement |  implemented · locally validated | Labeled corpus, ground truth, confusion matrix, precision/recall/F1/FPR, runtime evaluation tests replaying fixtures through the real ingest path |
@@ -564,7 +565,10 @@ SQLite persistence + migrations, audit log, deterministic scoring `scoring.v1`,
 deterministic decisions `decisions.v1`, the **Phase 2.2 static local policies** (allowlist
 `allowlist.v1` + asset inventory `asset_inventory.v1` — deterministic local file loading
 and matching, disabled by default, 47 targeted unit/integration tests; automated tests +
-CI only, no Docker-lab operator run), incident persistence/lifecycle/read APIs/timeline,
+CI only, no Docker-lab operator run), the **Phase 2.3 enrichment response TTL cache**
+(SQLite-backed, per-type TTLs per ARCHITECTURE §7.2, disabled by default, fail-open,
+61 targeted unit/integration tests; automated tests + CI only, no live-provider run),
+incident persistence/lifecycle/read APIs/timeline,
 TTL auto-close sweeper, analyst feedback capture + incident transitions, n8n workflow
 exports with static validation, the static SOC console (+ 15 JS tests), Prometheus
 `/metrics`, the **Phase 5 evaluation framework**, and the **Phase 6 detection coverage
@@ -588,7 +592,9 @@ have not been exercised against a live rule match**.
   live VirusTotal or MISP lookup has been recorded. The Phase 2.2 static policies need no
   transport at all (local file load + pure matching), and are validated by automated tests
   and CI only — they have not been exercised in the Docker lab, and the shipped policy files
-  contain no entries.
+  contain no entries. The Phase 2.3 response TTL cache is likewise validated by automated
+  tests and CI only (fake transports, temporary SQLite) — it has not been exercised against
+  a live provider, and it is disabled by default.
 - **n8n workflows** — exported JSON, import helper, and static/security tests pass; the
   runtime notification chain was validated in the lab (Mailpit), but there is no
   automated n8n execution test in CI.
@@ -596,14 +602,15 @@ have not been exercised against a live rule match**.
   hygiene re-check outstanding.
 
 ** Outstanding (scoped, not done):** `scripts/send_test_alert` simulator; MISP compose
-profile + seeding guide; enrichment TTL cache; scoring v2 threat-intel factor;
+profile + seeding guide; scoring v2 threat-intel factor;
 late-enrichment re-score; PostgreSQL profile; stats endpoints + daily digest workflow
 (WF6); runbook linkage from decisions; TheHive CE export; containment approval/response
 runbook; Phase 4 failure-spool, duplicate-delivery, `/metrics` hygiene, and 10k
 alerts/day soak validations; CI coverage threshold and nightly compose smoke job.
-(The Phase 2.2 static allowlist + asset-inventory loaders previously listed here are
-implemented · locally validated; what remains for allowlisting is an operator-side run
-with a populated policy and a corpus-level `suppress` pin.)
+(The Phase 2.2 static allowlist + asset-inventory loaders and the Phase 2.3 enrichment
+response TTL cache previously listed here are implemented · locally validated; what
+remains for allowlisting is an operator-side run with a populated policy and a
+corpus-level `suppress` pin, and what remains for the cache is a live-provider run.)
 
 **🔮 Future / planned:** a pinned corpus-level correlation outcome, and detection-quality
 CI gates that assert precision/recall/F1 thresholds (6.6). (The detection coverage

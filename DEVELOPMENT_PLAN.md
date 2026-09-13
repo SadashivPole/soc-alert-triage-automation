@@ -32,7 +32,7 @@ history. Status claims elsewhere are descriptive, not authoritative.
 | --- | --- | --- |
 | **Phase 0 — Foundation** | ✅ Implemented · locally validated | Docs, scaffolding, secret scanner, CI |
 | **Phase 1 — MVP triage pipeline** | ✅ Implemented · locally validated | Ingest → normalize → dedupe → score → decide → notify, tests green (⬜ simulator script) |
-| **Phase 2 — Enrichment & threat intelligence** | 🟡 Partially validated | 2.2 static allowlist + asset inventory ✅ implemented · locally validated (deterministic local policy wiring, disabled by default, 47 targeted tests); VirusTotal + MISP providers implemented (fake-transport tested, disabled by default); MISP profile, scoring v2 intel factor, TTL cache, late-enrichment re-score ⬜ |
+| **Phase 2 — Enrichment & threat intelligence** | 🟡 Partially validated | 2.2 static allowlist + asset inventory ✅ implemented · locally validated (deterministic local policy wiring, disabled by default, 47 targeted tests); 2.3 enrichment response TTL cache ✅ implemented · locally validated (SQLite-backed, per-type TTLs, disabled by default, fail-open, 61 targeted tests); VirusTotal + MISP providers implemented (fake-transport tested, disabled by default); MISP profile, scoring v2 intel factor, late-enrichment re-score ⬜ |
 | **Phase 3 — Incidents, analyst workflow & observability** | 🟡 Partially validated | Incidents, lifecycle, read APIs, timeline, sweeper, console, runbooks, `/metrics` + Grafana profile all implemented; PostgreSQL profile + stats/digest ⬜ |
 | **Phase 4 — Real Wazuh integration & approved response** | 🟡 Partially validated | 4.1/4.2 source-audited + live-validated end-to-end; 4.4 validated; 4.3 authored but not live-validated; 4.5/4.6/4.7 and runtime failure/duplicate checks ⬜ |
 | **Phase 5 — Deterministic detection evaluation** | ✅ Implemented · locally validated | Labeled corpus, ground truth, confusion matrix, precision/recall/F1/FPR, runtime evaluation tests |
@@ -115,16 +115,17 @@ recurrence · auth/limit/validation error paths correct · pipeline completes wi
 **Goal:** real intel enrichment with quota safety and graceful degradation.
 
 **Status: partially validated — 2.2 (static allowlist `allowlist.v1` + asset inventory
-`asset_inventory.v1`, with deterministic local wiring) is ✅ implemented · locally
-validated; the VirusTotal/MISP provider clients are implemented (fake transports only);
-the MISP container profile, the enrichment response TTL cache, the scoring v2 intel
-factor, and the late-enrichment re-score remain ⬜ outstanding.**
+`asset_inventory.v1`, with deterministic local wiring) and 2.3 (enrichment response TTL
+cache, SQLite-backed, disabled by default) are ✅ implemented · locally validated; the
+VirusTotal/MISP provider clients are implemented (fake transports only); the MISP
+container profile, the scoring v2 intel factor, and the late-enrichment re-score remain
+⬜ outstanding.**
 
 | # | Deliverable | Status | Evidence / gap |
 | --- | --- | --- | --- |
 | 2.1 | IOC extractor | ✅ implemented (delivered early as Phase 1E/1.13) | pure, deterministic, no network I/O |
 | 2.2 | Allowlist + asset-inventory YAML loaders | ✅ Implemented · locally validated | deterministic, versioned, non-secret static policies — `app/config/allowlists.yaml` (`allowlist.v1`) and `app/config/asset_inventory.yaml` (`asset_inventory.v1`) — **validated fail-loud at load**, and loaded only when `TRIAGE_ALLOWLIST_PATH` / `TRIAGE_ASSET_INVENTORY_PATH` are set (empty path ⇒ disabled; the shipped files contain no entries). The `allowlist` provider registers in the chain **only when configured**; matching is on exact normalized indicators plus IPv4 CIDR; the provider's `enrichment_status` is always `skipped`, so local policy adds no intel points; the existing scoring `allowlist` (−20) factor and `suppress` decision route are consumed **unchanged** — no scoring- or decision-policy change. The asset inventory is a pure fill-only normalization seam (precedence `agent_id` → IP → name; source-provided fields always win) and does **not** alter the `asset_criticality` model or weights. No network I/O, no AI/LLM. Evidence: 47 targeted tests (26 allowlist unit · 16 asset-inventory unit · 5 integration wiring) + ruff check/format + mypy + CI on Python 3.11 & 3.12 + secret scan. **Still not validated:** an operator-side run with a populated policy (no Docker-lab validation) and a corpus-level `suppress` pin (see 6.3 / coverage gap G10) |
-| 2.3 | VirusTotal v3 client: token bucket (4/min, 500/day), quota accounting, fake-server tests | 🟡 implemented, no live run | `httpx.MockTransport` fakes only; **no response TTL cache** (⬜) |
+| 2.3 | VirusTotal v3 client: token bucket (4/min, 500/day), quota accounting, fake-server tests; response TTL cache | ✅ implemented · locally validated (no live run) | client: `httpx.MockTransport` fakes only; **TTL cache**: `enrichment_cache` table (migration `c7d8e9f0a1b2`) + `PersistentEnrichmentCache` — per-type TTLs per ARCHITECTURE §7.2 (6 h hashes / 1 h IPs / 1 h other), provider-scoped keys, definitive verdicts only (failures stay retryable), byte-identical replay, bounded (`max_entries`, soonest-expiring eviction), fail-open, **disabled by default** (`TRIAGE_ENRICHMENT_CACHE_ENABLED`), 61 targeted tests (24 cache unit · 19 provider-cache unit · 12 wiring/migration integration · 6 config); no live-provider run yet |
 | 2.4 | MISP client + `intel` compose profile + seeding guide | 🟡 client ✅ / profile ⬜ | `enrichment/misp.py` implemented and disabled by default; `misp/` is scaffolded only — no compose service, no seeding guide |
 | 2.5 | Scoring v2 (`threat_intel` factor) + updated goldens | ⬜ outstanding | policy is still `scoring.v1` (7 factors); IOC verdicts do not yet add intel-specific points |
 | 2.6 | Late-enrichment background re-score | ⬜ outstanding | no re-score loop exists |
@@ -135,9 +136,13 @@ budget and always mark `enrichment_status`; a MISP-matched sample alert scores p
 golden; quota usage observable. Fail-open behavior, token-bucket non-blocking behavior,
 and status marking are covered by tests today. 2.2's own gate — deterministic local policy
 load, fail-loud validation at load, disabled-by-default configuration, no scoring/decision
-policy change — **is met** by its 47 targeted tests + CI; the **phase** gate is **not**
-met, and stays dependent on the later deliverables: 2.4 (MISP profile + seeding), the 2.3
-TTL cache, 2.5 (scoring v2 intel factor), and 2.6 (late-enrichment re-score).
+policy change — **is met** by its 47 targeted tests + CI. 2.3's own gate — cache-disabled
+default, definitive-verdicts-only caching, byte-identical replay, provider-scoped keys,
+quota savings without token consumption, fail-open on any cache failure, no scoring/decision
+policy change, recovery-safe migration — **is met** by its 61 targeted tests + CI (no
+live-provider run yet). The **phase** gate is **not** met, and stays dependent on the
+later deliverables: 2.4 (MISP profile + seeding), 2.5 (scoring v2 intel factor), and 2.6
+(late-enrichment re-score).
 
 ---
 
@@ -496,8 +501,11 @@ ruff check + format check, mypy `src`, and
 That 998 figure predates the Phase 2.2 merge. Phase 2.2 is evidenced by its own
 **47 targeted tests** (26 allowlist unit · 16 asset-inventory unit · 5 integration wiring)
 plus the same CI gate (ruff check, ruff format check, mypy, pytest on Python 3.11 & 3.12,
-secret scan). No full-suite re-count was taken for Phase 2.2, so **no updated suite total
-is claimed anywhere in this plan or the README**.
+secret scan). Phase 2.3 is evidenced by its own **61 targeted tests** (24 cache unit ·
+19 provider-cache unit · 12 wiring/migration integration · 6 config) plus the same CI
+gate. No full-suite re-count was taken for Phase 2.2, so **no updated suite total is
+claimed anywhere in this plan or the README** (for reference, the local full-suite run
+accompanying Phase 2.3 measured 1258 passed on Python 3.11).
 
 | Layer | Runs on | Tooling | Gate |
 | --- | --- | --- | --- |
@@ -541,7 +549,7 @@ deterministic seeds for any randomized behavior (jitter tests use seeded RNG).
 
 | Risk | Impact | Mitigation |
 | --- | --- | --- |
-| VirusTotal public quota exhausted mid-demo | enrichment gaps | non-blocking token bucket ✅ (an exhausted quota marks lookups `rate_limited` instead of stalling the pipeline) + `soc_triage_enrichment_provider_outcomes` counters; response TTL cache ⬜; zero-intel fallback mode is a *feature* demo |
+| VirusTotal public quota exhausted mid-demo | enrichment gaps | non-blocking token bucket ✅ (an exhausted quota marks lookups `rate_limited` instead of stalling the pipeline) + `soc_triage_enrichment_provider_outcomes` counters; response TTL cache ✅ (repeat indicators served from `enrichment_cache` without consuming tokens; disabled by default); zero-intel fallback mode is a *feature* demo |
 | MISP docker stack is heavy and not yet containerized (RAM/time) | lab friction | optional profile by design, VT-only mode; document sizing when the profile lands |
 | External providers only ever tested with fake transports | live-API surprises | explicit status labelling (no live VT/MISP call is claimed anywhere) and a planned live smoke check |
 | n8n breaking API changes between versions | workflow imports fail | pin the n8n image tag; workflows exported per version; static/security tests in CI |
