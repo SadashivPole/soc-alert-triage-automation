@@ -46,14 +46,14 @@ class Settings(BaseSettings):
     )
 
     # ------------------------------------------------------------------
-    # Phase 6.4 — cross-alert correlation
+    # Phase 6.4 â€” cross-alert correlation
     # ------------------------------------------------------------------
     # Bounds *pairwise* correlation evidence: two distinct alerts (different
     # dedupe groups) are comparable only when
     # ``0 <= newer.received_at - older.received_at <= window`` (inclusive
     # boundary, same convention as the dedupe window). Evidence weakens with
-    # time — an indicator shared hours apart describes at most a campaign,
-    # not one investigation — so correlation is never unbounded. Deliberately
+    # time â€” an indicator shared hours apart describes at most a campaign,
+    # not one investigation â€” so correlation is never unbounded. Deliberately
     # a separate knob from TRIAGE_DEDUPE_WINDOW_SECONDS: recurrence and
     # correlation answer different questions and may need different spans.
     # Must be >= 1. A context may still span longer than one window when
@@ -64,13 +64,13 @@ class Settings(BaseSettings):
     )
 
     # ------------------------------------------------------------------
-    # Phase 3.4 — incident auto-close TTL sweeper
+    # Phase 3.4 â€” incident auto-close TTL sweeper
     # ------------------------------------------------------------------
     # Non-terminal incidents (open / investigating / acknowledged / escalated)
     # whose ``updated_at`` has not changed within this TTL are automatically
     # transitioned to ``resolved`` by a periodic background sweeper. Terminal
     # states (``resolved``, ``false_positive``) are never touched.
-    # Conservative lab default: 7 days (604800 s) — long enough for the
+    # Conservative lab default: 7 days (604800 s) â€” long enough for the
     # analyst workflow in a lab/portfolio setting, short enough to keep the
     # incident board from accumulating unbounded stale rows. Must be >= 1.
     incident_auto_close_ttl_seconds: int = Field(
@@ -85,7 +85,7 @@ class Settings(BaseSettings):
     )
 
     # ------------------------------------------------------------------
-    # Phase 3.7 — Prometheus metrics (optional scrape authentication)
+    # Phase 3.7 â€” Prometheus metrics (optional scrape authentication)
     # ------------------------------------------------------------------
     # Enables the metrics recording surface and (Task D4) the `/metrics`
     # endpoint. Default true: observability is on by default, but metrics
@@ -95,7 +95,7 @@ class Settings(BaseSettings):
     # metrics authentication disabled (development-compatible default);
     # when set, a scrape must present `Authorization: Bearer <token>`.
     # This is a DEDICATED token: the ingest API key and N8N tokens are never
-    # reused for scraping (SECURITY.md §2, approved decision D1). Held as
+    # reused for scraping (SECURITY.md Â§2, approved decision D1). Held as
     # SecretStr; `change-me-*` placeholders fail fast outside development.
     metrics_scrape_token: SecretStr = Field(
         default_factory=lambda: SecretStr(""),
@@ -117,9 +117,9 @@ class Settings(BaseSettings):
     # Outbound webhook from the triage service to n8n (WF1 router).
     # Empty URL = disabled (fail-open, no notification attempted). When set,
     # the service POSTs the structured alert payload with timeout/retry and
-    # audits the result — n8n failure never corrupts the alert (ARCH §16).
+    # audits the result â€” n8n failure never corrupts the alert (ARCH Â§16).
     n8n_webhook_url: str = Field(default="", alias="N8N_WEBHOOK_URL")
-    # Shared authentication token for service ↔ n8n. If N8N_WEBHOOK_TOKEN is
+    # Shared authentication token for service â†” n8n. If N8N_WEBHOOK_TOKEN is
     # empty but N8N_CALLBACK_TOKEN is configured, the callback token is used
     # as the shared secret (single-token deployment). Empty = no auth header
     # sent (n8n workflow should still validate when token is configured).
@@ -135,8 +135,8 @@ class Settings(BaseSettings):
 
     # Threat-intelligence enrichment (Phase 2A). Both providers are optional
     # and **disabled by default**: an empty key (and, for MISP, an empty URL)
-    # means the provider is never called (disable-by-empty, ARCHITECTURE.md §14).
-    # Keys come only from the environment / secret store — never hardcoded.
+    # means the provider is never called (disable-by-empty, ARCHITECTURE.md Â§14).
+    # Keys come only from the environment / secret store â€” never hardcoded.
     virustotal_api_key: SecretStr = Field(
         default_factory=lambda: SecretStr(""),
         alias="VIRUSTOTAL_API_KEY",
@@ -147,6 +147,32 @@ class Settings(BaseSettings):
         alias="MISP_API_KEY",
     )
     misp_verify_tls: bool = Field(default=True, alias="MISP_VERIFY_TLS")
+
+    # ------------------------------------------------------------------
+    # Phase 4.6 — TheHive CE case export
+    # ------------------------------------------------------------------
+    # Optional integration. Empty THEHIVE_URL disables outbound case export.
+    # API credentials are environment/secret-store supplied and never
+    # hardcoded in source code.
+    thehive_url: str = Field(default="", alias="THEHIVE_URL")
+    thehive_api_key: SecretStr = Field(
+        default_factory=lambda: SecretStr(""),
+        alias="THEHIVE_API_KEY",
+    )
+    thehive_organisation: str = Field(
+        default="",
+        alias="THEHIVE_ORGANISATION",
+    )
+    thehive_verify_tls: bool = Field(
+        default=True,
+        alias="THEHIVE_VERIFY_TLS",
+    )
+    thehive_timeout_seconds: float = Field(
+        default=10.0,
+        alias="THEHIVE_TIMEOUT_SECONDS",
+        ge=0.5,
+        le=60.0,
+    )
 
     # ------------------------------------------------------------------
     # Phase 2.2 - static local policies
@@ -163,15 +189,15 @@ class Settings(BaseSettings):
     )
 
     # ------------------------------------------------------------------
-    # Phase 2.3 — enrichment response TTL cache
+    # Phase 2.3 â€” enrichment response TTL cache
     # ------------------------------------------------------------------
     # SQLite-backed response cache for threat-intel lookups (ARCHITECTURE.md
-    # §7.2 step 2). Definitive verdicts (found / not_found) are replayed
+    # Â§7.2 step 2). Definitive verdicts (found / not_found) are replayed
     # byte-identically until their per-type TTL expires, so repeat
     # indicators never burn provider quota; a cache hit consumes no
     # rate-limiter token. Errors/timeouts/rate-limited lookups are NEVER
     # cached, so transient failures stay retryable. Disabled by default
-    # (Phase 2.2 convention); the cache is fail-open — any cache failure
+    # (Phase 2.2 convention); the cache is fail-open â€” any cache failure
     # degrades to a normal lookup and can never break enrichment, scoring,
     # or decisions (it never feeds them on its own).
     triage_enrichment_cache_enabled: bool = Field(
@@ -181,15 +207,15 @@ class Settings(BaseSettings):
     triage_enrichment_cache_max_entries: int = Field(
         default=4096, alias="TRIAGE_ENRICHMENT_CACHE_MAX_ENTRIES", ge=1
     )
-    # TTL for MD5/SHA1/SHA256 verdicts — ARCHITECTURE.md §7.2 pins 6 h.
+    # TTL for MD5/SHA1/SHA256 verdicts â€” ARCHITECTURE.md Â§7.2 pins 6 h.
     triage_enrichment_cache_hash_ttl_seconds: int = Field(
         default=21600, alias="TRIAGE_ENRICHMENT_CACHE_HASH_TTL_SECONDS", ge=1
     )
-    # TTL for IPv4 verdicts — ARCHITECTURE.md §7.2 pins 1 h.
+    # TTL for IPv4 verdicts â€” ARCHITECTURE.md Â§7.2 pins 1 h.
     triage_enrichment_cache_ipv4_ttl_seconds: int = Field(
         default=3600, alias="TRIAGE_ENRICHMENT_CACHE_IPV4_TTL_SECONDS", ge=1
     )
-    # TTL for types §7.2 does not pin explicitly (domain, URL, email).
+    # TTL for types Â§7.2 does not pin explicitly (domain, URL, email).
     triage_enrichment_cache_default_ttl_seconds: int = Field(
         default=3600, alias="TRIAGE_ENRICHMENT_CACHE_DEFAULT_TTL_SECONDS", ge=1
     )
@@ -206,7 +232,7 @@ class Settings(BaseSettings):
 
     @property
     def effective_n8n_token(self) -> str:
-        """Resolve the shared token used for service ↔ n8n authentication.
+        """Resolve the shared token used for service â†” n8n authentication.
 
         Preference: explicit N8N_WEBHOOK_TOKEN, else N8N_CALLBACK_TOKEN (shared
         token deployment). Empty string means no auth header is sent.
