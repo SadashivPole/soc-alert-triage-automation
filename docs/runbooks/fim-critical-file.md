@@ -179,8 +179,11 @@ path.
 The synthetic sample identifies:
 
 - `T1566`
+- `T1565` (custom rule 100110 declaration; retained as the unresolved G5 discrepancy)
 - Tactics: Persistence, Privilege Escalation
 - Technique metadata: Modify Authentication Process
 
 Validate ATT&CK mapping against the organization's actual detection content
 before production use.
+Phase 6.3 regression sample: `docs/sample-alerts/12_custom_fim_rule_100110.json`.
+The custom rule declares `T1565`; the existing fixture 03 discrepancy remains recorded and unresolved.

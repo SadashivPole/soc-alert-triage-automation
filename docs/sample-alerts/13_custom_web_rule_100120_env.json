@@ -1,0 +1,51 @@
+{
+  "id": "1770000000.600013",
+  "timestamp": "2026-08-29T13:40:00.000+0000",
+  "rule": {
+    "level": 10,
+    "description": "SOC Triage: suspicious web request path detected",
+    "id": "100120",
+    "firedtimes": 1,
+    "mail": false,
+    "groups": [
+      "web",
+      "web_attack",
+      "soc_triage"
+    ],
+    "mitre": {
+      "id": [
+        "T1190"
+      ],
+      "tactic": [
+        "Initial Access"
+      ],
+      "technique": [
+        "Exploit Public-Facing Application"
+      ]
+    }
+  },
+  "agent": {
+    "id": "001",
+    "name": "web-prod-01",
+    "ip": "10.0.1.10",
+    "labels": {
+      "asset_tier": "tier-1",
+      "owner": "platform-team"
+    }
+  },
+  "manager": {
+    "name": "wazuh-manager"
+  },
+  "decoder": {
+    "name": "soc-web"
+  },
+  "data": {
+    "srcip": "198.51.100.77",
+    "id": "1054",
+    "url": "/login/.env",
+    "protocol": "HTTP/1.1",
+    "status": "404"
+  },
+  "location": "/var/log/nginx/error.log",
+  "full_log": "SOC_WEB 2026-08-29T13:40:00Z GET /login/.env from 198.51.100.78"
+}

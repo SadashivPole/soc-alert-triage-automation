@@ -14,6 +14,11 @@ Primary sample:
 - Source IP: `198.51.100.77`
 - HTTP status: `500`
 
+The same attack against a low-criticality staging asset is covered by
+`10_wazuh_web_sql_injection_staging.json` (host `web-stg-01`, tier-3,
+Phase 6.3, SCN-10): the low asset criticality band holds the score in the
+medium band, but the investigation steps are identical.
+
 The investigation is defensive and evidence-driven. Do not attempt to exploit
 the application. Any containment action is a proposal requiring explicit
 analyst approval.
@@ -205,3 +210,6 @@ The synthetic sample identifies:
 
 Validate the mapping against the organization's actual detection content
 before production use.
+Phase 6.3 regression samples: `docs/sample-alerts/13_custom_web_rule_100120_env.json`,
+`docs/sample-alerts/14_custom_web_recurrence_rule_100121.json`, and
+`docs/sample-alerts/16_ordinary_web_request.json`.

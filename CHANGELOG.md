@@ -6,6 +6,161 @@ semantic (`v0.1.0` targeted at the end of Phase 1).
 
 ## [Unreleased]
 
+### Added — Phase 6.2: MITRE ATT&CK mapping framework
+
+- **A maintained, machine-readable ATT&CK mapping registry** — `evaluation/attack_mappings.yaml`
+  (version `1.0`): one entry per technique id the repository's detection content declares
+  (`T1110`, `T1136`, `T1190`, `T1204`, `T1565`, `T1566`), 11 rule → technique mappings
+  (the 4 custom SOC-triage rules plus the 7 fixture-declared rule ids, including the two
+  that declare none — absence recorded, never guessed), and 10 scenario → technique
+  mappings. Every entry carries explicit provenance to the declaring source file/path.
+- **Declared values are preserved exactly — nothing corrected or inferred.** Technique
+  names and tactics are the verbatim fixture `rule.mitre` declarations;
+  `attack_reference` pins `source: none` and `matrix_verification: unverified` (the
+  repository carries no ATT&CK reference data — no STIX, no matrix pin, no external or
+  runtime lookup was added, and none is performed). The validation test treats the flag
+  as a permanent property of the registry, not a TODO.
+- **The G5 conflict is now machine-tracked, not just documented.** The
+  `/etc/passwd`-FIM discrepancy (fixture `SCN-03`/rule `550` declares `T1566` with the
+  name "Modify Authentication Process"; custom rule `DET-100110` declares `T1565`) is
+  recorded under `known_discrepancies` with status `recorded-unresolved`, both values,
+  both sources, an explicit no-scoring-impact statement, and what a resolution would
+  require. The validation test fails if either source changes without the record being
+  updated — or if the record is removed while the conflict persists.
+- **Rendered traceability** — `docs/attack-coverage.md`: the technique-first view of the
+  full chain *Wazuh detection → rule → ATT&CK technique → scenario → expected outcome →
+  regression test → analyst/runbook context*, with `—` wherever no repository evidence
+  exists, plus the documented registry schema and extension workflow.
+  `docs/detection-coverage.md` cross-links it; its G5 gap row and G8 status were updated
+  truthfully.
+- **39 static validation tests** — `app/tests/evaluation/test_attack_mappings.py`
+  (read-only, never importing `soc_triage`): schema/version and the unverified-matrix
+  flag; unique ids; provenance files exist; **no invented ids** (the registry technique
+  set must equal the set declared by the ruleset and the corpus fixtures, in both
+  directions); rule mappings vs the ruleset XML, the fixtures, and the Phase 6.1 catalog;
+  scenario mappings vs the catalog and each fixture; verbatim names/tactics with
+  complete metadata provenance; byte-identical `docs/sample-alerts/` copies of every
+  cited fixture; G5 liveness; runbook "MITRE ATT&CK" sections vs the fixtures they cover;
+  and full document sync (every registry/catalog id present in the rendered doc and none
+  extra, with the technique/rule/scenario table cells pinned against the registry, the
+  catalog, and the ground truth). Mutation checks (altered fixture id, removed G5 record,
+  altered provenance path, registry/doc desync) were verified to fail the suite and then
+  restored byte-identically.
+- **No runtime change.** Scoring (`scoring.v1`, presence-only `rule_groups_mitre`),
+  decisions (`decisions.v1`), dedupe, recurrence, correlation (`correlation.v1`
+  `shared_technique`), incidents, explainability (`explanation.v1`), the canonical
+  models, the n8n payloads, the fixtures, the ground truth, the corpus, and the Wazuh
+  ruleset are untouched; no runtime Python under `app/src/soc_triage/` changed. The full
+  existing suite (1031 tests) passes unchanged — no golden updates.
+- **Docs:** `DEVELOPMENT_PLAN.md` (6.2 marked implemented with its artifact table and
+  explicit not-claimed list; Phase 6 status line and exit criteria updated) and
+  `README.md` (roadmap rows, phase table, docs map) refreshed — including truthful
+  status fixes for the already-merged Phase 6.3/6.5 rows that had drifted stale.
+
+### Added — Phase 6.5: analyst explainability
+
+- **Deterministic, read-only per-alert explanations** (`explanation.v1`, merged via
+  PR #31): `GET /api/v1/alerts/{alert_id}/explanation` assembles — exclusively from
+  already-persisted facts — the alert summary, detection metadata (the stored
+  `rule.mitre` verbatim, redacted, or explicit null), the authoritative scoring.v1
+  assessment with its ordered factor breakdown reconciled against the stored score, the
+  decisions.v1 routing decision with its exact reasons, dedupe/recurrence facts, the
+  correlation.v1 context and its evidence when present, incident linkage, IOCs,
+  enrichment status, and the audit history. Missing facts are explicit nulls; the
+  builder never re-scores, re-decides, or infers, and performs no I/O, network, LLM, or
+  clock reads. Shared N8N token; structured 404s; never `full_log` or secrets.
+  Unit + integration tests pin the determinism, the verbatim-or-null ATT&CK handling,
+  and the redaction guarantees.
+  *(Backfilled during the Phase 6.2 documentation pass — the Phase 6.5 merge had no
+  changelog entry at the time.)*
+
+### Added — Phase 6.4: cross-alert correlation (investigation contexts)
+
+- **Deterministic, explainable correlation of distinct alerts into one investigation
+  context.** Correlation is deliberately a *different concept* from deduplication/recurrence
+  ("is this the same event / recurrence family?"): it answers "are these distinct alerts
+  (different dedupe groups) related enough to present as one investigation context?".
+  Deduplication, recurrence, scoring (`scoring.v1`), decisions (`decisions.v1`), and the
+  incident creation/attachment policy are unchanged — verified by the untouched Phase 1–5
+  test suites.
+- **Evidence-based grouping** (`app/src/soc_triage/correlation/evidence.py`, policy
+  `correlation.v1`): alerts correlate when they share a normalized indicator
+  (`shared_ioc` — hash/domain/url/email, or an IP whose roles do not match
+  directionally), a direction-matched `shared_source_ip` / `shared_destination_ip` (from
+  typed `data.srcip`/`data.dstip` provenance), or the combination `same_agent` +
+  `shared_technique` (same ATT&CK technique from `rule.mitre.id`). Agent-only, rule-only,
+  and technique-only evidence are deliberately insufficient (a busy host produces many
+  unrelated alerts). Allowlisted indicators never correlate. Every membership stores its
+  pairwise evidence (`evidence_type`, `value`, `peer_alert_id`) — the *why* is always
+  reconstructable, and there is no opaque similarity score and no ML/LLM.
+- **Bounded window:** `TRIAGE_CORRELATION_WINDOW_SECONDS` (default 900 s, inclusive
+  boundary, independent from the dedupe window) bounds *pairwise* evidence — evidence
+  weakens with time, so correlation is never unbounded. A context may span longer when
+  evidence chains transitively; each pairwise link stays window-bounded with its own
+  evidence.
+- **Persistence** (migration `f9a0b1c2d3e4`): `correlation_contexts` (`CORR-YYYY-MM-DD-NNNN`
+  ids, first/last-seen bounds) + `correlation_members` (one row per alert — an alert joins
+  at most one context; exact duplicates can never create memberships). Contexts survive
+  restarts. When a newly ingested alert bridges two contexts with qualifying evidence they
+  merge deterministically into the earlier-created one (audited as
+  `correlation.contexts_merged`); contexts never merge spontaneously and incidents are
+  never merged. Append-only audit entries for `correlation.context_created` /
+  `correlation.alert_linked` / `correlation.contexts_merged`.
+- **Read-only API** (shared N8N token, like the other read surfaces): `GET /api/v1/correlations`
+  (paginated), `GET /api/v1/correlations/{context_id}`, and
+  `GET /api/v1/alerts/{alert_id}/correlation`. Responses carry member summaries (each
+  surfacing its own `dedupe_group_key` and `incident_id`), pairwise + aggregated evidence
+  with human-readable reasons, and deterministic ordering — never `full_log`, credentials,
+  or tokens. Ingest responses additionally report the joined `correlation_context_id`
+  (idempotently echoed on exact duplicates). No write/merge/delete endpoints.
+- **Fail-open wiring:** correlation runs after assessment persistence on non-duplicate
+  deliveries; any correlation failure is logged (exception type only) and swallowed — an
+  alert can never be rejected or corrupted by correlation.
+- **Tests:** 45 new (21 unit for the pure evidence engine; 24 integration covering the
+  full scenario matrix — exact duplicates, recurrence distinctness, policy-gated same-agent
+  correlation, shared-IOC correlation across rules/agents, window boundaries
+  (inclusive/outside), no-evidence, multi-evidence determinism, duplicate-suppression
+  idempotency, cross-context isolation + evidence-driven merge, restart persistence,
+  read-only/auth API behavior, secret/redaction checks, and explicit regression pins that
+  dedupe counters, incident independence, and alert distinctness are unchanged). Mutation
+  checks (window boundary, evidence matcher, membership linking, duplicate suppression)
+  were verified to fail the suite and then restored byte-identically.
+- **Docs:** `DEVELOPMENT_PLAN.md` Phase 6.4 marked implemented (with the concept
+  separation and explicit unsupported dimensions: usernames — no stable canonical user
+  field; `full_log`/text similarity), `docs/detection-coverage.md` gap G7 updated,
+  `.env.example` + `docker-compose.yml` carry the new window knob.
+
+### Added — Phase 6.3: detection regression expansion (corpus 6→10 scenarios)
+
+- **Four new synthetic fixtures** (`app/tests/fixtures/`, identical copies in
+  `docs/sample-alerts/`), each with ground-truth pins, catalog entries (`SCN-07`–`SCN-10`),
+  and runbook references: `07_wazuh_ssh_brute_force_recurrence.json` (recurrence burst on a
+  second tier-1 host), `08_wazuh_ssh_session_opened.json` (benign informational baseline,
+  no asset-tier labels), `09_wazuh_malware_hash_critical_server.json` (critical-tier asset
+  → SEV1), `10_wazuh_web_sql_injection_staging.json` (tier-3 asset, `low` criticality band).
+- **First multi-delivery corpus case (SCN-07).** The corpus case declares
+  `deliveries: 3`; `evaluation/ground_truth.json` pins the escalation under a `recurrence`
+  block (43/low/`monitor` → 55/medium/`queue_l1`, `occurrences: 3`). Ground truth remains
+  the single expected-outcome source; the catalog mirrors it and a validation test enforces
+  the mirror.
+- **Label semantics defined and enforced** (`test_corpus_labels_match_ground_truth_actions`):
+  `negative` scenarios must never route to L1/incident; `positive` scenarios must never be
+  suppressed (UC-1 first-occurrence `monitor` stays an accepted, reported FN).
+- **Stronger evaluation assertions.** The corpus harness now checks the stable
+  scoring.v1/decisions.v1 contract on every delivery (engine version, non-degraded flag,
+  exact factor set and order, decision-reasons shape, severity consistency, incident id
+  presence for `open_incident`, offline `enrichment_status`), plus a whole-corpus
+  replay-determinism test.
+- **Boundary regression tests** (no behavior change): recurrence `min_occurrences` −1 and
+  window ±1 s at unit level; second-delivery non-escalation, informational floor,
+  critical/SEV1, and low-asset-band pins at pipeline level.
+- **Coverage documentation** updated: `docs/detection-coverage.md` scenario table (10
+  scenarios), recurrence mechanics, label semantics, new gap **G10** (allowlist
+  `suppress` is unreachable end-to-end until a Phase 2.2 allowlist provider exists),
+  and `DEVELOPMENT_PLAN.md` Phase 6.3 marked partially progressed.
+- No change to `app/config/scoring.yaml`, `app/config/decisions.yaml`, or any engine
+  code: existing golden outcomes are untouched (`01`–`06` pins unchanged).
+
 ### Added — Phase 4.1/4.2: real Wazuh integration (`full` profile + `custom-triage` integrator)
 
 - **`full` compose profile (4.1).** New optional `wazuh-manager` service
