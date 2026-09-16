@@ -27,6 +27,14 @@ services:
       N8N_WEBHOOK_TOKEN: ${N8N_WEBHOOK_TOKEN:-lab-n8n-token-change-in-production}
       N8N_WEBHOOK_URL: ${N8N_WEBHOOK_URL:-http://n8n:5678/webhook/soc-alert-scored}
       TRIAGE_API_BASE_URL: ${TRIAGE_API_BASE_URL:-http://triage-api:8000}
+      # Phase 2.4 — MISP threat-intel lookups (optional `intel` profile).
+      # Both MISP_URL and MISP_API_KEY must be non-empty to enable the provider
+      # (disable-by-empty, ARCHITECTURE.md §14); the defaults stay empty, so the
+      # zero-external fallback is untouched unless an operator opts in. The key
+      # is never inlined here — it comes from .env / the secret store only.
+      MISP_URL: ${MISP_URL:-}
+      MISP_API_KEY: ${MISP_API_KEY:-}
+      MISP_VERIFY_TLS: ${MISP_VERIFY_TLS:-1}
     volumes:
       - ./data:/data
     networks:
@@ -306,6 +314,278 @@ services:
           cpus: "2.0"
           memory: 2G
 
+  # ---------------------------------------------------------------------------
+  # Phase 2.4 — optional `intel` profile: self-hosted MISP (threat intel).
+  #
+  # `docker compose --profile intel up -d` adds ONLY the MISP stack. It is
+  # strictly additive and OPTIONAL: no default service depends_on it, nothing is
+  # published to the host (internal `soc-core` only), and with the profile
+  # disabled the stack keeps running with `enrichment_status: skipped` — the
+  # zero-external fallback is preserved (ARCHITECTURE.md §7.3, §13, §14).
+  #
+  # Lookup-only by design: the platform reads `/attributes/restSearch` and never
+  # writes, publishes or pushes to MISP (SECURITY.md §1). Seeding is an explicit,
+  # documented operator action (misp/README.md, misp/seeding.md) using only
+  # synthetic documentation-range indicators (SECURITY.md §5).
+  #
+  # Every image is pinned to an exact version (no `latest`); every credential is
+  # supplied by the environment — no values are committed (SECURITY.md §2, §4).
+  #
+  # Why a guard container instead of `${VAR:?}` on the services below: Compose
+  # interpolates the WHOLE file (profile-gated services included) before it
+  # filters inactive profiles, so a required-variable syntax here would make the
+  # default `docker compose up -d` fail until MISP was configured — the opposite
+  # of "strictly additive". `misp-preflight` runs only with the profile and
+  # aborts it, with an explicit message, before any MISP container can start with
+  # an upstream default credential (upstream falls back to MYSQL_PASSWORD=example,
+  # REDIS_PASSWORD=redispassword, GPG_PASSPHRASE=passphrase and a generated admin
+  # password/API key). MISP_* defaults therefore stay empty and unsafe states are
+  # impossible rather than merely discouraged.
+  # ---------------------------------------------------------------------------
+
+  # One-shot, network-less secret guard for the `intel` profile (see above).
+  misp-preflight:
+    image: busybox:1.37.0
+    container_name: soc-misp-preflight
+    profiles: ["intel"]
+    restart: "no"
+    # No network, no capabilities, no writable filesystem: it only inspects env.
+    network_mode: none
+    read_only: true
+    environment:
+      # Interpolation-safe (`:-` with an empty default) so every other profile
+      # keeps parsing; the check below is what enforces "must be set" at runtime.
+      MISP_DB_PASSWORD: ${MISP_DB_PASSWORD:-}
+      MISP_DB_ROOT_PASSWORD: ${MISP_DB_ROOT_PASSWORD:-}
+      MISP_REDIS_PASSWORD: ${MISP_REDIS_PASSWORD:-}
+      MISP_ADMIN_EMAIL: ${MISP_ADMIN_EMAIL:-}
+      MISP_ADMIN_PASSWORD: ${MISP_ADMIN_PASSWORD:-}
+      MISP_ADMIN_KEY: ${MISP_ADMIN_KEY:-}
+      MISP_GPG_PASSPHRASE: ${MISP_GPG_PASSPHRASE:-}
+      MISP_ENCRYPTION_KEY: ${MISP_ENCRYPTION_KEY:-}
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -eu
+        missing=""
+        require() { [ -n "$2" ] || missing="$missing $1"; }
+        require MISP_DB_PASSWORD "$${MISP_DB_PASSWORD:-}"
+        require MISP_DB_ROOT_PASSWORD "$${MISP_DB_ROOT_PASSWORD:-}"
+        require MISP_REDIS_PASSWORD "$${MISP_REDIS_PASSWORD:-}"
+        require MISP_ADMIN_EMAIL "$${MISP_ADMIN_EMAIL:-}"
+        require MISP_ADMIN_PASSWORD "$${MISP_ADMIN_PASSWORD:-}"
+        require MISP_ADMIN_KEY "$${MISP_ADMIN_KEY:-}"
+        require MISP_GPG_PASSPHRASE "$${MISP_GPG_PASSPHRASE:-}"
+        require MISP_ENCRYPTION_KEY "$${MISP_ENCRYPTION_KEY:-}"
+        if [ -n "$missing" ]; then
+          echo "ERROR: the 'intel' profile is missing required .env values:$missing" >&2
+          echo "Generate each value locally (see misp/seeding.md) - no defaults are shipped on purpose." >&2
+          exit 1
+        fi
+        echo "intel profile: required MISP secrets are present"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 32M
+
+  misp-db:
+    image: mariadb:10.11.19
+    container_name: soc-misp-db
+    restart: unless-stopped
+    profiles: ["intel"]
+    depends_on:
+      misp-preflight:
+        condition: service_completed_successfully
+    # Lab-sized InnoDB settings (upstream misp-docker ships 2048M+; this profile
+    # is sized to run next to the default stack on a workstation).
+    command:
+      - "--innodb-buffer-pool-size=${MISP_INNODB_BUFFER_POOL_SIZE:-512M}"
+      - "--innodb-change-buffering=none"
+      - "--innodb-io-capacity=200"
+      - "--innodb-io-capacity-max=400"
+      - "--innodb-log-file-size=128M"
+      - "--innodb-stats-persistent=ON"
+    environment:
+      MYSQL_USER: ${MISP_DB_USER:-misp}
+      MYSQL_DATABASE: ${MISP_DB_NAME:-misp}
+      # Required, no committed defaults: misp-preflight has already refused to
+      # start the profile if this is empty (see the guard above).
+      MYSQL_PASSWORD: ${MISP_DB_PASSWORD:-}
+      MYSQL_ROOT_PASSWORD: ${MISP_DB_ROOT_PASSWORD:-}
+      TZ: ${TZ:-UTC}
+    volumes:
+      - misp-db-data:/var/lib/mysql
+    networks:
+      - soc-core
+    healthcheck:
+      test:
+        - "CMD-SHELL"
+        - "mysqladmin --user=\"$$MYSQL_USER\" --password=\"$$MYSQL_PASSWORD\" status >/dev/null 2>&1 || exit 1"
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    security_opt:
+      - no-new-privileges:true
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 1G
+
+  misp-redis:
+    image: valkey/valkey:7.2.14
+    container_name: soc-misp-redis
+    restart: unless-stopped
+    profiles: ["intel"]
+    depends_on:
+      misp-preflight:
+        condition: service_completed_successfully
+    command:
+      - "valkey-server"
+      - "--requirepass"
+      - "${MISP_REDIS_PASSWORD:-}"
+      - "--maxmemory"
+      - "${MISP_REDIS_MAXMEMORY:-256mb}"
+      - "--maxmemory-policy"
+      - "allkeys-lru"
+    environment:
+      # Passed through for the healthcheck (never a committed literal).
+      REDIS_PASSWORD: ${MISP_REDIS_PASSWORD:-}
+      TZ: ${TZ:-UTC}
+    volumes:
+      - misp-redis-data:/data
+    networks:
+      - soc-core
+    healthcheck:
+      test:
+        - "CMD-SHELL"
+        - "valkey-cli -a \"$$REDIS_PASSWORD\" ping 2>/dev/null | grep -q PONG"
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    security_opt:
+      - no-new-privileges:true
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 256M
+
+  misp-core:
+    image: ghcr.io/misp/misp-docker/misp-core:v2.5.46
+    container_name: soc-misp-core
+    restart: unless-stopped
+    profiles: ["intel"]
+    depends_on:
+      misp-preflight:
+        condition: service_completed_successfully
+      misp-db:
+        condition: service_healthy
+      misp-redis:
+        condition: service_healthy
+    environment:
+      # Internal-only base URL: the platform reaches MISP through the internal
+      # misp-nginx HTTP endpoint on the `soc-core` network. Override only when
+      # the URL genuinely changes (MISP pins its baseurl at first init).
+      BASE_URL: ${MISP_BASE_URL:-http://misp-nginx:8080}
+      ADMIN_EMAIL: ${MISP_ADMIN_EMAIL:-}
+      ADMIN_PASSWORD: ${MISP_ADMIN_PASSWORD:-}
+      ADMIN_ORG: ${MISP_ADMIN_ORG:-SOC Lab Synthetic}
+      # The API key the platform authenticates with (MISP_API_KEY) must be this
+      # same value: setting it here keeps the seeded instance deterministic
+      # instead of relying on a key generated at first boot.
+      ADMIN_KEY: ${MISP_ADMIN_KEY:-}
+      GPG_PASSPHRASE: ${MISP_GPG_PASSPHRASE:-}
+      ENCRYPTION_KEY: ${MISP_ENCRYPTION_KEY:-}
+      # Determinism: no background feed fetches/updates, and no plaintext
+      # credential echo into container logs.
+      ENABLE_BACKGROUND_UPDATES: "false"
+      DISABLE_PRINTING_PLAINTEXT_CREDENTIALS: "true"
+      MYSQL_HOST: misp-db
+      MYSQL_PORT: "3306"
+      MYSQL_USER: ${MISP_DB_USER:-misp}
+      MYSQL_PASSWORD: ${MISP_DB_PASSWORD:-}
+      MYSQL_DATABASE: ${MISP_DB_NAME:-misp}
+      REDIS_HOST: misp-redis
+      REDIS_PORT: "6379"
+      REDIS_PASSWORD: ${MISP_REDIS_PASSWORD:-}
+      TZ: ${TZ:-UTC}
+    # Upstream parity: the MISP configure scripts call `sudo -u www-data` and
+    # audit logging needs AUDIT_WRITE; nothing else is added.
+    cap_add:
+      - AUDIT_WRITE
+    volumes:
+      # State only; the repository ships no MISP runtime configuration.
+      - misp-core-config:/var/www/MISP/app/Config
+      - misp-core-files:/var/www/MISP/app/files
+      - misp-core-gnupg:/var/www/MISP/.gnupg
+    networks:
+      - soc-core
+    healthcheck:
+      # Upstream misp-core readiness probe: PHP-FPM listens on 9002.
+      test: ["CMD-SHELL", "bash -c 'echo > /dev/tcp/127.0.0.1/9002' || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 180s
+    security_opt:
+      - no-new-privileges:true
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 2G
+
+  misp-nginx:
+    image: ghcr.io/misp/misp-docker/misp-nginx:v2.5.46
+    container_name: soc-misp-nginx
+    restart: unless-stopped
+    profiles: ["intel"]
+    depends_on:
+      misp-preflight:
+        condition: service_completed_successfully
+      misp-core:
+        condition: service_healthy
+    environment:
+      BASE_URL: ${MISP_BASE_URL:-http://misp-nginx:8080}
+      # FastCGI upstream inside the compose network (upstream default).
+      FASTCGI_LISTEN: misp-core:9002
+      TZ: ${TZ:-UTC}
+    # Internal only: no `ports:` entry — MISP is never host-visible
+    # (ARCHITECTURE.md §13). See misp/seeding.md for the operator-local,
+    # explicitly-opted-in port-forward used for one-off UI seeding.
+    expose:
+      - "8080"
+    networks:
+      - soc-core
+    # No compose healthcheck here: the image ships its own HEALTHCHECK (HTTP
+    # status probe against the internal status listener on 8081), which is the
+    # upstream-supported check the misp-docker project maintains.
+    user: nginx
+    read_only: true
+    tmpfs:
+      # Modes match upstream so the unprivileged nginx user can write the
+      # generated listen/ssl include files into conf.d.
+      - /etc/nginx/conf.d:mode=0755,uid=101,gid=101
+      - /var/cache/nginx:mode=0755,uid=101,gid=101
+      - /tmp:mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 256M
+
 networks:
   soc-core:
     driver: bridge
@@ -328,4 +608,17 @@ volumes:
   wazuh-manager-logs:
     driver: local
   wazuh-manager-queue:
+    driver: local
+  # Phase 2.4 — `intel` profile state only (additive; never required by the
+  # default stack). Holds the MISP database, cache, config, attachments and GPG
+  # material; MISP events never leave these volumes.
+  misp-db-data:
+    driver: local
+  misp-redis-data:
+    driver: local
+  misp-core-config:
+    driver: local
+  misp-core-files:
+    driver: local
+  misp-core-gnupg:
     driver: local

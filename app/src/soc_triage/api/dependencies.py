@@ -13,6 +13,7 @@ from ..core.metrics import MetricsRegistry
 from ..correlation import CorrelationService
 from ..decisions import DecisionEngine
 from ..enrichment import EnrichmentChain
+from ..enrichment.asset_inventory import AssetInventory
 from ..ingest.deduplication import Deduplicator
 from ..notifications import N8NWebhookClient
 from ..scoring import RiskScorer
@@ -47,6 +48,16 @@ def get_enrichment_chain(request: Request) -> EnrichmentChain:
     """
     chain: EnrichmentChain = request.app.state.enrichment_chain
     return chain
+
+
+def get_asset_inventory(request: Request) -> AssetInventory | None:
+    """Return the optional static asset inventory bound to the application."""
+    inventory: AssetInventory | None = getattr(
+        request.app.state,
+        "asset_inventory",
+        None,
+    )
+    return inventory
 
 
 def get_db_engine(request: Request) -> Engine:
@@ -93,6 +104,10 @@ SettingsDependency = Annotated[Settings, Depends(get_app_settings)]
 DeduplicatorDependency = Annotated[Deduplicator, Depends(get_deduplicator)]
 CorrelatorDependency = Annotated[CorrelationService, Depends(get_correlator)]
 EnrichmentChainDependency = Annotated[EnrichmentChain, Depends(get_enrichment_chain)]
+AssetInventoryDependency = Annotated[
+    AssetInventory | None,
+    Depends(get_asset_inventory),
+]
 DbEngineDependency = Annotated[Engine, Depends(get_db_engine)]
 SessionFactoryDependency = Annotated[sessionmaker, Depends(get_session_factory)]
 ScorerDependency = Annotated[RiskScorer, Depends(get_scorer)]
@@ -102,6 +117,7 @@ MetricsDependency = Annotated[MetricsRegistry, Depends(get_metrics_registry)]
 
 
 __all__ = [
+    "AssetInventoryDependency",
     "CorrelatorDependency",
     "DbEngineDependency",
     "DeciderDependency",
@@ -113,6 +129,7 @@ __all__ = [
     "SessionFactoryDependency",
     "SettingsDependency",
     "get_app_settings",
+    "get_asset_inventory",
     "get_correlator",
     "get_db_engine",
     "get_decider",

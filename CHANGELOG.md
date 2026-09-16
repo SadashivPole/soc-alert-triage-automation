@@ -6,6 +6,195 @@ semantic (`v0.1.0` targeted at the end of Phase 1).
 
 ## [Unreleased]
 
+### Added — Phase 2.5: deterministic scoring v2 (`threat_intel` factor) + updated goldens
+
+- **A threat-intelligence factor in the deterministic scoring engine** (ARCHITECTURE.md §8.2,
+  closing deliverable 2.5): `app/config/scoring.yaml` now reports `engine_version: scoring.v2`
+  and carries a `threat_intel` block (max 25) with per-provider weights — VirusTotal
+  `malicious >= 10 → 15`, `positive below 10 → 8`, `suspicious-only → 4`; MISP
+  `matched attribute/event → 10` plus a `+5` threat-actor tag bonus
+  (`apt`/`threat-actor`/`intrusion-set`). Awards are summed across indicators and capped at the
+  factor max, so a corroborated alert can now reach the critical band on intel evidence alone.
+- **The factor is evidence-only and stays pure.** `scoring/engine.py` reads nothing but the
+  *sanitized* `IOC.enrichment[provider]` payloads enrichment already attached
+  (`enrichment/threat_intel.py`'s `LookupRecord` shape), so scoring performs no I/O, no clock
+  read and no randomness exactly as before — no provider call, no raw upstream body, no new
+  failure surface. Every indicator is folded in sorted-key order with one award per provider per
+  indicator, so points, tier and explanation text are independent of enrichment order.
+- **Fail-safe by construction.** A provider that is disabled, absent, `error`, `timeout` or
+  `rate_limited` — or a payload with a malformed, missing or non-mapping `result`, a non-integer
+  or negative count, or an indicator type neither provider handles (email) — contributes 0. The
+  engine is total for any policy-shaped data, and the `RiskScorer` degraded fallback is unchanged.
+- **Explanation text cannot leak provider content** (SECURITY.md §7). The `detail` string quotes
+  aggregate counts, at most `detail_max_iocs` (3) indicator keys, and only tag values matching a
+  conservative character class; a tag that looks like payload text still earns its bonus but is
+  never quoted. MISP event ids are deliberately not reproduced.
+- **Backward compatibility is a tested contract, not a claim.** `threat_intel` is *optional* in
+  the policy schema: a policy without the block yields the original 7-factor `scoring.v1` set
+  byte-for-byte (asserted both at unit level — the bundled v2 policy minus its intel block
+  reproduces every v1 factor exactly, differing only by the intel award — and end-to-end, where
+  all 24 shipped sample alerts score identically to their pre-2.5 goldens because nothing in the
+  offline path attaches a payload). `evaluation/ground_truth.json` therefore needed **no** score
+  changes; the *contract* goldens were re-pinned deliberately (engine version and the ordered
+  factor set) in the ingest pipeline, explanation, evaluation and scoring-config suites.
+- **Fail-loud policy validation.** Intel bands must be monotonic (`high ≥ low ≥ suspicious-only`)
+  and every band must fit under the factor cap, so a typo in `scoring.yaml` cannot silently clip
+  an award or make the documented maximum unreachable; threat-actor tags are normalized to
+  lowercase and matched as an exact-or-`prefix:` form (so `apt:38` counts, `capture` does not).
+- **Explicitly not applied:** the §8.2 *rescaling* of the pre-existing weights
+  (40→30 · 15→10 · 25→20 · 20→15 · −20→−25) is a separate, consciously re-pinned golden change
+  and remains open; it is called out in ARCHITECTURE.md §8.2 and `scoring.yaml` rather than being
+  smuggled into this commit. Decision routing, tier bands and `enrichment_status` are untouched.
+- Evidence: 56 new targeted tests (`app/tests/unit/test_scoring_threat_intel.py` 52 · policy
+  schema/back-compat 3 in `test_scoring_config.py` · 1 offline pipeline golden in
+  `test_scoring_pipeline.py`), the re-pinned contract goldens, the full 1376-test suite,
+  ruff check/format, mypy, `scripts/check_secrets.sh` and the console JS tests. Documentation:
+  `ARCHITECTURE.md` (§8.2 status note, §5 example detail), `DEVELOPMENT_PLAN.md`, `README.md`,
+  `docs/detection-coverage.md`.
+- **Explicitly not claimed:** no live VirusTotal or MISP lookup was performed — intel verdicts are
+  exercised only as the sanitized payloads the fake-transport providers emit, and there was no
+  Docker-lab operator run with populated intel. Late-enrichment re-score (2.6) remains
+  outstanding.
+
+### Added — Phase 2.4: MISP `intel` compose profile + deterministic seeding guide
+
+- **An optional, strictly additive `intel` compose profile** (closing deliverable 2.4):
+  `docker compose --profile intel up -d` adds five pinned containers and changes nothing
+  in the default stack — a one-shot `misp-preflight` guard (`busybox:1.37.0`) plus
+  `misp-db` (`mariadb:10.11.19`), `misp-redis` (`valkey/valkey:7.2.14`), `misp-core` and
+  `misp-nginx` (`ghcr.io/misp/misp-docker/*:v2.5.46`). All are profile-gated
+  (`["intel"]`), the four services live **only** on the internal `soc-core` network and
+  publish **no host ports** (the Triage API reaches MISP at `http://misp-nginx:8080`
+  internally), and the guard runs with no network at all. No default service gains a
+  `depends_on` on MISP, so MISP never starts in the default profile and the zero-external
+  fallback is unchanged (ARCHITECTURE.md §7.3, §13, §14).
+- **Environment-only secrets with a fail-fast guard.** Every MISP credential comes from
+  `.env` and no default is committed (`MISP_DB_PASSWORD`, `MISP_DB_ROOT_PASSWORD`,
+  `MISP_REDIS_PASSWORD`, `MISP_ADMIN_EMAIL`, `MISP_ADMIN_PASSWORD`, `MISP_ADMIN_KEY`,
+  `MISP_GPG_PASSPHRASE`, `MISP_ENCRYPTION_KEY`); `MISP_ADMIN_KEY` is pinned rather than
+  auto-generated so first boot is deterministic, and the platform authenticates with the
+  same value through `MISP_API_KEY`. Required-variable interpolation (`${VAR:?…}`) is
+  deliberately **not** used: Compose interpolates the whole file — profile-gated services
+  included — before it filters inactive profiles, which would break the default
+  `docker compose up -d`. `misp-preflight` provides the same contract at profile start:
+  the four services `depends_on` it with `condition: service_completed_successfully`, and
+  it aborts the profile with an explicit message naming every missing value, so MISP can
+  never boot with upstream defaults (`MYSQL_PASSWORD=example`,
+  `REDIS_PASSWORD=redispassword`, `GPG_PASSPHRASE=passphrase`, generated admin
+  credentials). The `MISP_URL`/`MISP_API_KEY`/`MISP_VERIFY_TLS` pass-through on
+  `triage-api` keeps its **empty defaults**, preserving disable-by-empty.
+- **Deterministic synthetic seeding guide** (`misp/seeding.md` +
+  `misp/fixtures/synthetic-events.json`): two events with pinned UUIDs, dates and
+  timestamps, containing only RFC 5737 documentation-range IPs and hashes of synthetic
+  benign strings (`to_ids: false`, unpublished, distribution *your organisation only*),
+  aligned with the repository's synthetic corpus. `misp/verify-lookups.sh` re-reads the
+  fixture and verifies the seed with `GET /attributes/restSearch` only.
+- **Lookup-only by construction:** the integration reads `/attributes/restSearch` and
+  never writes, publishes or pushes to MISP; tests pin the request shape (GET, exact
+  parameters, empty body, header-only key), the sanitized allow-list result
+  (`match_count` + capped/sorted `event_ids`/`tags`), the failure vocabulary
+  (`not_found`/`error`/`timeout`/`rate_limited`, never raised), and that no MISP write
+  endpoint or verb exists anywhere in the code path.
+- **Phase 2.3 cache preserved:** definitive MISP verdicts (`found`/`not_found`) replay
+  byte-identically with zero outbound requests and zero rate-limiter tokens, entries stay
+  provider-scoped, and failures are never cached (still retryable).
+- **Evidence:** 57 targeted tests — 29 profile/guide/fixture/guard static checks
+  (profile gating, pinned images, no host ports, `soc-core`-only, hardening, env-only
+  secrets, the executed guard in missing/partial/complete states, fixture
+  determinism/safety, read-only helper), 27 MISP lookup-contract tests
+  (request shape, sanitization allow-list/caps, HTTP/network/malformed failures, retry,
+  cache wiring, secret safety, zero-external fallback), 1 integration MISP-outage
+  fail-open test — plus the updated compose service/volume contract assertions, the full
+  pytest suite, ruff check/format, mypy, `scripts/check_secrets.sh` and the console JS
+  tests. Documentation: `misp/README.md`, `deploy/README.md`, `README.md`,
+  `ARCHITECTURE.md` (§7.3, §13), `DEVELOPMENT_PLAN.md`, `.env.example`.
+- **Explicitly not claimed:** no Docker/MISP instance was started (no Docker daemon in the
+  development sandbox), so no live MISP lookup, seeding run, or UI import was exercised;
+  MISP was **not** live-validated. Late-enrichment re-score (2.6) remains untouched; scoring v2
+  (2.5) is delivered by the entry above.
+
+### Added — Phase 2.3: enrichment response TTL cache
+
+- **A SQLite-backed response cache for threat-intel lookups** (ARCHITECTURE.md §7.2
+  step 2, closing the last outstanding item of deliverable 2.3): new
+  `app/src/soc_triage/enrichment/cache.py` (`EnrichmentCachePolicy`, `CacheStats`,
+  `PersistentEnrichmentCache`) and a new `enrichment_cache` table (migration
+  `c7d8e9f0a1b2`, recovery-safe in the same style as `f9a0b1c2d3e4`).
+- **Semantics, as designed in ARCHITECTURE.md §7.2:**
+  - per-type TTLs pinned to the architecture — **6 h for MD5/SHA1/SHA256, 1 h for
+    IPv4, 1 h for the types §7.2 does not pin (domain/URL/email)** — configurable via
+    `TRIAGE_ENRICHMENT_CACHE_{HASH,IPV4,DEFAULT}_TTL_SECONDS`;
+  - **definitive verdicts only**: `found` / `not_found` are cached; `error` /
+    `timeout` / `rate_limited` are never cached, so transient failures stay retryable;
+  - **byte-identical replay**: a hit returns the stored sanitized `LookupRecord`
+    unchanged — including its original timestamp; freshness is measured from the
+    original lookup time, so a restored database never extends a verdict's validity;
+  - **provider-scoped keys** `(provider, indicator_type, indicator_value)`: a
+    VirusTotal verdict is never served for a MISP lookup;
+  - **quota savings**: the cache is consulted *before* the token bucket, so a hit
+    issues zero outbound requests and consumes zero rate-limiter tokens;
+  - **bounded**: `TRIAGE_ENRICHMENT_CACHE_MAX_ENTRIES` (default 4096); overflow evicts
+    soonest-expiring entries deterministically (`expires_at`, then `id`);
+  - **fail-open**: any database failure degrades to a normal lookup (counted under
+    `stats.failures`, logged by exception *type* only); malformed stored payloads
+    self-heal to a miss; the provider additionally guards the cache contract.
+- **Disabled by default** (`TRIAGE_ENRICHMENT_CACHE_ENABLED`, Phase 2.2 convention):
+  with the flag off, the providers keep the pre-2.3 path byte-for-byte, and the
+  zero-external fallback is unchanged. The table schema migrates regardless (the flag
+  gates *use*, not schema). Only sanitized records and normalized indicator values are
+  stored — never raw upstream bodies, never API keys (SECURITY.md §2, §5, §7).
+- **Wiring:** the same cache instance is shared by the VirusTotal and MISP providers;
+  `app.state.enrichment_cache` exposes it; provider notes report
+  `"<provider>: N served from cache"` and the lookup log event gains `cache_hits` /
+  `outbound_lookups` counts. No scoring, decision, dedupe, correlation, incident, or
+  metrics-catalog behavior changed — the cache never feeds `scoring.v1` /
+  `decisions.v1` on its own.
+- **Evidence:** 61 targeted tests — 24 cache unit (policy/TTL boundaries, provider &
+  type scoping, expiry/eviction/purge/clear, fail-open, malformed-payload self-heal,
+  repr hygiene), 19 provider-cache unit (hit/miss/retry semantics over
+  `httpx.MockTransport` fakes — no network — including token non-consumption, expired
+  re-lookup, broken-cache degradation, and the uncached baseline), 12
+  wiring/migration integration (disabled default, enabled wiring, end-to-end
+  two-alert cache replay with zero additional outbound requests, fresh/idempotent/
+  recovery/incompatible/downgrade migration contract), and 6 settings tests — plus the
+  standard CI gate (ruff check, ruff format check, mypy, pytest on Python 3.11, secret
+  scan). The migration-head pins in the existing migration tests were updated to
+  `c7d8e9f0a1b2`.
+- **Explicitly not claimed:** no live VirusTotal/MISP lookup has been performed
+  (fake transports only); the cache has not been exercised in the Docker lab;
+  `docs/detection-coverage.md` is untouched (the cache is not a detection).
+
+### Added — Phase 6.3 completion: detection regression expansion (corpus 16→24 scenarios)
+
+- **Eight new synthetic fixtures** (`app/tests/fixtures/`, identical copies in
+  `docs/sample-alerts/`), each with ground-truth pins, catalog entries (`SCN-17`–`SCN-24`),
+  ATT&CK registry mappings, runbook references, and focused pipeline tests. All eight are
+  labeled `negative` and stay `monitor`:
+  - `17_wazuh_fim_authorized_motd.json` — authorized `/etc/motd` FIM on a low-criticality
+    host (43/low/`monitor`)
+  - `18_wazuh_windows_user_created_expected.json` — expected onboarding account creation
+    (32/low/`monitor`)
+  - `19_wazuh_virustotal_no_match.json` — VirusTotal no-match hash event (25/low/`monitor`;
+    no live lookup claimed)
+  - `20_custom_ssh_near_miss.json` — four parent-rule 5712 failures, one below custom rule
+    100100 frequency=5 (43/low/`monitor`; synthetic near-miss shape)
+  - `21_custom_fim_near_miss.json` — FIM deletion of an unmonitored scratch file, not
+    parent-rule 550 (38/low/`monitor`)
+  - `22_custom_web_near_miss.json` — WordPress-adjacent path outside custom rule 100120
+    match alternatives (27/low/`monitor`)
+  - `23_suspicious_web_non_triggering.json` — trailing-quote query that is not rule 31103
+    (27/low/`monitor`)
+  - `24_ssh_recurrence_below_burst.json` — two deliveries stay one occurrence below
+    rapid-burst (`min_occurrences=3`); score unchanged, no ground-truth recurrence block
+- **Corpus quality gate** (`EXPECTED_SCENARIO_COUNT`) pinned at 24: 12 positive, 12
+  negative, 2 recurrence (SCN-07, SCN-14). G5 stays `recorded-unresolved`.
+- **Wazuh integrator goldens** updated for the three additional level-3 samples (19, 22,
+  23) filtered at the default `min_level=5`.
+- No change to `app/config/scoring.yaml`, `app/config/decisions.yaml`, or any runtime
+  engine code: `scoring.v1` / `decisions.v1` and existing golden outcomes are untouched.
+  Label semantics unchanged (negatives never actioned; positives follow pinned GT action;
+  SCN-01 remains the documented first-occurrence FN).
+
 ### Added — Phase 6.2: MITRE ATT&CK mapping framework
 
 - **A maintained, machine-readable ATT&CK mapping registry** — `evaluation/attack_mappings.yaml`

@@ -198,7 +198,9 @@ history.
 
 ## Related Sample
 
-`docs/sample-alerts/05_wazuh_web_sql_injection.json`
+- `docs/sample-alerts/05_wazuh_web_sql_injection.json`
+- `docs/sample-alerts/22_custom_web_near_miss.json` — WordPress-adjacent path outside custom rule 100120 (Phase 6.3, SCN-22, negative)
+- `docs/sample-alerts/23_suspicious_web_non_triggering.json` — trailing-quote query that does not trigger the SQL-injection rule (Phase 6.3, SCN-23, negative)
 
 ## MITRE ATT&CK
 
@@ -211,5 +213,7 @@ The synthetic sample identifies:
 Validate the mapping against the organization's actual detection content
 before production use.
 Phase 6.3 regression samples: `docs/sample-alerts/13_custom_web_rule_100120_env.json`,
-`docs/sample-alerts/14_custom_web_recurrence_rule_100121.json`, and
-`docs/sample-alerts/16_ordinary_web_request.json`.
+`docs/sample-alerts/14_custom_web_recurrence_rule_100121.json`,
+`docs/sample-alerts/16_ordinary_web_request.json`,
+`docs/sample-alerts/22_custom_web_near_miss.json`, and
+`docs/sample-alerts/23_suspicious_web_non_triggering.json`.

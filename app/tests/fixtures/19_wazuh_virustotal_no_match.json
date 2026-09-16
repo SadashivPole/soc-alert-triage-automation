@@ -1,0 +1,35 @@
+{
+  "id": "1770000000.600019",
+  "timestamp": "2026-08-29T17:35:44.000+0000",
+  "rule": {
+    "level": 3,
+    "description": "VirusTotal: Alert - no matches",
+    "id": "87103",
+    "firedtimes": 1,
+    "mail": false,
+    "groups": ["virustotal", "integrations"]
+  },
+  "agent": {
+    "id": "010",
+    "name": "hr-wks-12",
+    "ip": "10.0.3.52",
+    "labels": { "asset_tier": "standard", "owner": "it-support" }
+  },
+  "manager": { "name": "wazuh-manager" },
+  "decoder": { "name": "json" },
+  "data": {
+    "integration": "virustotal",
+    "virustotal": {
+      "found": "0",
+      "md5": "d69d469309600f2a0823fb8b58d7301c",
+      "sha1": "36dd5f6c03f188aed26b0f5f3b01a9ba8d3b19e6",
+      "sha256": "3a20dc642b5e0e20e6a367b14276b26862f87f6bee665c197f9a969145a45b1b",
+      "malicious": "0",
+      "suspicious": "0"
+    },
+    "file": "C:\\\\Users\\\\jdoe-lab\\\\Documents\\\\lab_readme.txt",
+    "syscheck_file": "C:\\\\Users\\\\jdoe-lab\\\\Documents\\\\lab_readme.txt"
+  },
+  "location": "syscheck",
+  "full_log": "File '/Users/jdoe-lab/Documents/lab_readme.txt' added. VirusTotal match: malicious=0 suspicious=0 (synthetic lab data)"
+}

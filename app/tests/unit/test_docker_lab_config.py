@@ -305,10 +305,20 @@ def test_observability_profile_gates_only_the_two_new_services() -> None:
         "grafana",
         # Phase 4.1: the `full` profile is separately gated and asserted below.
         "wazuh-manager",
+        # Phase 2.4: the `intel` profile (four containers plus its one-shot
+        # secret guard) is separately gated and asserted in
+        # tests/unit/test_misp_intel_profile.py.
+        "misp-preflight",
+        "misp-db",
+        "misp-redis",
+        "misp-core",
+        "misp-nginx",
     }
     for name in ("prometheus", "grafana"):
         assert compose["services"][name].get("profiles") == ["observability"], name
     assert compose["services"]["wazuh-manager"].get("profiles") == ["full"]
+    for name in ("misp-preflight", "misp-db", "misp-redis", "misp-core", "misp-nginx"):
+        assert compose["services"][name].get("profiles") == ["intel"], name
     for name in ("triage-api", "n8n", "mailpit"):
         assert "profiles" not in compose["services"][name], name
 
@@ -389,6 +399,12 @@ def test_observability_services_are_not_required_dependencies() -> None:
         "wazuh-manager-etc",
         "wazuh-manager-logs",
         "wazuh-manager-queue",
+        # Phase 2.4 — `intel` profile state only (additive).
+        "misp-db-data",
+        "misp-redis-data",
+        "misp-core-config",
+        "misp-core-files",
+        "misp-core-gnupg",
     }
 
 

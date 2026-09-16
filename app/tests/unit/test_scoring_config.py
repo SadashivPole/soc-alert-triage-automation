@@ -26,6 +26,7 @@ from soc_triage.scoring import (
 
 
 def _valid_policy() -> dict:
+    """A *scoring.v1*-shaped policy: no ``threat_intel`` block (backward compat)."""
     return {
         "engine_version": "scoring.v1",
         "rule_severity": {
@@ -102,8 +103,38 @@ def _valid_decision() -> dict:
 
 def test_bundled_scoring_policy_loads() -> None:
     policy = default_scoring_policy()
-    assert policy.engine_version == "scoring.v1"
+    assert policy.engine_version == "scoring.v2"
     assert policy.tiers[-1].max == 100
+
+
+def test_bundled_policy_configures_threat_intel_factor() -> None:
+    """Phase 2.5: the shipped policy weights match ARCHITECTURE.md §8.2."""
+    intel = default_scoring_policy().threat_intel
+    assert intel is not None
+    assert intel.max == 25
+    assert intel.detail_max_iocs == 3
+    assert set(intel.handled_types) == {"ipv4", "domain", "url", "md5", "sha1", "sha256"}
+    assert intel.virustotal.provider == "virustotal"
+    assert (
+        intel.virustotal.malicious_high_min,
+        intel.virustotal.malicious_high_points,
+        intel.virustotal.malicious_low_points,
+        intel.virustotal.suspicious_min,
+        intel.virustotal.suspicious_only_points,
+    ) == (10, 15, 8, 1, 4)
+    assert intel.misp.provider == "misp"
+    assert intel.misp.event_match_points == 10
+    assert intel.misp.threat_actor_bonus_points == 5
+    assert set(intel.misp.threat_actor_tags) == {"apt", "threat-actor", "intrusion-set"}
+
+
+def test_threat_intel_block_is_optional_for_backward_compatibility() -> None:
+    """A scoring.v1-shaped policy without the block still validates (7 factors)."""
+    policy = _valid_policy()
+    assert "threat_intel" not in policy
+    loaded = scoring_policy_from_mapping(policy)
+    assert loaded.engine_version == "scoring.v1"
+    assert loaded.threat_intel is None
 
 
 def test_bundled_decision_policy_loads() -> None:
@@ -200,6 +231,52 @@ def test_valid_policy_passes() -> None:
         (
             lambda p: p.update(rule_severity={"max": 40, "bands": []}),
             "must not be empty",
+        ),
+        # --- threat_intel (Phase 2.5) ---
+        (
+            lambda p: p.update(
+                threat_intel={
+                    "max": 5,
+                    "virustotal": {"malicious_high_points": 15},
+                    "misp": {"event_match_points": 0, "threat_actor_bonus_points": 0},
+                }
+            ),
+            "below the largest Virustotal award",
+        ),
+        (
+            lambda p: p.update(
+                threat_intel={
+                    "max": 5,
+                    "virustotal": {
+                        "malicious_high_points": 0,
+                        "malicious_low_points": 0,
+                        "suspicious_only_points": 0,
+                    },
+                    "misp": {"event_match_points": 10},
+                }
+            ),
+            "below the maximum MISP award",
+        ),
+        (
+            lambda p: p.update(threat_intel={"max": 25, "handled_types": []}),
+            "must not be empty",
+        ),
+        (
+            lambda p: p.update(threat_intel={"max": 25, "handled_types": ["sha512"]}),
+            "unknown indicator type",
+        ),
+        (
+            lambda p: p.update(
+                threat_intel={
+                    "max": 25,
+                    "virustotal": {"malicious_high_points": 1, "malicious_low_points": 8},
+                }
+            ),
+            "malicious_high_points must be >=",
+        ),
+        (
+            lambda p: p.update(threat_intel={"max": 25, "misp": {"threat_actor_tags": ["  "]}}),
+            "blank tag",
         ),
     ],
 )

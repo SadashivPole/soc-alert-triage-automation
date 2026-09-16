@@ -30,6 +30,7 @@ from ..models.ioc import IOC, IOCType
 from .threat_intel import (
     DEFAULT_TIMEOUT_SECONDS,
     BaseHTTPThreatIntelProvider,
+    ResponseCache,
     RetryConfig,
     TokenBucket,
 )
@@ -56,8 +57,13 @@ class MISPProvider(BaseHTTPThreatIntelProvider):
         retry: RetryConfig | None = None,
         now: Callable[[], datetime] | None = None,
         sleep: Callable[[float], None] | None = None,
+        cache: ResponseCache | None = None,
     ) -> None:
-        """Build the provider; empty ``url``/``api_key`` ⇒ disabled (never called)."""
+        """Build the provider; empty ``url``/``api_key`` ⇒ disabled (never called).
+
+        ``cache`` is the optional Phase 2.3 response TTL cache
+        (ARCHITECTURE.md §7.2 step 2); ``None`` preserves the uncached path.
+        """
         headers = {"Accept": "application/json", "Content-Type": "application/json"}
         if api_key:
             headers["Authorization"] = api_key
@@ -75,6 +81,7 @@ class MISPProvider(BaseHTTPThreatIntelProvider):
             retry=retry,
             now=now,
             sleep=sleep,
+            cache=cache,
         )
 
     @property

@@ -32,11 +32,11 @@ history. Status claims elsewhere are descriptive, not authoritative.
 | --- | --- | --- |
 | **Phase 0 — Foundation** | ✅ Implemented · locally validated | Docs, scaffolding, secret scanner, CI |
 | **Phase 1 — MVP triage pipeline** | ✅ Implemented · locally validated | Ingest → normalize → dedupe → score → decide → notify, tests green (⬜ simulator script) |
-| **Phase 2 — Enrichment & threat intelligence** | 🟡 Partially validated | VirusTotal + MISP providers implemented (fake-transport tested, disabled by default); MISP profile, static allowlist loader, scoring v2 intel factor, TTL cache ⬜ |
+| **Phase 2 — Enrichment & threat intelligence** | 🟡 Partially validated | 2.2 static allowlist + asset inventory ✅ implemented · locally validated (deterministic local policy wiring, disabled by default, 47 targeted tests); 2.3 enrichment response TTL cache ✅ implemented · locally validated (SQLite-backed, per-type TTLs, disabled by default, fail-open, 61 targeted tests); 2.4 MISP client + `intel` compose profile + deterministic seeding guide ✅ implemented · statically validated (pinned images, internal-only, env-only secrets, guard-enforced, lookup-only, 57 targeted tests — no live MISP run); VirusTotal + MISP providers fake-transport tested, disabled by default; scoring v2 intel factor, late-enrichment re-score ⬜ |
 | **Phase 3 — Incidents, analyst workflow & observability** | 🟡 Partially validated | Incidents, lifecycle, read APIs, timeline, sweeper, console, runbooks, `/metrics` + Grafana profile all implemented; PostgreSQL profile + stats/digest ⬜ |
 | **Phase 4 — Real Wazuh integration & approved response** | 🟡 Partially validated | 4.1/4.2 source-audited + live-validated end-to-end; 4.4 validated; 4.3 authored but not live-validated; 4.5/4.6/4.7 and runtime failure/duplicate checks ⬜ |
 | **Phase 5 — Deterministic detection evaluation** | ✅ Implemented · locally validated | Labeled corpus, ground truth, confusion matrix, precision/recall/F1/FPR, runtime evaluation tests |
-| **Phase 6 — Detection quality & correlation** | 🟡 In progress (4 of 6 items implemented) | Detection coverage framework ✅ (6.1); ATT&CK mapping ✅ (6.2 — registry + rendered view + validation tests); cross-alert correlation ✅ (6.4); analyst explainability ✅ (6.5); expanded regression corpus 🟡 (6.3, 10 scenarios); detection-quality CI gates 🔮 (6.6) |
+| **Phase 6 — Detection quality & correlation** | 🟡 In progress (5 of 6 items implemented) | Detection coverage framework ✅ (6.1); ATT&CK mapping ✅ (6.2 — registry + rendered view + validation tests); expanded regression corpus ✅ (6.3, 24 scenarios); cross-alert correlation ✅ (6.4); analyst explainability ✅ (6.5); detection-quality CI gates 🟡 (6.6 — corpus-quality gate pins 24 scenarios; precision/recall/F1 thresholds still not asserted) |
 
 No release tags have been cut. The package version is `0.1.0a1` and `CHANGELOG.md` is
 still under `[Unreleased]`.
@@ -114,23 +114,46 @@ recurrence · auth/limit/validation error paths correct · pipeline completes wi
 
 **Goal:** real intel enrichment with quota safety and graceful degradation.
 
-**Status: partially validated — provider clients implemented, container profile and
-scoring integration still outstanding.**
+**Status: partially validated — 2.2 (static allowlist `allowlist.v1` + asset inventory
+`asset_inventory.v1`, with deterministic local wiring), 2.3 (enrichment response TTL
+cache, SQLite-backed, disabled by default) and 2.4 (MISP client contract + optional
+`intel` compose profile + deterministic synthetic seeding guide) are ✅ implemented ·
+locally/statically validated; the VirusTotal/MISP provider clients remain fake-transport
+tested (no live lookup); the scoring v2 intel factor and the late-enrichment re-score
+2.5 (scoring v2 intel factor) is ✅ implemented · locally validated at payload level (no live
+VT/MISP run), with the §8.2 weight rescaling recorded as an explicit open item; only the
+late-enrichment re-score (2.6) remains ⬜ outstanding.**
 
 | # | Deliverable | Status | Evidence / gap |
 | --- | --- | --- | --- |
 | 2.1 | IOC extractor | ✅ implemented (delivered early as Phase 1E/1.13) | pure, deterministic, no network I/O |
-| 2.2 | Allowlist + asset-inventory YAML loaders | ⬜ outstanding | the scoring engine (`allowlist` −20) and the decision engine (`suppress`) already honor an allowlist *match*, but no provider/loader produces one today; asset criticality comes from `agent.labels.asset_tier` in the alert |
-| 2.3 | VirusTotal v3 client: token bucket (4/min, 500/day), quota accounting, fake-server tests | 🟡 implemented, no live run | `httpx.MockTransport` fakes only; **no response TTL cache** (⬜) |
-| 2.4 | MISP client + `intel` compose profile + seeding guide | 🟡 client ✅ / profile ⬜ | `enrichment/misp.py` implemented and disabled by default; `misp/` is scaffolded only — no compose service, no seeding guide |
-| 2.5 | Scoring v2 (`threat_intel` factor) + updated goldens | ⬜ outstanding | policy is still `scoring.v1` (7 factors); IOC verdicts do not yet add intel-specific points |
+| 2.2 | Allowlist + asset-inventory YAML loaders | ✅ Implemented · locally validated | deterministic, versioned, non-secret static policies — `app/config/allowlists.yaml` (`allowlist.v1`) and `app/config/asset_inventory.yaml` (`asset_inventory.v1`) — **validated fail-loud at load**, and loaded only when `TRIAGE_ALLOWLIST_PATH` / `TRIAGE_ASSET_INVENTORY_PATH` are set (empty path ⇒ disabled; the shipped files contain no entries). The `allowlist` provider registers in the chain **only when configured**; matching is on exact normalized indicators plus IPv4 CIDR; the provider's `enrichment_status` is always `skipped`, so local policy adds no intel points; the existing scoring `allowlist` (−20) factor and `suppress` decision route are consumed **unchanged** — no scoring- or decision-policy change. The asset inventory is a pure fill-only normalization seam (precedence `agent_id` → IP → name; source-provided fields always win) and does **not** alter the `asset_criticality` model or weights. No network I/O, no AI/LLM. Evidence: 47 targeted tests (26 allowlist unit · 16 asset-inventory unit · 5 integration wiring) + ruff check/format + mypy + CI on Python 3.11 & 3.12 + secret scan. **Still not validated:** an operator-side run with a populated policy (no Docker-lab validation) and a corpus-level `suppress` pin (see 6.3 / coverage gap G10) |
+| 2.3 | VirusTotal v3 client: token bucket (4/min, 500/day), quota accounting, fake-server tests; response TTL cache | ✅ implemented · locally validated (no live run) | client: `httpx.MockTransport` fakes only; **TTL cache**: `enrichment_cache` table (migration `c7d8e9f0a1b2`) + `PersistentEnrichmentCache` — per-type TTLs per ARCHITECTURE §7.2 (6 h hashes / 1 h IPs / 1 h other), provider-scoped keys, definitive verdicts only (failures stay retryable), byte-identical replay, bounded (`max_entries`, soonest-expiring eviction), fail-open, **disabled by default** (`TRIAGE_ENRICHMENT_CACHE_ENABLED`), 61 targeted tests (24 cache unit · 19 provider-cache unit · 12 wiring/migration integration · 6 config); no live-provider run yet |
+| 2.4 | MISP client + `intel` compose profile + seeding guide | ✅ Implemented · statically validated (no live MISP run) | `enrichment/misp.py` (lookup-only `GET /attributes/restSearch`, sanitized provenance, disabled by default, Phase 2.3 cache preserved) + an optional `intel` compose profile — `misp-db` (`mariadb:10.11.19`), `misp-redis` (`valkey/valkey:7.2.14`), `misp-core`/`misp-nginx` (`ghcr.io/misp/misp-docker/*:v2.5.46`) plus a one-shot `misp-preflight` guard (`busybox:1.37.0`) — pinned, profile-gated, `soc-core`-only with **no host ports** (guard: no network), every credential from `.env` with no committed default, enforced by the guard via `service_completed_successfully` (no `${VAR:?}`: Compose interpolates the whole file before profile filtering, which would break the default stack), `triage-api` MISP vars still default-empty (disable-by-empty preserved). Deterministic seeding guide `misp/seeding.md` + pinned synthetic fixture `misp/fixtures/synthetic-events.json` (documentation ranges only, fixed UUIDs/timestamps, `to_ids: false`, unpublished) + read-only verification helper `misp/verify-lookups.sh`. Evidence: 57 targeted tests (29 profile/guide/fixture/guard static — including the executed `misp-preflight` guard in missing/partial/complete states · 27 MISP lookup contract: request shape, sanitization allow-list/caps, failure modes, cache wiring, secret safety, zero-external fallback · 1 integration MISP-outage fail-open) + the updated compose service/volume contract assertions + full suite + ruff + mypy + secret scan. **Still not validated:** MISP was never started (no Docker daemon in the sandbox) — no live lookup, seeding or UI import has been exercised |
+| 2.5 | Scoring v2 (`threat_intel` factor) + updated goldens | ✅ Implemented · locally validated | The policy is now `scoring.v2` and carries a **config-driven `threat_intel` factor** (`app/config/scoring.yaml`, max 25) implementing ARCHITECTURE.md §8.2's intel row exactly: per-indicator VirusTotal awards read from the *sanitized* `last_analysis_stats` payload (malicious ≥10 → 15 · positive-below-10 → 8 · suspicious-only → 4) plus MISP awards (matched attribute/event → 10, threat-actor tag → +5; `apt`/`threat-actor`/`intrusion-set`, prefix-matched so `apt:38` counts and `capture` does not), summed across indicators and capped at 25. **Pure and offline** — the engine reads only `IOC.enrichment[provider]` and never a live service, so ingest gains no I/O; unavailable intel (provider disabled, `error`/`timeout`/`rate_limited`), absent or malformed payloads and unhandled indicator types contribute 0, and no payload shape can raise. The factor is **optional in the schema**: a policy without the block keeps the 7-factor `scoring.v1` set byte-identically (asserted at unit *and* pipeline level). Determinism: indicators are folded in sorted-key order, one award per provider per indicator, so points, tier and explanation text are independent of enrichment order. Explanation safety: the detail quotes aggregate counts, at most `detail_max_iocs` (3) indicator keys, and only tag values matching a conservative shape — upstream free text (e.g. a log line smuggled into a MISP tag) can never reach a stored justification (SECURITY.md §7). Validation is fail-loud: bands must be monotonic and must fit under the factor cap. Goldens updated deliberately: `evaluation/ground_truth.json` scores are **unchanged** (no fixture carries an enrichment payload), while the response-contract goldens (`scoring.v1` → `scoring.v2`, 7 → 8 ordered factors) were re-pinned in the ingest, explanation, evaluation and scoring-config suites. **Explicitly not applied:** the §8.2 *rescaling* of the pre-existing weights (40→30 · 15→10 · 25→20 · 20→15 · −20→−25) — a separate golden change, still open. Evidence: 56 new targeted tests (52 factor unit · 3 policy-schema/back-compat unit · 1 offline pipeline golden) + the re-pinned contract goldens + the full 1376-test suite + ruff check/format + mypy + secret scan + console JS tests. **Still not validated:** no live VT/MISP run — intel verdicts are exercised only as the sanitized payloads the fake-transport providers emit, and no Docker-lab operator run with populated intel |
 | 2.6 | Late-enrichment background re-score | ⬜ outstanding | no re-score loop exists |
 | 2.7 | WF2 message includes IOC verdict table | 🟡 partial | WF2 renders IOC/enrichment summaries grouped by type; no separate per-provider verdict table |
 
-**Acceptance (not yet met):** VT outage/quota simulations never delay ingest beyond the
-budget and always mark `enrichment_status`; a MISP-matched sample alert scores per a new
-golden; quota usage observable. Fail-open behavior, token-bucket non-blocking behavior,
-and status marking are covered by tests today.
+**Acceptance (partly met):** VT outage/quota simulations never delay ingest beyond the
+budget and always mark `enrichment_status`; an intel-matched alert now scores per a **new
+golden** (2.5: `test_golden_matched_malware_alert_assessment` pins the full 8-factor `scoring.v2`
+assessment, and `test_offline_ingest_keeps_the_intel_factor_neutral` pins every shipped sample at
+intel 0); quota usage is observable. Fail-open behavior, token-bucket non-blocking behavior,
+and status marking are covered by tests today. 2.2's own gate — deterministic local policy
+load, fail-loud validation at load, disabled-by-default configuration, no scoring/decision
+policy change — **is met** by its 47 targeted tests + CI. 2.3's own gate — cache-disabled
+default, definitive-verdicts-only caching, byte-identical replay, provider-scoped keys,
+quota savings without token consumption, fail-open on any cache failure, no scoring/decision
+policy change, recovery-safe migration — **is met** by its 61 targeted tests + CI (no
+live-provider run yet). 2.4's own gate — profile-gated and absent from the default stack,
+pinned images, internal-only networking, env-only secrets, lookup-only request contract,
+fail-open and cache preservation, synthetic-only deterministic seed — **is met** by its
+57 targeted tests + CI, with the explicit caveat that no Docker/MISP instance was started
+(no live lookup or seeding is claimed). The **phase** gate is **not** met, and stays
+dependent on 2.6 (late-enrichment re-score). 2.5's own gate — deterministic,
+config-driven intel factor, sanitized-payload-only reads, fail-safe on unavailable intel,
+§8.2 weights, updated goldens, scoring still I/O-free and version-marked — **is met** by its
+56 targeted tests + CI, with the §8.2 weight *rescaling* left as a documented open item.
 
 ---
 
@@ -299,19 +322,20 @@ Confusion matrix: **TP 4 · FP 0 · FN 1 · TN 1** → **precision 1.0000**, **r
 **Goal:** move from "the deterministic path behaves as pinned" to "detection quality is
 continuously measured and regressions are blocked".
 
-**Status: in progress — 4 of 6 items implemented (detection coverage framework; ATT&CK
-mapping; cross-alert correlation as an investigation context; analyst explainability);
-item 6.3 is partially progressed (corpus expanded 6→10 scenarios).** Everything else
-below is still a scope, not an achievement.
+**Status: in progress — 5 of 6 items implemented (detection coverage framework; ATT&CK
+mapping; expanded regression corpus of 24 scenarios; cross-alert correlation as an
+investigation context; analyst explainability).** Item 6.6 still does not assert
+precision/recall/F1 thresholds (the corpus-quality gate pins completeness, not metric
+values). Everything else below is still a scope, not an achievement.
 
 | # | Item | Scope | Status |
 | --- | --- | --- | --- |
 | 6.1 | Detection coverage framework | A machine-readable inventory of the scenarios, Wazuh rules/decoders, and pipeline outcomes the platform covers, plus explicit blind spots | ✅ **implemented** (delivered as the Phase 6.2 implementation task) — see below |
 | 6.2 | MITRE ATT&CK mapping | Maintained mapping from scenarios/rules to ATT&CK techniques for reporting and analyst context (today ATT&CK ids only pass through from Wazuh rule metadata as `rule.mitre`, and their presence contributes to the `rule_groups_mitre` score factor) | ✅ **implemented** (registry + rendered view + validation tests; runtime untouched) — see below |
-| 6.3 | Expanded regression corpus | Grow the labeled corpus well beyond 6 fixtures; add negatives per scenario; define and document the positive/negative ↔ decision-action semantics (including the UC-1 first-occurrence case) | 🟡 **partially progressed** (Phase 6.3 task) — corpus grown 6→10 scenarios (recurrence escalation, second negative, critical/SEV1, low asset band); label semantics defined and enforced; per-scenario negatives and CI quality thresholds still outstanding — see below |
+| 6.3 | Expanded regression corpus | Grow the labeled corpus well beyond 6 fixtures; add negatives per scenario; define and document the positive/negative ↔ decision-action semantics (including the UC-1 first-occurrence case) | ✅ **implemented** — corpus grown to 24 scenarios (12 positive / 12 negative), including per-scenario negatives, custom-rule near-misses, and a just-below-trigger recurrence boundary (`SCN-17`–`SCN-24`); label semantics defined and enforced (SCN-01 remains the documented UC-1 first-occurrence FN) |
 | 6.4 | Cross-alert correlation | Correlate related alerts (same host, user, or indicator over time) into one investigation context (today only rule+agent recurrence is grouped) | ✅ **implemented** (investigation-context scope; user correlation unsupported by design — no stable canonical user field) — see below |
 | 6.5 | Analyst explainability | Extend per-alert explanations beyond today's factor-by-factor score justification, decision reasons, and incident timeline — e.g. "what changed since the last occurrence" | ✅ **implemented** (merged via PR #31) — deterministic, read-only per-alert explanations (`explanation.v1`): `GET /api/v1/alerts/{alert_id}/explanation` assembles the stored alert/detection/score/decision/dedupe/correlation/incident/audit facts with explicit nulls, never re-scoring or inferring |
-| 6.6 | Detection-quality CI gates | Fail CI when precision/recall/F1 degrade beyond an agreed threshold, on a corpus large enough to make the thresholds meaningful | 🔮 not started — coverage framework validates traceability, not quality (gap G8) |
+| 6.6 | Detection-quality CI gates | Fail CI when precision/recall/F1 degrade beyond an agreed threshold, on a corpus large enough to make the thresholds meaningful | 🟡 **partial** — `test_detection_quality_gates.py` pins corpus completeness (24 scenarios, fixture sync, regression coverage, G5 liveness) and prints TP/FP/FN/TN; precision/recall/F1 values are still printed, not asserted (gap G8: live Wazuh coverage is not measured) |
 
 ### 6.1 Detection coverage framework — what is now implemented (Phase 6.2 task)
 
@@ -384,10 +408,11 @@ design (verified by mutation checks during implementation: an altered fixture id
 removed G5 record, an altered provenance path, and a doc/registry desync each fail the
 suite); re-run the validation when rules, fixtures, ground truth, or runbooks change.
 
-### 6.3 Expanded regression corpus — what is now implemented (partial)
+### 6.3 Expanded regression corpus — what is now implemented
 
-**Status: 🟡 partially progressed. No scoring or decision-routing behavior changed; the
-expansion adds fixtures, ground-truth pins, and regression tests only.**
+**Status: ✅ implemented. No scoring or decision-routing behavior changed; the
+expansion adds fixtures, ground-truth pins, catalog/registry rows, coverage docs,
+and regression tests only.**
 
 | Scenario | What it pins | Why it exists |
 | --- | --- | --- |
@@ -398,16 +423,24 @@ expansion adds fixtures, ground-truth pins, and regression tests only.**
 
 Plus: corpus label semantics defined and enforced (`positive` scenarios must never be
 suppressed; `negative` scenarios must never be actioned — `SCN-01` remains the documented
-UC-1 first-occurrence FN), harness assertions for the stable scoring.v1/decisions.v1
+UC-1 first-occurrence FN), harness assertions for the stable scoring.v2/decisions.v1
 contract (engine version, non-degraded factor set and order, decision reasons shape,
 severity consistency, offline `enrichment_status`), a replay-determinism test over the
 whole corpus, and recurrence boundary tests (2 occurrences and window ±1 s at unit level;
 second-delivery non-escalation at pipeline level).
 
-**Still outstanding in this item:** negatives per scenario (only `SCN-02`/`SCN-08` are
-negative), corpus growth "well beyond" 10 fixtures, and quality thresholds on the metrics
-(6.6). Allowlist `suppress` remains unreachable end-to-end until an allowlist provider
-exists (Phase 2.2; coverage-doc gap G10).
+Plus `SCN-17`–`SCN-24` (all negative, all `monitor`): authorized FIM, expected account
+creation, non-malicious hash, custom-rule SSH/FIM/web near-misses, a non-triggering web
+request, and a two-delivery recurrence boundary that stays below rapid-burst. The labeled
+corpus is now 24 scenarios (12 positive / 12 negative). Quality thresholds on the metrics
+remain 6.6. An allowlist provider now exists (Phase 2.2 — static `allowlist.v1`, registered
+only when `TRIAGE_ALLOWLIST_PATH` points at a policy; it performs no matching until that
+policy has entries), so the `suppress` route is reachable in the runtime path once an
+operator configures a populated policy (loader → chain merge → decision router wiring is
+present, and the −20 factor and `suppress` route are unit-tested) — but that composition is
+not pinned by an end-to-end test, and the corpus still does not pin a `suppress` outcome.
+`docs/detection-coverage.md` gap G10 additionally still describes the loader as outstanding
+(a follow-up docs update is needed there — that file is outside this plan's edit scope).
 
 **Phase 6 exit criteria (to be refined as items land):** a documented coverage map exists
 (✅ 6.1) · ATT&CK mapping is generated from a maintained source and covered by tests
@@ -459,7 +492,7 @@ free-text/`full_log` similarity; any ML/LLM similarity score. Allowlisted indica
 excluded from evidence.
 
 **Deliberate scope limits (blind spots, not gaps in implementation):** correlation does not
-feed `scoring.v1`/`decisions.v1`; contexts have no lifecycle (no TTL sweeper — bounded growth
+feed `scoring.v2`/`decisions.v1`; contexts have no lifecycle (no TTL sweeper — bounded growth
 is a deployment concern); a context may span longer than one window when evidence chains
 transitively (each pairwise link stays window-bounded and carries its own evidence); contexts
 merge only when a *newly ingested alert* presents qualifying evidence bridging them
@@ -470,11 +503,20 @@ never merged at all.
 
 ## Testing Strategy
 
-**Verified locally on the current checkout (Python 3.11, 2026-09-11, after Phase 6.4):**
+**Verified locally on the checkout as of 2026-09-11, after Phase 6.4:**
 `pytest` → **998 passed** (595 unit · 346 integration · 57 evaluation, of which 52 are the
 Phase 6.1 detection-coverage validation; the 45 Phase 6.4 correlation tests are included);
 ruff check + format check, mypy `src`, and
 `check_secrets.sh` clean; `node --test app/tests/js/console_core.test.cjs` → **15 passed**.
+
+That 998 figure predates the Phase 2.2 merge. Phase 2.2 is evidenced by its own
+**47 targeted tests** (26 allowlist unit · 16 asset-inventory unit · 5 integration wiring)
+plus the same CI gate (ruff check, ruff format check, mypy, pytest on Python 3.11 & 3.12,
+secret scan). Phase 2.3 is evidenced by its own **61 targeted tests** (24 cache unit ·
+19 provider-cache unit · 12 wiring/migration integration · 6 config) plus the same CI
+gate. No full-suite re-count was taken for Phase 2.2, so **no updated suite total is
+claimed anywhere in this plan or the README** (for reference, the local full-suite run
+accompanying Phase 2.3 measured 1258 passed on Python 3.11).
 
 | Layer | Runs on | Tooling | Gate |
 | --- | --- | --- | --- |
@@ -518,8 +560,8 @@ deterministic seeds for any randomized behavior (jitter tests use seeded RNG).
 
 | Risk | Impact | Mitigation |
 | --- | --- | --- |
-| VirusTotal public quota exhausted mid-demo | enrichment gaps | non-blocking token bucket ✅ (an exhausted quota marks lookups `rate_limited` instead of stalling the pipeline) + `soc_triage_enrichment_provider_outcomes` counters; response TTL cache ⬜; zero-intel fallback mode is a *feature* demo |
-| MISP docker stack is heavy and not yet containerized (RAM/time) | lab friction | optional profile by design, VT-only mode; document sizing when the profile lands |
+| VirusTotal public quota exhausted mid-demo | enrichment gaps | non-blocking token bucket ✅ (an exhausted quota marks lookups `rate_limited` instead of stalling the pipeline) + `soc_triage_enrichment_provider_outcomes` counters; response TTL cache ✅ (repeat indicators served from `enrichment_cache` without consuming tokens; disabled by default); zero-intel fallback mode is a *feature* demo |
+| MISP docker stack is heavy (RAM/time) | lab friction | optional `intel` profile by design and internal-only; VT-only mode still works; `misp/seeding.md` documents the workstation-sized limits, the 180 s first-boot health period, and the no-feeds/no-modules determinism choices |
 | External providers only ever tested with fake transports | live-API surprises | explicit status labelling (no live VT/MISP call is claimed anywhere) and a planned live smoke check |
 | n8n breaking API changes between versions | workflow imports fail | pin the n8n image tag; workflows exported per version; static/security tests in CI |
 | Wazuh integrator behaviour differs across 4.x minors | lost alerts | version pinned in compose; source-audited against the pinned image; live-validated once; ⬜ soak + failure-recovery runtime checks |
@@ -552,4 +594,5 @@ Recorded rather than hidden; each is a small docs-only follow-up.
 | `app/README.md` | Declares "Status: Phase 1E", which predates Phases 2–5. |
 | `docs/sample-alerts/README.md` | Documents `./scripts/send_test_alert`, which is not implemented. |
 | `CHANGELOG.md` | No Phase 5 entry yet (the evaluation framework is merged but undocumented there). |
-| `misp/README.md` | Describes the `intel` compose profile as landing "in Phase 2"; it is still ⬜ outstanding. |
+| `docs/detection-coverage.md` (gap G10) | Still states that "no allowlist provider/loader exists yet (Phase 2.2 outstanding)". Phase 2.2 is now ✅ implemented · locally validated; the residual, still-true part of G10 is that the evaluation corpus does not pin a `suppress` outcome. |
+| `CHANGELOG.md` | No Phase 2.2 entry yet (the static local policy work is merged but undocumented there). |

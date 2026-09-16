@@ -44,6 +44,11 @@ ARCHITECTURE.md §19):
   carry the pairwise evidence that justified them. Purely additive — alerts
   keep their ``dedupe_group_key`` / ``incident_id`` untouched, and contexts
   have no lifecycle coupling to incidents.
+* ``enrichment_cache`` — threat-intel response TTL cache (Phase 2.3): one
+  row per ``(provider, indicator_type, indicator_value)`` definitive verdict
+  (``found`` / ``not_found`` only), carrying the sanitized lookup payload
+  and its expiry. Quota/latency optimization only — never feeds scoring or
+  decisions on its own.
 
 Timestamps are stored as UTC (normalized on write/read by the repositories).
 """
@@ -62,6 +67,7 @@ from sqlalchemy import (
     Index,
     Integer,
     String,
+    Text,
     Uuid,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
@@ -239,6 +245,54 @@ class CorrelationMember(Base):
     )
     joined_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     evidence: Mapped[list[dict[str, Any]]] = mapped_column(JSON, nullable=False)
+
+
+class EnrichmentCacheEntry(Base):
+    """One cached threat-intel verdict (Phase 2.3, ``enrichment_cache`` table).
+
+    A row exists only for *definitive* lookups (``found`` / ``not_found``);
+    transient failures are never cached so they stay retryable. ``payload``
+    is the serialized, sanitized
+    :class:`~soc_triage.enrichment.threat_intel.LookupRecord` — exactly what
+    the live lookup stored on the IOC, replayed byte-identically on a hit.
+    Freshness is measured from the original lookup time (``looked_at`` →
+    ``expires_at``), so a restored database never extends a verdict's
+    lifetime. Purely a quota/latency optimization: the cache never feeds
+    scoring or decisions on its own.
+    """
+
+    __tablename__ = "enrichment_cache"
+    __table_args__ = (
+        Index(
+            "ix_enrichment_cache_lookup",
+            "provider",
+            "indicator_type",
+            "indicator_value",
+            unique=True,
+        ),
+        Index("ix_enrichment_cache_expires_at", "expires_at"),
+    )
+
+    #: BigInteger for PostgreSQL parity; SQLite autoincrement requires INTEGER.
+    id: Mapped[int] = mapped_column(
+        BigInteger().with_variant(Integer, "sqlite"), primary_key=True, autoincrement=True
+    )
+    #: Provider name (``virustotal`` / ``misp``) — verdicts are provider-scoped.
+    provider: Mapped[str] = mapped_column(String(32), nullable=False)
+    #: :class:`~soc_triage.models.ioc.IOCType` value (``ipv4`` / ``sha256`` / …).
+    indicator_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    #: Normalized indicator value (the same data ``alerts`` already stores).
+    indicator_value: Mapped[str] = mapped_column(Text, nullable=False)
+    #: ``found`` or ``not_found`` — the only cacheable outcomes.
+    lookup_status: Mapped[str] = mapped_column(String(16), nullable=False)
+    #: Serialized sanitized ``LookupRecord`` (JSON string).
+    payload: Mapped[str] = mapped_column(Text, nullable=False)
+    #: Original lookup instant (from the record's own timestamp).
+    looked_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    #: Expiry (``looked_at + ttl_for(type)``); a row past this is a miss.
+    expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, index=False
+    )
 
 
 class AuditEvent(Base):

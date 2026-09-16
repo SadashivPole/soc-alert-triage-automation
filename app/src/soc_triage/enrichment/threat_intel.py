@@ -18,6 +18,11 @@ for the pipeline's guarantees:
 * **Provenance** — every result carries ``provider``, ``indicator_type``,
   ``lookup_status``, ``timestamp`` and a *sanitized* ``result`` (explicit allow-listed
   fields only; never the raw upstream body and never the API key).
+* **Response TTL cache (Phase 2.3)** — an optional :class:`ResponseCache` is
+  consulted before the rate limiter: fresh definitive verdicts (``found`` /
+  ``not_found``) are replayed byte-identically without consuming quota;
+  transient failures are never cached so they stay retryable (ARCHITECTURE.md
+  §7.2 step 2). No cache ⇒ behavior is byte-identical to the pre-2.3 path.
 * **Secrets** — the API key lives only in the httpx client headers; it is never
   logged, never returned, never stored in IOC enrichment, and never appears in a
   provider's ``repr`` (the default object repr shows no attributes).
@@ -33,7 +38,7 @@ from collections import Counter
 from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
 from enum import StrEnum
-from typing import Any
+from typing import Any, Protocol
 
 import httpx
 from pydantic import BaseModel, Field
@@ -149,6 +154,32 @@ class RetryConfig(BaseModel):
     max_delay: float = Field(default=8.0, ge=0.0)
 
 
+class ResponseCache(Protocol):
+    """Optional response TTL cache consulted before rate-limited lookups.
+
+    Structural contract implemented by
+    :class:`soc_triage.enrichment.cache.PersistentEnrichmentCache`
+    (Phase 2.3, ARCHITECTURE.md §7.2 step 2). Implementations MUST be
+    fail-open (never raise); the provider additionally treats any exception
+    as a cache miss so enrichment can never break on caching.
+
+    * ``get`` returns the stored sanitized :class:`LookupRecord` while it is
+      fresh, ``None`` on miss/expiry — a hit replays the original payload
+      byte-identically (including its original timestamp) and consumes **no
+      rate-limiter token** (the whole point: quota savings).
+    * ``put`` stores only definitive verdicts (``found`` / ``not_found``);
+      ``error`` / ``timeout`` / ``rate_limited`` records must stay retryable.
+    """
+
+    def get(self, provider: str, ioc: IOC, *, now: datetime) -> LookupRecord | None:
+        """Return the fresh cached record for one indicator, else ``None``."""
+        ...
+
+    def put(self, provider: str, ioc: IOC, record: LookupRecord, *, now: datetime) -> None:
+        """Store a definitive lookup verdict (non-cacheable ones are ignored)."""
+        ...
+
+
 def _utc_now() -> datetime:
     """Process clock; injectable in tests for deterministic timestamps."""
     return datetime.now(UTC)
@@ -191,6 +222,7 @@ class BaseHTTPThreatIntelProvider(ABC):
         retry: RetryConfig | None = None,
         now: Callable[[], datetime] | None = None,
         sleep: Callable[[float], None] | None = None,
+        cache: ResponseCache | None = None,
     ) -> None:
         self._enabled = enabled
         self._client = client
@@ -202,6 +234,9 @@ class BaseHTTPThreatIntelProvider(ABC):
         self._retry = retry or RetryConfig()
         self._now = now or _utc_now
         self._sleep = sleep or time.sleep
+        # Phase 2.3: optional response TTL cache (ARCHITECTURE.md §7.2 step 2).
+        # None preserves the pre-2.3 behavior byte-for-byte.
+        self._cache = cache
 
     @property
     @abstractmethod
@@ -240,16 +275,38 @@ class BaseHTTPThreatIntelProvider(ABC):
                 notes=[f"{self.name}: no indicators of a handled type"],
             )
 
-        records = {ioc.key: self._lookup_one(ioc) for ioc in handled}
+        # Phase 2.3: serve fresh cache hits first; only uncached indicators
+        # consume rate-limiter tokens / outbound calls (quota savings,
+        # ARCHITECTURE.md §7.2 step 2). Cache failures degrade to a normal
+        # lookup (fail-open).
+        now = self._now()
+        cached_records: dict[str, LookupRecord] = {}
+        pending: list[IOC] = []
+        for ioc in handled:
+            record = self._cache_get(ioc, now)
+            if record is None:
+                pending.append(ioc)
+            else:
+                cached_records[ioc.key] = record
+
+        records = {ioc.key: self._lookup_one(ioc) for ioc in pending}
+        for ioc in pending:
+            self._cache_put(ioc, records[ioc.key], now)
+        records.update(cached_records)
+
         record_list = list(records.values())
         status = _aggregate_status(record_list)
         notes = _build_notes(self.name, record_list)
+        if cached_records:
+            notes.insert(0, f"{self.name}: {len(cached_records)} served from cache")
 
         logger.info(
             "threat_intel_lookup_complete",
             component="enrichment",
             provider=self.name,
             handled_count=len(handled),
+            cache_hits=len(cached_records),
+            outbound_lookups=len(pending),
             enrichment_status=status.value,
             outcome_counts=_outcome_counts(record_list),
         )
@@ -259,6 +316,35 @@ class BaseHTTPThreatIntelProvider(ABC):
             results={key: record.model_dump(mode="json") for key, record in records.items()},
             notes=notes,
         )
+
+    def _cache_get(self, ioc: IOC, now: datetime) -> LookupRecord | None:
+        """Fresh cached verdict for one indicator, else ``None`` (fail-open)."""
+        if self._cache is None:
+            return None
+        try:
+            return self._cache.get(self.name, ioc, now=now)
+        except Exception as exc:  # fail-open: a broken cache is a cache miss
+            logger.warning(
+                "enrichment_cache_get_failed",
+                component="enrichment",
+                provider=self.name,
+                error_type=type(exc).__name__,
+            )
+            return None
+
+    def _cache_put(self, ioc: IOC, record: LookupRecord, now: datetime) -> None:
+        """Store a definitive verdict; never raises (fail-open)."""
+        if self._cache is None or record.lookup_status not in _SUCCESSFUL_LOOKUPS:
+            return
+        try:
+            self._cache.put(self.name, ioc, record, now=now)
+        except Exception as exc:  # fail-open: caching never breaks enrichment
+            logger.warning(
+                "enrichment_cache_put_failed",
+                component="enrichment",
+                provider=self.name,
+                error_type=type(exc).__name__,
+            )
 
     # --- request plumbing --------------------------------------------------
 
@@ -377,6 +463,7 @@ __all__ = [
     "BaseHTTPThreatIntelProvider",
     "LookupRecord",
     "LookupStatus",
+    "ResponseCache",
     "RetryConfig",
     "TokenBucket",
 ]

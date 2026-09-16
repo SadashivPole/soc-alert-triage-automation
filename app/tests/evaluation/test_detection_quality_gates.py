@@ -21,6 +21,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+import pytest
 import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -29,7 +30,7 @@ GROUND_TRUTH = REPO_ROOT / "evaluation" / "ground_truth.json"
 CORPUS = REPO_ROOT / "evaluation" / "corpus.json"
 ATTACK_MAPPINGS = REPO_ROOT / "evaluation" / "attack_mappings.yaml"
 
-EXPECTED_SCENARIO_COUNT = 16
+EXPECTED_SCENARIO_COUNT = 24
 
 _CATALOG: dict[str, Any] = yaml.safe_load(CATALOG.read_text(encoding="utf-8"))
 SCENARIOS: list[dict[str, Any]] = _CATALOG["scenarios"]
@@ -77,8 +78,8 @@ def _quality_counts() -> dict[str, int]:
     }
 
 
-def test_corpus_contains_exactly_sixteen_scenarios() -> None:
-    """The labeled evaluation corpus is pinned at sixteen scenarios."""
+def test_corpus_contains_exactly_twenty_four_scenarios() -> None:
+    """The labeled evaluation corpus is pinned at twenty-four scenarios."""
     assert len(_CORPUS["cases"]) == EXPECTED_SCENARIO_COUNT
     assert len(_corpus_fixtures()) == EXPECTED_SCENARIO_COUNT
     assert len(SCENARIOS) == EXPECTED_SCENARIO_COUNT
@@ -169,3 +170,31 @@ def test_detection_quality_summary() -> None:
     print("\n=== Detection quality ===")
     for label, value in counts.items():
         print(f"{label}: {value}")
+
+
+def test_detection_quality_gate_rejects_an_artificially_degraded_metric() -> None:
+    """The quality gate must reject a metric regression."""
+    from evaluation.metrics import ConfusionMatrix, calculate_metrics
+    from tests.evaluation.detection_quality import (
+        DETECTION_QUALITY_THRESHOLDS,
+        assert_detection_quality_gate,
+    )
+
+    thresholds = DETECTION_QUALITY_THRESHOLDS
+
+    baseline = calculate_metrics(
+        ConfusionMatrix(
+            true_positive=thresholds.minimum_true_positive,
+            false_positive=thresholds.maximum_false_positive,
+            false_negative=thresholds.maximum_false_negative,
+            true_negative=thresholds.minimum_true_negative,
+        )
+    )
+
+    assert_detection_quality_gate(baseline)
+
+    degraded = dict(baseline)
+    degraded["recall"] = thresholds.minimum_recall - 0.0001
+
+    with pytest.raises(AssertionError, match="recall"):
+        assert_detection_quality_gate(degraded)

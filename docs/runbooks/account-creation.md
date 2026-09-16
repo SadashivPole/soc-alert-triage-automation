@@ -197,7 +197,8 @@ the escalation path.
 
 ## Related Sample
 
-`docs/sample-alerts/06_wazuh_windows_user_created.json`
+- `docs/sample-alerts/06_wazuh_windows_user_created.json`
+- `docs/sample-alerts/18_wazuh_windows_user_created_expected.json` — expected onboarding account on a standard-tier workstation (Phase 6.3, SCN-18, negative)
 
 ## MITRE ATT&CK
 

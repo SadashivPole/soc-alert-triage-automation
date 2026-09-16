@@ -34,7 +34,7 @@ from uuid import uuid4
 
 from fastapi.testclient import TestClient
 from sqlalchemy import text
-from tests.conftest import TEST_CALLBACK_TOKEN, TEST_INGEST_KEY
+from tests.conftest import TEST_CALLBACK_TOKEN, TEST_INGEST_KEY, V2_FACTOR_NAMES
 
 FIXTURES_DIR = Path(__file__).parent.parent / "fixtures"
 AUTH_HEADERS = {"X-API-Key": TEST_INGEST_KEY}
@@ -156,19 +156,11 @@ def test_explanation_complete_for_fully_populated_alert(client: TestClient) -> N
     # C. Score — the authoritative stored assessment, reconciled.
     score = body["score"]
     assert score is not None
-    assert score["policy_version"] == "scoring.v1"
+    assert score["policy_version"] == "scoring.v2"
     assert score["score"] == ingested["risk"]["score"]
     assert score["tier"] == ingested["risk"]["tier"]
     assert score["reconciles"] is True
-    assert [factor["name"] for factor in score["factors"]] == [
-        "rule_severity",
-        "rule_groups_mitre",
-        "asset_criticality",
-        "recurrence_velocity",
-        "ioc_evidence",
-        "enrichment_status",
-        "allowlist_modifier",
-    ]
+    assert [factor["name"] for factor in score["factors"]] == list(V2_FACTOR_NAMES)
 
     # D. Decision — the authoritative stored routing decision.
     decision = body["decision"]
@@ -226,15 +218,7 @@ def test_score_factor_ordering_is_deterministic_and_reconciles(client: TestClien
 
     for body in (body_a, body_b):
         factors = body["score"]["factors"]
-        assert [f["name"] for f in factors] == [
-            "rule_severity",
-            "rule_groups_mitre",
-            "asset_criticality",
-            "recurrence_velocity",
-            "ioc_evidence",
-            "enrichment_status",
-            "allowlist_modifier",
-        ]
+        assert [f["name"] for f in factors] == list(V2_FACTOR_NAMES)
         assert all(f["kind"] in {"positive", "zero", "negative"} for f in factors)
         assert body["score"]["factor_points_total"] == sum(f["points"] for f in factors)
         assert body["score"]["reconciles"] is True

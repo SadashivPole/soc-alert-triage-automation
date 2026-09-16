@@ -1,0 +1,38 @@
+{
+  "id": "1770000000.600017",
+  "timestamp": "2026-08-29T17:10:00.000+0000",
+  "rule": {
+    "level": 7,
+    "description": "Integrity checksum changed for: /etc/motd",
+    "id": "550",
+    "firedtimes": 1,
+    "mail": false,
+    "groups": ["syscheck", "syscheck_file_modified"],
+    "mitre": {
+      "id": ["T1566"],
+      "tactic": ["Persistence", "Privilege Escalation"],
+      "technique": ["Modify Authentication Process"]
+    }
+  },
+  "agent": {
+    "id": "008",
+    "name": "lab-wks-01",
+    "ip": "10.0.8.10",
+    "labels": { "asset_tier": "low", "owner": "lab-team" }
+  },
+  "manager": { "name": "wazuh-manager" },
+  "decoder": { "name": "syscheck_integrity_changed" },
+  "syscheck": {
+    "path": "/etc/motd",
+    "mode": "scheduled",
+    "event": "modified",
+    "md5_before": "a333b6f701e9cfc22e146d9874581b0c",
+    "md5_after": "cfb0cf94c2eb14e35d05320407c9b8aa",
+    "sha256_after": "64e26a38595a9188b738fca6ebc78715c898facc8b24338d1ae75689715e86d0",
+    "uname_before": "root",
+    "gname_before": "root",
+    "inode_after": 22110
+  },
+  "location": "syscheck",
+  "full_log": "Integrity checksum changed for: '/etc/motd' Size changed from 64 to 88. Permissions changed from 644 to 644. Authorized lab banner update (synthetic)."
+}

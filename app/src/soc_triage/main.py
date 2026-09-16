@@ -27,6 +27,9 @@ from .db.engine import (
 )
 from .decisions import DecisionEngine, default_decision_policy
 from .enrichment import EnrichmentChain
+from .enrichment.allowlist import AllowlistProvider, load_allowlist
+from .enrichment.asset_inventory import load_asset_inventory
+from .enrichment.cache import EnrichmentCachePolicy, PersistentEnrichmentCache
 from .enrichment.misp import MISPProvider
 from .enrichment.providers import EnrichmentProvider, NoOpEnrichmentProvider
 from .enrichment.virustotal import VirusTotalProvider
@@ -115,17 +118,87 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # — both optional and **disabled by default** (empty key/URL ⇒ never
         # called). With no key configured, ingestion performs zero external
         # calls and reports `enrichment_status: skipped` (ARCHITECTURE.md §7.3).
-        enrichment_providers: list[EnrichmentProvider] = [
-            NoOpEnrichmentProvider(),
-            VirusTotalProvider(
-                api_key=app_settings.virustotal_api_key.get_secret_value() or None,
-            ),
-            MISPProvider(
-                url=app_settings.misp_url,
-                api_key=app_settings.misp_api_key.get_secret_value() or None,
-                verify_tls=app_settings.misp_verify_tls,
-            ),
-        ]
+        # --- Phase 2.2: static local policies ---
+        # Empty paths preserve the existing zero-external / zero-drift
+        # behavior. These policies are local, deterministic, and non-secret.
+        asset_inventory = None
+        if app_settings.triage_asset_inventory_path.strip():
+            asset_inventory = load_asset_inventory(Path(app_settings.triage_asset_inventory_path))
+            logger.info(
+                "asset_inventory_ready",
+                component="policy",
+                path=app_settings.triage_asset_inventory_path,
+                asset_count=len(asset_inventory),
+            )
+        else:
+            logger.info(
+                "asset_inventory_disabled",
+                component="policy",
+            )
+
+        _app.state.asset_inventory = asset_inventory
+
+        # --- IOC extraction & enrichment (Phase 1E / 2A / 2.2) ---
+        # The allowlist provider is registered only when explicitly configured.
+        # This preserves the original provider set/cardinality by default.
+        enrichment_providers: list[EnrichmentProvider] = []
+
+        if app_settings.triage_allowlist_path.strip():
+            allowlist = load_allowlist(Path(app_settings.triage_allowlist_path))
+            enrichment_providers.append(AllowlistProvider(allowlist))
+            logger.info(
+                "allowlist_ready",
+                component="policy",
+                path=app_settings.triage_allowlist_path,
+                entry_count=len(allowlist),
+            )
+
+        # --- Phase 2.3: enrichment response TTL cache ---
+        # SQLite-backed, **disabled by default** (Phase 2.2 convention). When
+        # enabled, definitive threat-intel verdicts (found / not_found) are
+        # replayed byte-identically until their per-type TTL expires, so
+        # repeat indicators never burn provider quota and a cache hit consumes
+        # no rate-limiter token (ARCHITECTURE.md §7.2 step 2). Transient
+        # failures are never cached; the cache is fail-open and never feeds
+        # scoring or decisions on its own.
+        enrichment_cache: PersistentEnrichmentCache | None = None
+        if app_settings.triage_enrichment_cache_enabled:
+            enrichment_cache = PersistentEnrichmentCache(
+                session_factory,
+                policy=EnrichmentCachePolicy(
+                    max_entries=app_settings.triage_enrichment_cache_max_entries,
+                    hash_ttl_seconds=app_settings.triage_enrichment_cache_hash_ttl_seconds,
+                    ipv4_ttl_seconds=app_settings.triage_enrichment_cache_ipv4_ttl_seconds,
+                    default_ttl_seconds=app_settings.triage_enrichment_cache_default_ttl_seconds,
+                ),
+            )
+            logger.info(
+                "enrichment_cache_ready",
+                component="main",
+                max_entries=app_settings.triage_enrichment_cache_max_entries,
+                hash_ttl_seconds=app_settings.triage_enrichment_cache_hash_ttl_seconds,
+                ipv4_ttl_seconds=app_settings.triage_enrichment_cache_ipv4_ttl_seconds,
+                default_ttl_seconds=app_settings.triage_enrichment_cache_default_ttl_seconds,
+            )
+        else:
+            logger.info("enrichment_cache_disabled", component="main")
+        _app.state.enrichment_cache = enrichment_cache
+
+        enrichment_providers.extend(
+            [
+                NoOpEnrichmentProvider(),
+                VirusTotalProvider(
+                    api_key=app_settings.virustotal_api_key.get_secret_value() or None,
+                    cache=enrichment_cache,
+                ),
+                MISPProvider(
+                    url=app_settings.misp_url,
+                    api_key=app_settings.misp_api_key.get_secret_value() or None,
+                    verify_tls=app_settings.misp_verify_tls,
+                    cache=enrichment_cache,
+                ),
+            ]
+        )
         enrichment_chain = EnrichmentChain(enrichment_providers)
         _app.state.enrichment_chain = enrichment_chain
         logger.info(
@@ -135,6 +208,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             enabled_providers=[
                 provider.name for provider in enrichment_chain.providers if provider.enabled
             ],
+            enrichment_cache_enabled=enrichment_cache is not None,
         )
 
         # --- Phase 3.7: app-scoped Prometheus metrics (D4 wiring) ---

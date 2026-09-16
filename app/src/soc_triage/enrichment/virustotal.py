@@ -37,6 +37,7 @@ from ..models.ioc import IOC, IOCType
 from .threat_intel import (
     DEFAULT_TIMEOUT_SECONDS,
     BaseHTTPThreatIntelProvider,
+    ResponseCache,
     RetryConfig,
     TokenBucket,
 )
@@ -80,8 +81,13 @@ class VirusTotalProvider(BaseHTTPThreatIntelProvider):
         retry: RetryConfig | None = None,
         now: Callable[[], datetime] | None = None,
         sleep: Callable[[float], None] | None = None,
+        cache: ResponseCache | None = None,
     ) -> None:
-        """Build the provider; ``api_key=None``/empty ⇒ disabled (never called)."""
+        """Build the provider; ``api_key=None``/empty ⇒ disabled (never called).
+
+        ``cache`` is the optional Phase 2.3 response TTL cache
+        (ARCHITECTURE.md §7.2 step 2); ``None`` preserves the uncached path.
+        """
         headers = {"Accept": "application/json"}
         if api_key:
             headers["x-apikey"] = api_key
@@ -103,6 +109,7 @@ class VirusTotalProvider(BaseHTTPThreatIntelProvider):
             retry=retry,
             now=now,
             sleep=sleep,
+            cache=cache,
         )
 
     @property

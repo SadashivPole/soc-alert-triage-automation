@@ -18,6 +18,7 @@ from .orm import (
     Base,
     CorrelationContext,
     CorrelationMember,
+    EnrichmentCacheEntry,
     Incident,
 )
 
@@ -29,5 +30,6 @@ __all__ = [
     "Base",
     "CorrelationContext",
     "CorrelationMember",
+    "EnrichmentCacheEntry",
     "Incident",
 ]

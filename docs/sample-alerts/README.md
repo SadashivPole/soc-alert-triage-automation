@@ -29,6 +29,20 @@ users, networks, or malware are represented.
 | `08_wazuh_ssh_session_opened.json` | Benign SSH session-opened baseline event; no suspicious groups, no MITRE, no indicators, no asset-tier labels | 5716 / 3 | informational band (unknown-asset fallback only) → `monitor`; must never escalate (Phase 6.3) |
 | `09_wazuh_malware_hash_critical_server.json` | Same malware verdict as 04 on a critical finance server (`fin-db-01`) | 87105 / 12 | critical band → SEV1 `open_incident`; pins the critical tier end-to-end (Phase 6.3) |
 | `10_wazuh_web_sql_injection_staging.json` | Same SQL-injection behavior as 05 against a tier-3 staging host (`web-stg-01`) | 31103 / 10 | low asset-criticality band keeps it medium → `queue_l1`; pins the `low` asset band (Phase 6.3) |
+| `11_custom_ssh_rule_100100.json` | Application-facing output of custom SSH detection 100100 | 100100 / 10 | medium → `queue_l1`; synthetic custom-rule output, not a live Wazuh match |
+| `12_custom_fim_rule_100110.json` | Application-facing output of custom FIM detection 100110 | 100110 / 8 | medium → `queue_l1`; synthetic custom-rule output, not a live Wazuh match |
+| `13_custom_web_rule_100120_env.json` | Custom web decoder/path output for `.env` | 100120 / 10 | medium → `queue_l1`; synthetic custom-rule output, not a live Wazuh match |
+| `14_custom_web_recurrence_rule_100121.json` | Five-event application recurrence using custom web rule-shaped output | 100121 / 7 | first delivery medium/`queue_l1`; fifth delivery still medium with recurrence lift (application recurrence only) |
+| `15_ssh_failed_auth_below_threshold.json` | Failed SSH authentication remains below five-event threshold | 5712 / 5 | low/`monitor`; synthetic non-match shape for custom rule 100100 |
+| `16_ordinary_web_request.json` | Ordinary web request outside suspicious custom paths | 31100 / 3 | low/`monitor`; synthetic non-match shape |
+| `17_wazuh_fim_authorized_motd.json` | Authorized FIM modification of `/etc/motd` on a low-criticality lab workstation | 550 / 7 | low/`monitor`; per-scenario FIM negative (Phase 6.3) |
+| `18_wazuh_windows_user_created_expected.json` | Expected onboarding account creation on a standard-tier workstation | 60180 / 5 | low/`monitor`; per-scenario account-creation negative (Phase 6.3) |
+| `19_wazuh_virustotal_no_match.json` | VirusTotal no-match / non-malicious hash event | 87103 / 3 | low/`monitor`; does not claim a live VirusTotal lookup |
+| `20_custom_ssh_near_miss.json` | Four parent-rule 5712 failures remain one event below custom rule 100100 frequency=5 | 5712 / 5 | low/`monitor`; synthetic near-miss shape |
+| `21_custom_fim_near_miss.json` | FIM deletion of `/tmp/lab-scratch.txt` (not parent-rule 550) | 553 / 7 | low/`monitor`; custom rule 100110 would not fire |
+| `22_custom_web_near_miss.json` | WordPress-adjacent `/wp-content` path outside custom rule 100120 match alternatives | 31100 / 3 | low/`monitor`; synthetic near-miss shape |
+| `23_suspicious_web_non_triggering.json` | Trailing-quote query that looks suspicious but is not rule 31103 | 31101 / 3 | low/`monitor`; non-triggering web negative |
+| `24_ssh_recurrence_below_burst.json` | Two SSH failure deliveries stay one occurrence below rapid-burst (`min_occurrences=3`) | 5710 / 5 | low/`monitor` on both deliveries; recurrence-boundary negative |
 
 ## Usage (once Phase 1 lands)
 

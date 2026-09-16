@@ -1,0 +1,29 @@
+{
+  "id": "1770000000.600023",
+  "timestamp": "2026-08-29T18:11:07.000+0000",
+  "rule": {
+    "level": 3,
+    "description": "Web access request",
+    "id": "31101",
+    "firedtimes": 1,
+    "mail": false,
+    "groups": ["web", "accesslog"]
+  },
+  "agent": {
+    "id": "014",
+    "name": "web-prod-04",
+    "ip": "10.0.1.13",
+    "labels": { "asset_tier": "tier-1", "owner": "platform-team" }
+  },
+  "manager": { "name": "wazuh-manager" },
+  "decoder": { "name": "web-accesslog" },
+  "data": {
+    "srcip": "198.51.100.81",
+    "id": "1054",
+    "url": "/products.php?id=1%27",
+    "protocol": "HTTP/1.1",
+    "status": "200"
+  },
+  "location": "/var/log/nginx/access.log",
+  "full_log": "2026/08/29 18:11:07 [info] 841#841: *24001 [synthetic lab data] request /products.php?id=1' returned 200 from 198.51.100.81"
+}

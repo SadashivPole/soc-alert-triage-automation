@@ -20,14 +20,19 @@ from typing import Any
 
 import httpx
 from fastapi.testclient import TestClient
+from pydantic import SecretStr
 from tests.conftest import TEST_INGEST_KEY
 
+from soc_triage.core.config import Settings
 from soc_triage.enrichment import EnrichmentChain
 from soc_triage.enrichment.virustotal import VT_BASE_URL, VirusTotalProvider
+from soc_triage.main import create_app
 
 FIXTURES_DIR = Path(__file__).parent.parent / "fixtures"
 AUTH_HEADERS = {"X-API-Key": TEST_INGEST_KEY}
 FAKE_VT_KEY = "vt-fake-key-0123456789abcdef"
+FAKE_MISP_KEY = "misp-fake-key-0123456789abcdef"
+MISP_URL = "https://misp.example.test"
 
 
 def _load_sample(name: str) -> dict[str, Any]:
@@ -40,6 +45,10 @@ def _install_chain(client: TestClient, providers: list[Any]) -> None:
 
 def _vt_client(handler: Any) -> httpx.Client:
     return httpx.Client(base_url=VT_BASE_URL, transport=httpx.MockTransport(handler))
+
+
+def _misp_client(handler: Any) -> httpx.Client:
+    return httpx.Client(base_url=MISP_URL, transport=httpx.MockTransport(handler))
 
 
 def _ingest(client: TestClient, name: str) -> dict[str, Any]:
@@ -115,3 +124,42 @@ def test_provider_success_enriches_and_does_not_leak_the_key(client: TestClient)
 
     # The canary key must never reach the response, logs of record, or audit.
     assert FAKE_VT_KEY not in json.dumps(body)
+
+
+def test_misp_outage_does_not_block_alert_processing(settings: Settings) -> None:
+    """Phase 2.4: with the `intel` profile configured but MISP unreachable, the
+    alert still ingests, scores, and decisions — and the failed lookup is
+    recorded as sanitized provenance (fail-open, ARCHITECTURE.md §7.3)."""
+    settings.misp_url = MISP_URL
+    settings.misp_api_key = SecretStr(FAKE_MISP_KEY)
+
+    calls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request.url.path)
+        raise httpx.ConnectError("connection refused", request=request)
+
+    with TestClient(create_app(settings=settings)) as client:
+        misp = next(p for p in client.app.state.enrichment_chain.providers if p.name == "misp")
+        assert misp.enabled is True
+        # Test-only hook: point the wired provider at a fake transport (the
+        # provider the application constructed, so wiring stays as production).
+        misp._client = _misp_client(handler)
+
+        body = _ingest(client, "01_wazuh_ssh_brute_force.json")
+
+        # Safe retries (3 attempts, capped backoff) of the idempotent GET, then
+        # the failure is recorded instead of raised.
+        assert calls == ["/attributes/restSearch"] * 3
+        assert body["enrichment_status"] == "failed"
+        records = [
+            ioc["enrichment"]["misp"] for ioc in body["iocs"] if ioc["enrichment"].get("misp")
+        ]
+        assert records, "the failed MISP lookup must still be recorded"
+        for record in records:
+            assert record["lookup_status"] == "error"
+            assert record["result"] == {}
+        # Scoring/decisioning proceed unchanged, and the key never leaks.
+        assert body["risk"]["score"] > 0
+        assert body["decision"]["action"]
+        assert FAKE_MISP_KEY not in json.dumps(body)

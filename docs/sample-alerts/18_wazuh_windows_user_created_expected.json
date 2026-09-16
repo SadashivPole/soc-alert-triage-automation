@@ -1,0 +1,35 @@
+{
+  "id": "1770000000.600018",
+  "timestamp": "2026-08-29T17:22:11.000+0000",
+  "rule": {
+    "level": 5,
+    "description": "Windows: A user account was created",
+    "id": "60180",
+    "firedtimes": 1,
+    "mail": false,
+    "groups": ["windows", "windows_eventlog", "account_management"],
+    "mitre": {
+      "id": ["T1136"],
+      "tactic": ["Persistence"],
+      "technique": ["Create Account: Local Account"]
+    }
+  },
+  "agent": {
+    "id": "009",
+    "name": "hr-wks-11",
+    "ip": "10.0.3.51",
+    "labels": { "asset_tier": "standard", "owner": "it-support" }
+  },
+  "manager": { "name": "wazuh-manager" },
+  "decoder": { "name": "windows_eventchannel" },
+  "data": {
+    "EventID": "4720",
+    "dstuser": "jdoe-lab",
+    "subjectUserName": "adm-helpdesk-lab",
+    "subjectDomainName": "CORP-LAB",
+    "targetUserName": "jdoe-lab",
+    "workstationName": "HR-WS-11"
+  },
+  "location": "EventChannel",
+  "full_log": "A user account was created. Subject: CORP-LAB\\\\adm-helpdesk-lab  Target: jdoe-lab  (expected onboarding, synthetic lab data)"
+}

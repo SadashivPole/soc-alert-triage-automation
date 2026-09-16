@@ -6,7 +6,8 @@ from typing import Any
 
 from evaluation.metrics import ConfusionMatrix, calculate_metrics
 from fastapi.testclient import TestClient
-from tests.conftest import TEST_INGEST_KEY
+from tests.conftest import TEST_INGEST_KEY, V2_FACTOR_NAMES
+from tests.evaluation.detection_quality import assert_detection_quality_gate
 
 ROOT = Path(__file__).resolve().parents[3]
 FIXTURES_DIR = ROOT / "app" / "tests" / "fixtures"
@@ -20,17 +21,9 @@ AUTH_HEADERS = {"X-API-Key": TEST_INGEST_KEY}
 POSITIVE_ACTIONS = {"queue_l1", "open_incident"}
 NEGATIVE_ACTIONS = {"monitor", "suppress"}
 
-#: Stable factor ordering contract (scoring.v1, ARCHITECTURE.md §8): every
+#: Stable factor ordering contract (scoring.v2, ARCHITECTURE.md §8): every
 #: healthy ingest response must carry exactly these factors, in this order.
-CANONICAL_FACTOR_ORDER = (
-    "rule_severity",
-    "rule_groups_mitre",
-    "asset_criticality",
-    "recurrence_velocity",
-    "ioc_evidence",
-    "enrichment_status",
-    "allowlist_modifier",
-)
+CANONICAL_FACTOR_ORDER = V2_FACTOR_NAMES
 
 
 def load_json(path: Path) -> dict[str, Any]:
@@ -95,11 +88,11 @@ def _stable_contract(body: dict[str, Any]) -> dict[str, Any]:
 
 
 def _assert_response_contract(fixture_name: str, body: dict[str, Any]) -> None:
-    """Assert the stable scoring.v1 / decisions.v1 response contract."""
+    """Assert the stable scoring.v2 / decisions.v1 response contract."""
     risk = body["risk"]
     decision = body["decision"]
 
-    assert risk["engine_version"] == "scoring.v1", fixture_name
+    assert risk["engine_version"] == "scoring.v2", fixture_name
     assert risk["degraded"] is False, fixture_name
     assert [f["name"] for f in risk["factors"]] == list(CANONICAL_FACTOR_ORDER), fixture_name
 
@@ -216,6 +209,7 @@ def test_ground_truth_evaluation(client: TestClient) -> None:
     )
 
     metrics = calculate_metrics(matrix)
+    assert_detection_quality_gate(metrics)
 
     print("\n=== Phase 5 Detection Evaluation ===")
 

@@ -58,6 +58,7 @@ from ..core.metrics import MetricsRegistry, resolve_metrics
 from ..db.errors import StorageError
 from ..db.session import session_scope
 from ..enrichment import EnrichmentContext, extract_iocs
+from ..enrichment.asset_inventory import apply_asset_inventory
 from ..ingest.auth import RequireApiKey
 from ..ingest.deduplication import DedupeStatus, InvalidDedupeInputError
 from ..ingest.normalizer import normalize_wazuh_alert
@@ -74,6 +75,7 @@ from ..models.repositories import (
 )
 from ..notifications import build_n8n_payload
 from .dependencies import (
+    AssetInventoryDependency,
     CorrelatorDependency,
     DeciderDependency,
     DeduplicatorDependency,
@@ -144,6 +146,7 @@ async def ingest_alert(
     request: Request,
     deduplicator: DeduplicatorDependency,
     enrichment_chain: EnrichmentChainDependency,
+    asset_inventory: AssetInventoryDependency,
     scorer: ScorerDependency,
     decider: DeciderDependency,
     correlator: CorrelatorDependency,
@@ -236,7 +239,16 @@ async def ingest_alert(
     # --- Normalize → extract IOCs → enrich → deduplicate ---
     received_at = _utc_now()
     try:
-        canonical = normalize_wazuh_alert(wazuh_alert, received_at=received_at)
+        canonical = normalize_wazuh_alert(
+            wazuh_alert,
+            received_at=received_at,
+        )
+
+        # Phase 2.2: optional static asset inventory is applied after
+        # normalization and before IOC extraction/enrichment. It is
+        # fill-only: source-derived canonical values always win.
+        canonical = apply_asset_inventory(canonical, asset_inventory)
+
         iocs = extract_iocs(canonical)
         enrichment = enrichment_chain.enrich(
             iocs,

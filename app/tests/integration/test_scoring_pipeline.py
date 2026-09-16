@@ -21,7 +21,7 @@ from uuid import UUID
 
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import sessionmaker
-from tests.conftest import TEST_INGEST_KEY
+from tests.conftest import TEST_INGEST_KEY, V2_FACTOR_NAMES
 
 from soc_triage.db.session import session_scope
 from soc_triage.models.repositories import AlertRepository, AuditRepository
@@ -64,17 +64,9 @@ def test_ingest_response_carries_score_and_decision(client: TestClient) -> None:
     risk = body["risk"]
     assert risk["score"] == 43
     assert risk["tier"] == "low"
-    assert risk["engine_version"] == "scoring.v1"
+    assert risk["engine_version"] == "scoring.v2"
     assert risk["degraded"] is False
-    assert {f["name"] for f in risk["factors"]} == {
-        "rule_severity",
-        "rule_groups_mitre",
-        "asset_criticality",
-        "recurrence_velocity",
-        "ioc_evidence",
-        "enrichment_status",
-        "allowlist_modifier",
-    }
+    assert [f["name"] for f in risk["factors"]] == list(V2_FACTOR_NAMES)
     assert risk["summary"]
 
     decision = body["decision"]
@@ -104,6 +96,27 @@ def test_fim_critical_asset_scores_medium_and_queues_l1(client: TestClient) -> N
     assert body["risk"]["score"] == 63
     assert body["risk"]["tier"] == "medium"
     assert body["decision"]["action"] == "queue_l1"
+
+
+def test_offline_ingest_keeps_the_intel_factor_neutral(client: TestClient) -> None:
+    """Phase 2.5 through the real pipeline with **no** intel configured.
+
+    Nothing contacts a provider, so every indicator carries no VT/MISP payload
+    and the new factor must be present-but-neutral for *every* sample: the
+    scoring.v2 goldens equal their scoring.v1 values exactly (backward
+    compatibility is enforced end-to-end, not just at unit level).
+    """
+    for path in sorted(FIXTURES_DIR.glob("*.json")):
+        body = _ingest(client, _load_sample(path.name))
+        names = [f["name"] for f in body["risk"]["factors"]]
+        assert names == list(V2_FACTOR_NAMES), path.name
+        intel = next(f for f in body["risk"]["factors"] if f["name"] == "threat_intel")
+        assert intel["points"] == 0, path.name
+        assert intel["max"] == 25, path.name
+        assert body["normalized"]["enrichment_status"] == "skipped", path.name
+        assert body["risk"]["engine_version"] == "scoring.v2", path.name
+        # Detail text never leaks provider payload content.
+        assert "full_log" not in intel["detail"]
 
 
 def test_every_sample_alert_scores_within_0_100(client: TestClient) -> None:
@@ -260,6 +273,109 @@ def test_low_criticality_asset_holds_medium(client: TestClient) -> None:
     assert body["risk"]["score"] == 46
     assert body["risk"]["tier"] == "medium"
     assert body["decision"]["action"] == "queue_l1"
+
+
+def test_authorized_fim_modification_stays_monitor(client: TestClient) -> None:
+    """SCN-17: authorized FIM of /etc/motd on a low-criticality host stays
+    in the low/monitor band (Phase 6.3 per-scenario FIM negative)."""
+    body = _ingest(client, _load_sample("17_wazuh_fim_authorized_motd.json"))
+
+    assert body["risk"]["score"] == 43
+    assert body["risk"]["tier"] == "low"
+    assert body["decision"]["action"] == "monitor"
+    assert body["decision"]["severity"] is None
+
+
+def test_expected_account_creation_stays_monitor(client: TestClient) -> None:
+    """SCN-18: expected onboarding account creation on a standard-tier
+    workstation stays monitor (Phase 6.3 per-scenario account negative)."""
+    body = _ingest(client, _load_sample("18_wazuh_windows_user_created_expected.json"))
+
+    assert body["risk"]["score"] == 32
+    assert body["risk"]["tier"] == "low"
+    assert body["decision"]["action"] == "monitor"
+    assert body["decision"]["severity"] is None
+
+
+def test_non_malicious_hash_event_stays_monitor(client: TestClient) -> None:
+    """SCN-19: VirusTotal no-match hash event has no malware group and no
+    MITRE metadata, so it stays at the low/monitor floor."""
+    body = _ingest(client, _load_sample("19_wazuh_virustotal_no_match.json"))
+
+    assert body["risk"]["score"] == 25
+    assert body["risk"]["tier"] == "low"
+    assert body["decision"]["action"] == "monitor"
+    assert body["decision"]["severity"] is None
+    groups = next(f for f in body["risk"]["factors"] if f["name"] == "rule_groups_mitre")
+    assert groups["points"] == 0
+
+
+def test_custom_ssh_near_miss_stays_monitor(client: TestClient) -> None:
+    """SCN-20: four parent-rule 5712 failures remain below custom rule
+    100100 frequency=5 and stay monitor. Synthetic near-miss shape."""
+    body = _ingest(client, _load_sample("20_custom_ssh_near_miss.json"))
+
+    assert body["normalized"]["source_event"]["rule"]["id"] == "5712"
+    assert body["risk"]["score"] == 43
+    assert body["risk"]["tier"] == "low"
+    assert body["decision"]["action"] == "monitor"
+
+
+def test_custom_fim_near_miss_stays_monitor(client: TestClient) -> None:
+    """SCN-21: FIM deletion of an unmonitored scratch file (rule 553, not
+    parent 550) stays monitor. Custom rule 100110 would not fire."""
+    body = _ingest(client, _load_sample("21_custom_fim_near_miss.json"))
+
+    assert body["normalized"]["source_event"]["rule"]["id"] == "553"
+    assert body["risk"]["score"] == 38
+    assert body["risk"]["tier"] == "low"
+    assert body["decision"]["action"] == "monitor"
+    groups = next(f for f in body["risk"]["factors"] if f["name"] == "rule_groups_mitre")
+    assert groups["points"] == 0
+
+
+def test_custom_web_near_miss_stays_monitor(client: TestClient) -> None:
+    """SCN-22: WordPress-adjacent /wp-content path is outside custom rule
+    100120 match alternatives and stays monitor."""
+    body = _ingest(client, _load_sample("22_custom_web_near_miss.json"))
+
+    assert body["normalized"]["source_event"]["rule"]["id"] == "31100"
+    assert body["risk"]["score"] == 27
+    assert body["risk"]["tier"] == "low"
+    assert body["decision"]["action"] == "monitor"
+
+
+def test_suspicious_non_triggering_web_request_stays_monitor(client: TestClient) -> None:
+    """SCN-23: a trailing-quote query string looks suspicious but carries
+    no attack group, no MITRE, and not rule 31103 — stays monitor."""
+    body = _ingest(client, _load_sample("23_suspicious_web_non_triggering.json"))
+
+    assert body["normalized"]["source_event"]["rule"]["id"] == "31101"
+    assert body["risk"]["score"] == 27
+    assert body["risk"]["tier"] == "low"
+    assert body["decision"]["action"] == "monitor"
+    groups = next(f for f in body["risk"]["factors"] if f["name"] == "rule_groups_mitre")
+    assert groups["points"] == 0
+
+
+def test_recurrence_boundary_two_deliveries_do_not_escalate(client: TestClient) -> None:
+    """SCN-24: two distinct deliveries of the same rule+agent stay one
+    occurrence below rapid-burst (min_occurrences=3); score and action are
+    unchanged (Phase 6.3 recurrence-boundary negative)."""
+    base = _load_sample("24_ssh_recurrence_below_burst.json")
+
+    first = _ingest(client, base)
+    second = _ingest(client, dict(base, id=f"{base.get('id')}.r2"))
+
+    assert first["risk"]["score"] == 43
+    assert first["decision"]["action"] == "monitor"
+    assert second["dedupe"]["occurrences"] == 2
+    assert second["risk"]["score"] == first["risk"]["score"]
+    assert second["risk"]["tier"] == first["risk"]["tier"]
+    assert second["decision"]["action"] == first["decision"]["action"] == "monitor"
+
+    recurrence = next(f for f in second["risk"]["factors"] if f["name"] == "recurrence_velocity")
+    assert recurrence["points"] == 0
 
 
 def test_pipeline_is_fully_offline(client: TestClient) -> None:
