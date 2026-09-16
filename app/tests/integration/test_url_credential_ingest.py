@@ -96,12 +96,18 @@ def test_credential_url_never_reaches_audit_records(client: TestClient) -> None:
         assert SECRET not in json.dumps(row.after)
 
 
-def test_credential_url_never_reaches_logs(client: TestClient, capsys: Any) -> None:
-    _ingest(client)
+def test_credential_url_never_reaches_logs(
+    capfd: Any,
+    settings,
+) -> None:
+    from soc_triage.main import create_app
 
-    captured = capsys.readouterr()
-    # The ingest path emits structured logs (application_started, alert_ingested,
-    # alert_scored, …) — assert they exist so this check is not vacuous.
+    app = create_app(settings=settings)
+
+    with TestClient(app) as client:
+        _ingest(client)
+
+    captured = capfd.readouterr()
     assert captured.out
     assert SECRET not in captured.out
     assert SECRET not in captured.err

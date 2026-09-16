@@ -46,14 +46,14 @@ class Settings(BaseSettings):
     )
 
     # ------------------------------------------------------------------
-    # Phase 6.4 â€” cross-alert correlation
+    # Phase 6.4 — cross-alert correlation
     # ------------------------------------------------------------------
     # Bounds *pairwise* correlation evidence: two distinct alerts (different
     # dedupe groups) are comparable only when
     # ``0 <= newer.received_at - older.received_at <= window`` (inclusive
     # boundary, same convention as the dedupe window). Evidence weakens with
-    # time â€” an indicator shared hours apart describes at most a campaign,
-    # not one investigation â€” so correlation is never unbounded. Deliberately
+    # time — an indicator shared hours apart describes at most a campaign,
+    # not one investigation — so correlation is never unbounded. Deliberately
     # a separate knob from TRIAGE_DEDUPE_WINDOW_SECONDS: recurrence and
     # correlation answer different questions and may need different spans.
     # Must be >= 1. A context may still span longer than one window when
@@ -64,7 +64,7 @@ class Settings(BaseSettings):
     )
 
     # ------------------------------------------------------------------
-    # Phase 3.4 â€” incident auto-close TTL sweeper
+    # Phase 3.4 — incident auto-close TTL sweeper
     # ------------------------------------------------------------------
     # Non-terminal incidents (open / investigating / acknowledged / escalated)
     # whose ``updated_at`` has not changed within this TTL are automatically
