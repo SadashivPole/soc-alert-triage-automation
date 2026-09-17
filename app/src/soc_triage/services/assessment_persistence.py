@@ -1,4 +1,4 @@
-﻿"""Atomic persistence for alert assessments and incident linkage."""
+"""Atomic persistence for alert assessments and incident linkage."""
 
 from __future__ import annotations
 
@@ -15,7 +15,6 @@ from ..db.session import session_scope
 from ..models.assessment import Decision, DecisionAction, RiskAssessment
 from ..models.canonical import CanonicalAlert
 from ..models.repositories import AlertRepository, AuditRepository, IncidentRepository
-
 
 logger = get_logger(__name__)
 
@@ -77,9 +76,7 @@ def persist_assessment(
 
                 if existing is None:
                     if decision.severity is None:  # pragma: no cover
-                        raise ValueError(
-                            "open_incident decision is missing a severity"
-                        )
+                        raise ValueError("open_incident decision is missing a severity")
 
                     incident = incident_repo.create(
                         alert_id=alert_id,

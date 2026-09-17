@@ -7,7 +7,6 @@ from uuid import UUID
 
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import sessionmaker
-
 from tests.conftest import TEST_INGEST_KEY
 
 from soc_triage.db.session import session_scope
@@ -17,7 +16,6 @@ from soc_triage.models.repositories import (
     IncidentRepository,
 )
 from soc_triage.services.late_enrichment import LateEnrichmentService
-
 
 AUTH_HEADERS = {"X-API-Key": TEST_INGEST_KEY}
 
@@ -65,9 +63,7 @@ class ControlledEnrichmentChain:
 
 def _load_sample(name: str) -> dict:
     """Load one canonical integration fixture."""
-    return json.loads(
-        (FIXTURES_DIR / name).read_text(encoding="utf-8")
-    )
+    return json.loads((FIXTURES_DIR / name).read_text(encoding="utf-8"))
 
 
 def _ingest(client: TestClient, payload: dict) -> dict:
@@ -139,40 +135,18 @@ def test_late_enrichment_reassesses_and_persists_same_alert(
     assert stored_after.alert_id == alert_id
 
     assert stored_after.canonical.risk is not None
-    assert (
-        stored_after.canonical.risk.score
-        == result.canonical.risk.score
-    )
+    assert stored_after.canonical.risk.score == result.canonical.risk.score
 
     assert stored_after.canonical.decision is not None
-    assert (
-        stored_after.canonical.decision.action.value
-        == result.canonical.decision.action.value
-    )
+    assert stored_after.canonical.decision.action.value == result.canonical.decision.action.value
 
-    alert_audits = [
-        row
-        for row in all_audits
-        if row.entity_id == str(alert_id)
-    ]
+    alert_audits = [row for row in all_audits if row.entity_id == str(alert_id)]
 
-    scored = [
-        row
-        for row in alert_audits
-        if row.action == "alert.scored"
-    ]
+    scored = [row for row in alert_audits if row.action == "alert.scored"]
 
-    decided = [
-        row
-        for row in alert_audits
-        if row.action == "alert.decided"
-    ]
+    decided = [row for row in alert_audits if row.action == "alert.decided"]
 
-    created = [
-        row
-        for row in alert_audits
-        if row.action == "alert.created"
-    ]
+    created = [row for row in alert_audits if row.action == "alert.created"]
 
     # Late reassessment must not create another alert.
     assert len(created) == 1
@@ -185,19 +159,13 @@ def test_late_enrichment_reassesses_and_persists_same_alert(
     assert scored[-1].before is not None
     assert scored[-1].after is not None
     assert scored[-1].before["score"] == original_score
-    assert (
-        scored[-1].after["score"]
-        == result.canonical.risk.score
-    )
+    assert scored[-1].after["score"] == result.canonical.risk.score
 
     # Decision transition must contain before/after snapshots.
     assert decided[-1].before is not None
     assert decided[-1].after is not None
     assert decided[-1].before["action"] == original_action
-    assert (
-        decided[-1].after["action"]
-        == result.canonical.decision.action.value
-    )
+    assert decided[-1].after["action"] == result.canonical.decision.action.value
 
 
 def test_late_enrichment_reuses_existing_open_incident(
@@ -248,10 +216,7 @@ def test_late_enrichment_reuses_existing_open_incident(
     assert chain.calls == 1
 
     assert result.canonical.decision is not None
-    assert (
-        result.canonical.decision.action.value
-        == "open_incident"
-    )
+    assert result.canonical.decision.action.value == "open_incident"
 
     # The existing incident must be reused.
     assert persistence.incident_id == original_incident_id
@@ -267,17 +232,10 @@ def test_late_enrichment_reuses_existing_open_incident(
     assert incidents[0].incident_id == original_incident_id
 
     assert linked_incident_after is not None
-    assert (
-        linked_incident_after.incident_id
-        == original_incident_id
-    )
+    assert linked_incident_after.incident_id == original_incident_id
 
     # No second incident.created event is allowed.
-    incident_created = [
-        row
-        for row in audits
-        if row.action == "incident.created"
-    ]
+    incident_created = [row for row in audits if row.action == "incident.created"]
 
     assert len(incident_created) == 1
     assert incident_created[0].entity_id == original_incident_id
@@ -331,10 +289,7 @@ def test_late_enrichment_can_open_incident_from_queue_l1(
     # The enriched threat-intelligence evidence must cross the
     # incident-opening threshold.
     assert result.canonical.risk.score >= 70
-    assert (
-        result.canonical.decision.action.value
-        == "open_incident"
-    )
+    assert result.canonical.decision.action.value == "open_incident"
 
     assert persistence.incident_id is not None
 
@@ -347,23 +302,13 @@ def test_late_enrichment_can_open_incident_from_queue_l1(
 
     # Exactly one incident must be created for the transition.
     assert len(incidents_after) == 1
-    assert (
-        incidents_after[0].incident_id
-        == persistence.incident_id
-    )
+    assert incidents_after[0].incident_id == persistence.incident_id
 
     assert linked_incident is not None
-    assert (
-        linked_incident.incident_id
-        == persistence.incident_id
-    )
+    assert linked_incident.incident_id == persistence.incident_id
     assert linked_incident.status.value == "open"
 
-    incident_created = [
-        row
-        for row in audits
-        if row.action == "incident.created"
-    ]
+    incident_created = [row for row in audits if row.action == "incident.created"]
 
     assert len(incident_created) == 1
     assert incident_created[0].entity_id == persistence.incident_id

@@ -1,4 +1,4 @@
-﻿"""Late-enrichment reassessment workflow.
+"""Late-enrichment reassessment workflow.
 
 This module owns the deterministic re-assessment path used when enrichment
 arrives after an alert already has a risk assessment.
@@ -13,14 +13,16 @@ from dataclasses import dataclass
 from datetime import datetime
 from uuid import UUID
 
+from sqlalchemy.orm import sessionmaker
+
+from ..db.session import session_scope
 from ..decisions.router import DecisionEngine
 from ..enrichment import EnrichmentChain, EnrichmentContext
 from ..models.assessment import Decision, RiskAssessment
-from ..db.session import session_scope
 from ..models.canonical import CanonicalAlert
 from ..models.repositories import AlertRepository
-from .assessment_persistence import AssessmentPersistResult, persist_assessment
 from ..scoring.engine import RiskScorer
+from .assessment_persistence import AssessmentPersistResult, persist_assessment
 
 
 @dataclass(frozen=True)
@@ -59,11 +61,7 @@ class LateEnrichmentService:
                 alert_id=canonical.alert_id,
                 source=canonical.source,
                 received_at=canonical.received_at,
-                dedupe_group=(
-                    canonical.dedupe.group_key
-                    if canonical.dedupe is not None
-                    else None
-                ),
+                dedupe_group=(canonical.dedupe.group_key if canonical.dedupe is not None else None),
             ),
         )
 
@@ -97,10 +95,9 @@ class LateEnrichmentService:
             previous_decision=previous_decision,
         )
 
-
     def reassess_persisted(
         self,
-        session_factory,
+        session_factory: sessionmaker,
         *,
         alert_id: UUID,
         decided_at: datetime | None = None,

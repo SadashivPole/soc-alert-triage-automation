@@ -1,8 +1,7 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from datetime import UTC, datetime
 from unittest.mock import Mock
-from uuid import UUID
 
 from tests.conftest import make_canonical_alert, make_ioc
 
@@ -15,7 +14,6 @@ from soc_triage.enrichment import (
 from soc_triage.models.assessment import RiskAssessment
 from soc_triage.scoring import RiskScorer, default_scoring_policy
 from soc_triage.services.late_enrichment import LateEnrichmentService
-
 
 DECIDED_AT = datetime(2026, 8, 29, 10, 15, 0, tzinfo=UTC)
 
@@ -74,9 +72,7 @@ def test_reassess_merges_late_enrichment_and_preserves_previous_assessment() -> 
     assert result.previous_decision is previous_decision
 
     assert result.canonical.enrichment_status == "complete"
-    assert result.canonical.iocs[0].enrichment == {
-        "fake": {"reputation": "malicious"}
-    }
+    assert result.canonical.iocs[0].enrichment == {"fake": {"reputation": "malicious"}}
 
     assert result.canonical.risk is not None
     assert result.canonical.decision is not None
@@ -114,9 +110,7 @@ def test_reassess_passes_existing_dedupe_group_to_enrichment() -> None:
 
     context = chain.enrich.call_args.kwargs["context"]
 
-    assert context.dedupe_group == (
-        alert.dedupe.group_key if alert.dedupe is not None else None
-    )
+    assert context.dedupe_group == (alert.dedupe.group_key if alert.dedupe is not None else None)
 
 
 def test_reassess_uses_supplied_decision_timestamp() -> None:

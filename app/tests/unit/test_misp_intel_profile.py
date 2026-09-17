@@ -166,11 +166,7 @@ def _run_preflight(values: dict[str, str]) -> subprocess.CompletedProcess[str]:
     # implementation found bash.exe on PATH and then supplied a POSIX-only
     # PATH environment, which made bash fail before it could execute the guard.
     if os.name == "nt":
-        missing = [
-            name
-            for name in REQUIRED_SECRETS
-            if not env.get(name, "")
-        ]
+        missing = [name for name in REQUIRED_SECRETS if not env.get(name, "")]
 
         if missing:
             stderr = (
@@ -208,6 +204,7 @@ def _run_preflight(values: dict[str, str]) -> subprocess.CompletedProcess[str]:
         text=True,
         check=False,
     )
+
 
 # ---------------------------------------------------------------------------
 # Compose: profile gating (strictly additive)

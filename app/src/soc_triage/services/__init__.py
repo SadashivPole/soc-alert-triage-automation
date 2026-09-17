@@ -1,1 +1,1 @@
-﻿"""Application services for cross-component triage workflows."""
+"""Application services for cross-component triage workflows."""

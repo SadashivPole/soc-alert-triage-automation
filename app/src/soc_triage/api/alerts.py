@@ -38,7 +38,7 @@ from __future__ import annotations
 import json
 import time
 from datetime import UTC, datetime
-from typing import Annotated, Any, NamedTuple
+from typing import Annotated, Any
 from uuid import UUID
 
 from fastapi import APIRouter, Path, Query, Request, status
@@ -48,8 +48,6 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import sessionmaker
 
 from ..audit import (
-    audit_entries_for_assessment,
-    audit_entries_for_incident,
     audit_entries_for_notification,
 )
 from ..core.errors import error_response
@@ -63,7 +61,7 @@ from ..ingest.auth import RequireApiKey
 from ..ingest.deduplication import DedupeStatus, InvalidDedupeInputError
 from ..ingest.normalizer import normalize_wazuh_alert
 from ..ingest.schemas import WazuhAlert
-from ..models.assessment import Decision, DecisionAction, RiskAssessment
+from ..models.assessment import Decision, RiskAssessment
 from ..models.canonical import CanonicalAlert
 from ..models.records import DEFAULT_PAGE_LIMIT, MAX_PAGE_LIMIT
 from ..models.repositories import (
@@ -73,11 +71,11 @@ from ..models.repositories import (
     IncidentRepository,
     NotificationRepository,
 )
+from ..notifications import build_n8n_payload
 from ..services.assessment_persistence import (
     AssessmentPersistResult,
     persist_assessment,
 )
-from ..notifications import build_n8n_payload
 from .dependencies import (
     AssetInventoryDependency,
     CorrelatorDependency,
@@ -121,8 +119,6 @@ def _monotonic() -> float:
     clock or any other ``time`` consumer.
     """
     return time.perf_counter()
-
-
 
 
 @router.post(
