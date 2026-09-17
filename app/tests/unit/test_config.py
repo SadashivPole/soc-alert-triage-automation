@@ -29,6 +29,9 @@ _CONFIG_VARIABLES = (
     "TRIAGE_ENRICHMENT_CACHE_HASH_TTL_SECONDS",
     "TRIAGE_ENRICHMENT_CACHE_IPV4_TTL_SECONDS",
     "TRIAGE_ENRICHMENT_CACHE_DEFAULT_TTL_SECONDS",
+    "LATE_ENRICHMENT_SWEEP_ENABLED",
+    "LATE_ENRICHMENT_SWEEP_INTERVAL_SECONDS",
+    "LATE_ENRICHMENT_LOOKBACK_SECONDS",
 )
 
 
@@ -194,6 +197,57 @@ def test_enrichment_cache_environment_overrides(monkeypatch: pytest.MonkeyPatch)
     ],
 )
 def test_enrichment_cache_rejects_non_positive_bounds(
+    monkeypatch: pytest.MonkeyPatch, kwargs: dict
+) -> None:
+    _clear_environment(monkeypatch)
+    with pytest.raises(ValidationError):
+        Settings(
+            soc_env="test",
+            triage_ingest_api_key="test-ingest-key-not-a-real-secret",
+            n8n_callback_token="test-callback-token-not-a-real-secret",
+            **kwargs,
+        )
+
+
+def test_late_enrichment_sweep_disabled_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    _clear_environment(monkeypatch)
+    settings = Settings(
+        soc_env="test",
+        triage_ingest_api_key="test-ingest-key-not-a-real-secret",
+        n8n_callback_token="test-callback-token-not-a-real-secret",
+    )
+
+    assert settings.late_enrichment_sweep_enabled is False
+    assert settings.late_enrichment_sweep_interval_seconds == 300
+    assert settings.late_enrichment_lookback_seconds == 604800
+
+
+def test_late_enrichment_sweep_environment_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
+    _clear_environment(monkeypatch)
+    monkeypatch.setenv("LATE_ENRICHMENT_SWEEP_ENABLED", "1")
+    monkeypatch.setenv("LATE_ENRICHMENT_SWEEP_INTERVAL_SECONDS", "60")
+    monkeypatch.setenv("LATE_ENRICHMENT_LOOKBACK_SECONDS", "86400")
+
+    settings = Settings(
+        soc_env="test",
+        triage_ingest_api_key="test-ingest-key-not-a-real-secret",
+        n8n_callback_token="test-callback-token-not-a-real-secret",
+    )
+
+    assert settings.late_enrichment_sweep_enabled is True
+    assert settings.late_enrichment_sweep_interval_seconds == 60
+    assert settings.late_enrichment_lookback_seconds == 86400
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"late_enrichment_sweep_interval_seconds": 0},
+        {"late_enrichment_sweep_interval_seconds": -1},
+        {"late_enrichment_lookback_seconds": 0},
+    ],
+)
+def test_late_enrichment_sweep_rejects_non_positive_bounds(
     monkeypatch: pytest.MonkeyPatch, kwargs: dict
 ) -> None:
     _clear_environment(monkeypatch)
