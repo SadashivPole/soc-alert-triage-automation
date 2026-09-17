@@ -262,6 +262,36 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             interval_seconds=app_settings.incident_sweeper_interval_seconds,
         )
 
+        # --- Phase 2.7A: automatic late-enrichment trigger (background loop) ---
+        # The service is always bound (management/tests may use it directly);
+        # the periodic task starts only when LATE_ENRICHMENT_SWEEP_ENABLED is
+        # set — disabled by default so an unconfigured deployment keeps its
+        # zero-external-calls guarantee (the sweep is the one component that
+        # runs enrichment providers outside the ingest path). Same lifecycle
+        # guarantees as the Phase 3.4 sweeper (ADR-4: no Celery/Redis): first
+        # pass immediate, blocking work in a worker thread, clean cancel on
+        # shutdown. Re-assessments are idempotent (enrichment-fingerprint
+        # guarded) and persist/audit through the existing persist_assessment
+        # path; the sweep sends no additional n8n notifications (Phase 2.7B).
+        from .services.late_enrichment import LateEnrichmentService
+        from .services.late_enrichment_sweep import start_late_enrichment_task
+
+        late_enrichment_service = LateEnrichmentService(
+            enrichment_chain,
+            _app.state.scorer,
+            _app.state.decider,
+        )
+        _app.state.late_enrichment_service = late_enrichment_service
+        late_enrichment_task = start_late_enrichment_task(_app)
+        _app.state.late_enrichment_task = late_enrichment_task
+        logger.info(
+            "late_enrichment_sweep_configured",
+            component="main",
+            enabled=app_settings.late_enrichment_sweep_enabled,
+            interval_seconds=app_settings.late_enrichment_sweep_interval_seconds,
+            lookback_seconds=app_settings.late_enrichment_lookback_seconds,
+        )
+
         # --- n8n SOAR webhook integration (Phase 2B) ---
         # Outbound client: disabled by default (empty URL). When enabled, it
         # POSTs structured payloads with timeout/retry and fail-open semantics.
@@ -288,13 +318,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         try:
             yield
         finally:
-            # Cancel the sweeper task first (it uses the session factory /
-            # engine) so it is not running while we tear down DB resources.
+            # Cancel the background tasks first (they use the session factory
+            # / engine) so they are not running while we tear down DB
+            # resources.
             if sweeper_task is not None:
                 sweeper_task.cancel()
                 # Await the task, tolerating CancelledError (normal shutdown).
                 with suppress(BaseException):
                     await sweeper_task
+            if late_enrichment_task is not None:
+                late_enrichment_task.cancel()
+                with suppress(BaseException):
+                    await late_enrichment_task
             with suppress(Exception):
                 n8n_client.close()
             engine.dispose()

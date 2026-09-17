@@ -35,6 +35,13 @@ services:
       MISP_URL: ${MISP_URL:-}
       MISP_API_KEY: ${MISP_API_KEY:-}
       MISP_VERIFY_TLS: ${MISP_VERIFY_TLS:-1}
+      # Phase 2.7A — automatic late-enrichment trigger (disabled by default).
+      # Background re-assessment of persisted alerts whose enrichment changed
+      # (late verdicts, retried failed lookups). No new services or queues;
+      # idempotent, bounded, and never touches the ingest path.
+      LATE_ENRICHMENT_SWEEP_ENABLED: ${LATE_ENRICHMENT_SWEEP_ENABLED:-0}
+      LATE_ENRICHMENT_SWEEP_INTERVAL_SECONDS: ${LATE_ENRICHMENT_SWEEP_INTERVAL_SECONDS:-300}
+      LATE_ENRICHMENT_LOOKBACK_SECONDS: ${LATE_ENRICHMENT_LOOKBACK_SECONDS:-604800}
     volumes:
       - ./data:/data
     networks:

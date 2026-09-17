@@ -197,6 +197,32 @@ class AlertRepository:
         ).all()
         return [_alert_to_persisted(row) for row in rows]
 
+    def list_alerts_received_since(
+        self,
+        since: datetime,
+        *,
+        limit: int = 200,
+    ) -> list[PersistedAlert]:
+        """Alerts received at or after ``since`` (inclusive), oldest first.
+
+        Candidate scan for the Phase 2.7A late-enrichment sweep: bounded by
+        ``limit`` and ordered ``received_at ASC, alert_id ASC`` so a backlog
+        drains deterministically and repeat passes re-touch (then no-op on)
+        older rows before newer ones. Uses the existing ``received_at``
+        index; no IOC-level filtering happens in SQL — the sweep compares
+        the freshly produced enrichment in Python (same convention as the
+        correlation candidate loading, Phase 6.4).
+        """
+        if limit < 1:
+            raise ValueError("limit must be >= 1")
+        rows = self._session.scalars(
+            select(Alert)
+            .where(Alert.received_at >= as_utc(since))
+            .order_by(Alert.received_at.asc(), Alert.alert_id.asc())
+            .limit(limit)
+        ).all()
+        return [_alert_to_persisted(row) for row in rows]
+
     @staticmethod
     def _filter_alerts(
         stmt: Select[tuple[Alert]],

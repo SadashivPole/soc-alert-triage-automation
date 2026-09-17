@@ -220,6 +220,35 @@ class Settings(BaseSettings):
         default=3600, alias="TRIAGE_ENRICHMENT_CACHE_DEFAULT_TTL_SECONDS", ge=1
     )
 
+    # ------------------------------------------------------------------
+    # Phase 2.7A — automatic late-enrichment trigger
+    # ------------------------------------------------------------------
+    # Background re-assessment of recently persisted alerts whose enrichment
+    # changed after the initial score (a late threat-intel verdict, a retried
+    # failed lookup, a newly enabled provider). **Disabled by default**
+    # (Phase 2.2/2.3 convention): the sweep is the one component that runs
+    # enrichment providers outside the ingest path, so an unconfigured
+    # deployment keeps its zero-external-calls guarantee. When enabled it is
+    # idempotent (timestamp-insensitive enrichment fingerprint: the same
+    # enrichment never re-scores an alert twice), bounded (lookback window +
+    # per-pass batch, oldest first), fail-open, and never touches the ingest
+    # request path (Phase 3.4 sweeper pattern, ADR-4). Re-assessments are
+    # persisted + audited via the existing ``persist_assessment`` path; the
+    # sweep sends no additional n8n notifications (Phase 2.7B scope).
+    late_enrichment_sweep_enabled: bool = Field(
+        default=False, alias="LATE_ENRICHMENT_SWEEP_ENABLED"
+    )
+    # Period between sweep passes; also the retry cadence for failed
+    # lookups. Must be >= 1.
+    late_enrichment_sweep_interval_seconds: int = Field(
+        default=300, alias="LATE_ENRICHMENT_SWEEP_INTERVAL_SECONDS", ge=1
+    )
+    # Only alerts received within this window (in seconds) are sweep
+    # candidates. Must be >= 1.
+    late_enrichment_lookback_seconds: int = Field(
+        default=604800, alias="LATE_ENRICHMENT_LOOKBACK_SECONDS", ge=1
+    )
+
     @property
     def cors_origins(self) -> list[str]:
         """Parse the comma-separated CORS origins into a clean list."""
