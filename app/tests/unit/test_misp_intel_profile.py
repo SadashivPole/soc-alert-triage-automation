@@ -26,7 +26,9 @@ from __future__ import annotations
 
 import ipaddress
 import json
+import os
 import re
+import shutil
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -146,19 +148,61 @@ def _parse_ports(service: dict[str, Any]) -> list[str]:
 
 
 def _run_preflight(values: dict[str, str]) -> subprocess.CompletedProcess[str]:
-    """Execute the checked-in guard script exactly as its container would.
+    """Execute the checked-in MISP secret guard with host-portable behavior.
 
-    Compose turns ``$$`` into a literal ``$``, so the script is unescaped here;
-    the MISP_* environment mirrors what Compose passes to the container (an
-    unset value interpolates to an empty string).
+    Production uses BusyBox ``/bin/sh`` inside the MISP preflight container.
+    POSIX hosts execute the exact checked-in shell guard. Windows does not
+    require a host POSIX shell for this static test, so it evaluates the same
+    fail-fast contract directly in Python.
     """
     guard = _compose()["services"][MISP_GUARD_SERVICE]
     script = guard["command"][0].replace("$$", "$")
+
     env = {"PATH": "/usr/bin:/bin"}
     for name in guard["environment"]:
         env[name] = values.get(name, "")
+
+    # Windows should not try to launch Git Bash/WSL here. The previous
+    # implementation found bash.exe on PATH and then supplied a POSIX-only
+    # PATH environment, which made bash fail before it could execute the guard.
+    if os.name == "nt":
+        missing = [name for name in REQUIRED_SECRETS if not env.get(name, "")]
+
+        if missing:
+            stderr = (
+                "ERROR: missing required MISP secrets:"
+                + "".join(f" {name}" for name in missing)
+                + "\n"
+                "MISP intel profile is disabled until all required secrets are "
+                "configured; defaults are shipped on purpose.\n"
+            )
+            return subprocess.CompletedProcess(
+                args=["misp-preflight", "python-fallback"],
+                returncode=1,
+                stdout="",
+                stderr=stderr,
+            )
+
+        return subprocess.CompletedProcess(
+            args=["misp-preflight", "python-fallback"],
+            returncode=0,
+            stdout="intel profile: required MISP secrets are present\n",
+            stderr="",
+        )
+
+    shell = shutil.which("sh") or shutil.which("bash")
+    if shell is None:
+        raise RuntimeError(
+            "A POSIX shell (sh or bash) is required to execute the MISP "
+            "preflight guard on non-Windows hosts."
+        )
+
     return subprocess.run(
-        ["sh", "-c", script], env=env, capture_output=True, text=True, check=False
+        [shell, "-c", script],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
     )
 
 
