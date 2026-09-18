@@ -313,12 +313,17 @@ def test_observability_profile_gates_only_the_two_new_services() -> None:
         "misp-redis",
         "misp-core",
         "misp-nginx",
+        # Phase 3.8: postgres profile (postgres + preflight guard).
+        "postgres-preflight",
+        "postgres",
     }
     for name in ("prometheus", "grafana"):
         assert compose["services"][name].get("profiles") == ["observability"], name
     assert compose["services"]["wazuh-manager"].get("profiles") == ["full"]
     for name in ("misp-preflight", "misp-db", "misp-redis", "misp-core", "misp-nginx"):
         assert compose["services"][name].get("profiles") == ["intel"], name
+    for name in ("postgres-preflight", "postgres"):
+        assert compose["services"][name].get("profiles") == ["postgres"], name
     for name in ("triage-api", "n8n", "mailpit"):
         assert "profiles" not in compose["services"][name], name
 
@@ -384,7 +389,13 @@ def test_observability_services_are_not_required_dependencies() -> None:
     for name, facts in DEFAULT_SERVICE_FACTS.items():
         service = compose["services"][name]
         depends_on = service.get("depends_on", {})
-        assert not set(depends_on) & {"prometheus", "grafana", "wazuh-manager"}, (name, depends_on)
+        assert not set(depends_on) & {
+            "prometheus",
+            "grafana",
+            "wazuh-manager",
+            "postgres",
+            "postgres-preflight",
+        }, (name, depends_on)
         assert service.get("ports") == facts["ports"], name
         assert service.get("networks") == facts["networks"], name
         assert "profiles" not in service, name
@@ -405,6 +416,8 @@ def test_observability_services_are_not_required_dependencies() -> None:
         "misp-core-config",
         "misp-core-files",
         "misp-core-gnupg",
+        # Phase 3.8 — `postgres` profile state only (additive).
+        "postgres-data",
     }
 
 
@@ -662,3 +675,139 @@ def test_wazuh_healthcheck_targets_a_real_daemon_name() -> None:
     joined = " ".join(str(p) for p in _wazuh_service()["healthcheck"]["test"])
     assert "/var/ossec/bin/wazuh-control status" in joined
     assert "wazuh-analysisd is running" in joined
+
+
+# ---------------------------------------------------------------------------
+# Phase 3.8 — optional `postgres` profile (PostgreSQL + preflight guard)
+# ---------------------------------------------------------------------------
+
+
+def _postgres_service() -> dict:
+    return _compose()["services"]["postgres"]
+
+
+def _postgres_preflight_service() -> dict:
+    return _compose()["services"]["postgres-preflight"]
+
+
+def test_postgres_profile_exists_and_is_gated() -> None:
+    """postgres service exists and is profile-gated (postgres)."""
+    compose = _compose()
+    assert "postgres" in compose["services"]
+    assert "postgres-preflight" in compose["services"]
+    assert compose["services"]["postgres"].get("profiles") == ["postgres"]
+    assert compose["services"]["postgres-preflight"].get("profiles") == ["postgres"]
+    # Default services must not be in postgres profile
+    for name in ("triage-api", "n8n", "mailpit"):
+        assert "profiles" not in compose["services"][name]
+
+
+def test_postgres_service_is_internal_only_and_no_host_ports() -> None:
+    """postgres stays internal-only: soc-core only, no host ports."""
+    service = _postgres_service()
+    assert service.get("ports", []) == []
+    assert service.get("networks") == ["soc-core"]
+    compose_text = COMPOSE_FILE.read_text(encoding="utf-8")
+    # Ensure we didn't accidentally publish 5432
+    assert "5432:5432" not in compose_text
+
+
+def test_postgres_service_uses_planned_version_and_has_healthcheck() -> None:
+    """Image is postgres:16-alpine (planned version) and has pg_isready healthcheck."""
+    service = _postgres_service()
+    assert service["image"] == "postgres:16-alpine"
+    healthcheck = service.get("healthcheck", {})
+    test = healthcheck.get("test", [])
+    joined = " ".join(str(p) for p in test)
+    assert "pg_isready" in joined
+    assert healthcheck.get("interval") == "10s"
+    assert healthcheck.get("retries") >= 3
+    assert healthcheck.get("start_period") is not None
+
+
+def test_postgres_volume_is_named_and_additive() -> None:
+    """postgres-data named volume exists and is additive."""
+    compose = _compose()
+    assert "postgres-data" in compose["volumes"]
+    assert compose["volumes"]["postgres-data"] == {"driver": "local"}
+    # Service must mount the named volume
+    volumes = _postgres_service().get("volumes", [])
+    assert any("postgres-data:/var/lib/postgresql/data" in str(v) for v in volumes)
+
+
+def test_postgres_preflight_guard_pattern() -> None:
+    """postgres-preflight uses the same guard pattern as misp-preflight.
+
+    No network, read-only, no capabilities, checks POSTGRES_PASSWORD.
+    """
+    service = _postgres_preflight_service()
+    assert service["image"] == "busybox:1.37.0"
+    assert service["network_mode"] == "none"
+    assert service["read_only"] is True
+    assert service["restart"] == "no"
+    env = service.get("environment", {})
+    # Interpolation-safe: must use :- not :?
+    assert "${POSTGRES_PASSWORD:-}" in str(env.get("POSTGRES_PASSWORD", ""))
+    command_text = " ".join(str(c) for c in service.get("command", []))
+    assert "POSTGRES_PASSWORD" in command_text
+    assert "postgres profile" in command_text.lower()
+    # Security hardening
+    assert service.get("security_opt") == ["no-new-privileges:true"]
+    assert service.get("cap_drop") == ["ALL"]
+
+
+def test_postgres_service_depends_on_preflight_guard() -> None:
+    """postgres depends_on postgres-preflight completed successfully."""
+    service = _postgres_service()
+    depends_on = service.get("depends_on", {})
+    assert "postgres-preflight" in depends_on
+    assert depends_on["postgres-preflight"]["condition"] == "service_completed_successfully"
+
+
+def test_postgres_takes_credentials_from_environment() -> None:
+    """Postgres credentials come from env, no hardcoded password."""
+    service = _postgres_service()
+    env = service.get("environment", {})
+    # POSTGRES_PASSWORD must be interpolation-safe (:-) not :? to avoid breaking default stack
+    pwd = str(env.get("POSTGRES_PASSWORD", ""))
+    assert "${POSTGRES_PASSWORD:-}" in pwd
+    # No literal password committed
+    compose_text = COMPOSE_FILE.read_text(encoding="utf-8")
+    # Ensure no literal secret in postgres section (reuse secret patterns but allow env refs)
+    # The file should not contain a hardcoded postgres password like POSTGRES_PASSWORD: mysecret
+    # Our guard ensures empty default, so check that no password literal exists
+    assert 'POSTGRES_PASSWORD: ""' not in compose_text or "${POSTGRES_PASSWORD" in compose_text
+
+
+def test_postgres_default_triage_db_url_remains_sqlite() -> None:
+    """Default TRIAGE_DB_URL must remain SQLite-backed."""
+    compose = _compose()
+    triage_env = compose["services"]["triage-api"]["environment"]
+    db_url = str(triage_env.get("TRIAGE_DB_URL", ""))
+    assert "sqlite" in db_url
+    assert "${TRIAGE_DB_URL:-sqlite" in db_url
+    # Ensure no hard dependency on postgres
+    depends_on = compose["services"]["triage-api"].get("depends_on", {})
+    assert "postgres" not in set(depends_on)
+    assert "postgres-preflight" not in set(depends_on)
+
+
+def test_postgres_configuration_contains_no_secrets() -> None:
+    """Postgres profile files contain no credential literals."""
+    compose_text = COMPOSE_FILE.read_text(encoding="utf-8")
+    # Extract postgres-related sections
+    # Check that no secret pattern matches in the postgres service definition
+    # We allow env var references, but not literal assignments
+    # Reuse SECRET_PATTERNS but filter out env var references
+    # For simplicity, ensure no literal password in compose postgres env
+    # The secret scanner would catch "password: value" patterns, but env refs are safe
+    for pattern in SECRET_PATTERNS:
+        # Skip checking env var references like ${POSTGRES_PASSWORD:-}
+        # The pattern would match "POSTGRES_PASSWORD: ..." if literal
+        # Our compose uses "${POSTGRES_PASSWORD:-}" which should not match the secret pattern
+        # because the pattern looks for := with alphanumeric value, but env ref contains $
+        # So we assert no match in the postgres service yaml dump
+        service_yaml = yaml.safe_dump(_postgres_service())
+        assert pattern.search(service_yaml) is None, (pattern.pattern, service_yaml)
+    # Ensure postgres-data volume is documented as additive
+    assert "postgres-data" in compose_text

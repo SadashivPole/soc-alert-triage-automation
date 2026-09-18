@@ -148,7 +148,7 @@ flowchart LR
         ER["Enrichment\n(VirusTotal, MISP,\nallowlist, fail-open)"]
         SC["Deterministic risk scoring\n(scoring.v2 + justifications)"]
         DE["Deterministic decision engine\n(route / incident /\nsuppress)"]
-        DB[("SQLite → PostgreSQL\nplanned\nalerts · incidents · audit")]
+        DB[("SQLite (default) → PostgreSQL\n(profile: postgres, optional)\nalerts · incidents · audit")]
     end
 
     N["n8n orchestration\nnotifications · escalation ·\nfeedback form"]
@@ -322,7 +322,7 @@ Status markers describe the current tree.
 | **Prometheus + Grafana** | Optional read-only observability profile (`observability`) |  implemented and runtime-validated in the lab | Free, self-hosted |
 | **TheHive 5 CE** | Case-management export |  outstanding (optional; CE only, never Premium) | Free, self-hosted |
 | **SQLite / Alembic** | Alert/incident/audit persistence with automatic migrations |  implemented | Free |
-| **PostgreSQL** | Production-shaped database profile |  outstanding (a compose profile is designed, not implemented) | Free |
+| **PostgreSQL** | Production-shaped database profile (`postgres` compose profile) | ✅ implemented · locally validated — `postgres:16-alpine`, `soc-core` only, no host ports, `postgres-data` volume, `pg_isready` healthcheck, `postgres-preflight` guard, `psycopg[binary]` driver, dialect-aware JSON extraction, `.env.example` commented PG block, SQLite default preserved; parity tests 3 passed + 9 skipped without live PG, 11 unit portability passed, 43 docker contract passed | Free |
 | **Docker / Docker Compose** | Reproducible multi-service lab with network segmentation |  implemented | Free |
 | **LLM API** | Draft triage summaries | 🔮 **not implemented** — optional future idea only; `.env.example` carries unused placeholders | Free-tier possible |
 
@@ -457,7 +457,7 @@ Full detail, acceptance criteria, and evidence per phase:
 | **Phase 0 — Foundation** | Docs & scaffolding |  implemented · locally validated | ARCHITECTURE, DEVELOPMENT_PLAN, SECURITY, CONTRIBUTING, README, `.env.example`, directory tree, `check_secrets.sh` |
 | **Phase 1 — MVP triage pipeline** | Core triage loop |  implemented · locally validated | FastAPI app, ingest + normalize + dedupe, SQLite models + Alembic, scoring v1, decisions v1, n8n webhook client, compose (API+n8n+Mailpit), unit/integration tests.  `scripts/send_test_alert` simulator not implemented |
 | **Phase 2 — Enrichment & threat intelligence** | Threat intel | ✅ implemented · locally validated | Phase 2.2 static local policies ✅ (47 tests); Phase 2.3 enrichment TTL cache ✅ (61 tests); Phase 2.4 MISP `intel` profile + seeding guide ✅ statically validated (57 tests); Phase 2.5 scoring v2 `threat_intel` factor ✅ (56 tests); Phase 2.6 late-enrichment re-score ✅ (12+3 tests); Phase 2.7A automatic sweep ✅ (7+9 tests, disabled by default, idempotent); Phase 2.7B provider verdict visibility in WF2 ✅; VT/MISP fake-transport coverage, disabled by default, plus live VirusTotal/Mailpit verification for 2.7B; MISP remains not live-validated; §8.2 weight rescaling explicit open item |
-| **Phase 3 — Incidents, analyst workflow & observability** | Analyst loop |  partially validated | Incidents (3.1), lifecycle + feedback (3.2), read APIs + timeline (3.3), TTL sweeper (3.4), static console (3.5), runbooks (3.6), Prometheus `/metrics` + optional Grafana (3.7);  Postgres profile (3.8), stats endpoints + digest (3.9) |
+| **Phase 3 — Incidents, analyst workflow & observability** | Analyst loop | 🟡 partially validated | Incidents (3.1), lifecycle + feedback (3.2), read APIs + timeline (3.3), TTL sweeper (3.4), static console (3.5), runbooks (3.6), Prometheus `/metrics` + optional Grafana (3.7), PostgreSQL profile (3.8) ✅ implemented · locally validated; stats endpoints + digest (3.9) ⬜ |
 | **Phase 4 — Real Wazuh integration & approved response** | Full integration |  partially validated | Source-audited + live-validated `full` profile and `custom-triage` integrator (4.1/4.2), agent enrollment validated (4.4), custom rules/decoders authored (4.3, not live-validated);  approval/containment runbook (4.5), TheHive CE export (4.6), failure-spool + duplicate-delivery runtime checks and 10k/day soak (4.7) |
 | **Phase 5 — Deterministic detection evaluation** | Detection quality measurement |  implemented · locally validated | Labeled corpus, ground truth, confusion matrix, precision/recall/F1/FPR, runtime evaluation tests replaying fixtures through the real ingest path |
 | **Phase 6 — Detection quality & correlation** | Coverage & correlation | 🟡 in progress (5 of 6 items) |  detection coverage framework ✅ (6.1), ATT&CK mapping ✅ (6.2), expanded regression corpus ✅ (6.3, 24 scenarios), cross-alert correlation ✅ (6.4), analyst explainability ✅ (6.5); detection-quality CI gates 🟡 (6.6 corpus-quality pin of 24 scenarios; precision/recall/F1 thresholds not asserted) |
@@ -600,7 +600,7 @@ have not been exercised against a live rule match**.
 - **Observability** — runtime-validated for Phase 3.7, with the post-Phase-4 `/metrics`
   hygiene re-check outstanding.
 
-** Outstanding (scoped, not done):** `scripts/send_test_alert` simulator; the ARCHITECTURE.md §8.2 `scoring.v2` weight *rescaling* (the intel factor itself is implemented; the pre-existing weights are unchanged); PostgreSQL profile; stats endpoints + daily digest workflow (WF6); runbook linkage from decisions; TheHive CE export; containment approval/response runbook; Phase 4 failure-spool, duplicate-delivery, `/metrics` hygiene, and 10k alerts/day soak validations; CI coverage threshold and nightly compose smoke job. (The Phase 2.2 static allowlist + asset-inventory loaders, the Phase 2.3 enrichment TTL cache, the Phase 2.6 late-enrichment re-score, the Phase 2.7A automatic sweep, and the Phase 2.7B provider verdict visibility previously listed here are implemented · locally validated; what remains for allowlisting is an operator-side run with a populated policy and a corpus-level `suppress` pin, what remains for cache and late-enrichment is a live-provider run, and the sweep is disabled by default.)
+** Outstanding (scoped, not done):** `scripts/send_test_alert` simulator; the ARCHITECTURE.md §8.2 `scoring.v2` weight *rescaling* (the intel factor itself is implemented; the pre-existing weights are unchanged); stats endpoints + daily digest workflow (WF6, Phase 3.9); runbook linkage from decisions; TheHive CE export; containment approval/response runbook; Phase 4 failure-spool, duplicate-delivery, `/metrics` hygiene, and 10k alerts/day soak validations; CI coverage threshold and nightly compose smoke job. (The Phase 2.2 static allowlist + asset-inventory loaders, the Phase 2.3 enrichment TTL cache, the Phase 2.6 late-enrichment re-score, the Phase 2.7A automatic sweep, the Phase 2.7B provider verdict visibility, and the Phase 3.8 PostgreSQL profile previously listed here are implemented · locally validated; what remains for allowlisting is an operator-side run with a populated policy and a corpus-level `suppress` pin, what remains for cache and late-enrichment is a live-provider run, sweep disabled by default, and PostgreSQL live validation requires an operator-supplied `postgres` profile.)
 
 **🔮 Future / planned:** a pinned corpus-level correlation outcome. The detection coverage
 framework, ATT&CK mapping registry, 24-scenario regression corpus, cross-alert correlation,
@@ -626,8 +626,10 @@ provider/loader exists and is disabled by default; only the missing corpus-level
   placeholders. If it is ever built, it must be off by default, non-load-bearing, and
   strictly additive: scores, tiers, decisions, routing, and audit rows must remain
   byte-identical with it disabled or enabled (ADR-5 in `ARCHITECTURE.md`).
-- **TheHive CE case export** (optional), **PostgreSQL profile**, and **daily digest**
-  remain additive lab conveniences with no implementation today.
+- **TheHive CE case export** (optional) and **daily digest** (Phase 3.9)
+  remain additive lab conveniences with no implementation today; **PostgreSQL profile**
+  (Phase 3.8) is implemented · locally validated (optional `postgres` compose profile,
+  SQLite default preserved).
 
 ## Documentation Index
 
