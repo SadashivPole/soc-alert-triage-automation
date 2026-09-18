@@ -4,13 +4,13 @@
 API with Wazuh ingestion, deterministic scoring and decision routing, n8n analyst
 workflows, and a Docker lab.
 
-![Status](https://img.shields.io/badge/status-Phase%205%20evaluation%20merged%20%C2%B7%20Phase%206%20planned-blue)
+![Status](https://img.shields.io/badge/status-Phase%206%20implemented%20%C2%B7%20locally%20validated-blue)
 ![Python](https://img.shields.io/badge/python-3.11%2B-blue)
 ![Docker](https://img.shields.io/badge/docker-compose-blue)
 ![n8n](https://img.shields.io/badge/n8n-workflows-orange)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
-> **Project status (honest).** Phase 0 and Phase 1 are complete. **Phase 2 is implemented · locally validated** — Phase 2.2 (static local policy wiring: allowlist `allowlist.v1` + asset inventory `asset_inventory.v1`), Phase 2.3 (enrichment response TTL cache), Phase 2.5 (deterministic `scoring.v2` `threat_intel` factor), Phase 2.6 (late-enrichment re-score), Phase 2.7A (automatic late-enrichment sweep, disabled by default, idempotent), and Phase 2.7B (provider-specific IOC verdict visibility in WF2) are implemented · locally validated (payload-level and fake-transport tests, with live VirusTotal/Mailpit verification; MISP not live-validated); the optional MISP `intel` compose profile and its deterministic synthetic seeding guide (Phase 2.4) are implemented and statically validated (not live-started in CI). §8.2 weight rescaling remains explicit open item. **Phase 3** remains implemented with named items outstanding; **Phase 4 (real Wazuh integration)** is implemented and partially live-validated; **Phase 5 (deterministic detection evaluation)** is implemented and locally validated; **Phase 6 (detection quality & correlation) is in progress — 5 of 6 items implemented** — see [Development Roadmap](#development-roadmap) and [DEVELOPMENT_PLAN.md](DEVELOPMENT_PLAN.md).
+> **Project status (honest).** Phase 0 and Phase 1 are complete. **Phase 2 is implemented · locally validated** — Phase 2.2 (static local policy wiring: allowlist `allowlist.v1` + asset inventory `asset_inventory.v1`), Phase 2.3 (enrichment response TTL cache), Phase 2.5 (deterministic `scoring.v2` `threat_intel` factor), Phase 2.6 (late-enrichment re-score), Phase 2.7A (automatic late-enrichment sweep, disabled by default, idempotent), and Phase 2.7B (provider-specific IOC verdict visibility in WF2) are implemented · locally validated (payload-level and fake-transport tests, with live VirusTotal/Mailpit verification; MISP not live-validated); the optional MISP `intel` compose profile and its deterministic synthetic seeding guide (Phase 2.4) are implemented and statically validated (not live-started in CI). §8.2 weight rescaling remains explicit open item. **Phase 3** remains implemented with named items outstanding; **Phase 4 (real Wazuh integration)** is implemented and partially live-validated; **Phase 5 (deterministic detection evaluation)** is implemented and locally validated; **Phase 6 (detection quality & correlation) is implemented · locally validated — 6 of 6 items** (detection coverage, ATT&CK mapping, 24-scenario corpus, correlation, explainability, and detection-quality CI gates asserting precision/recall/F1/FPR and confusion-matrix bounds) — see [Development Roadmap](#development-roadmap) and [DEVELOPMENT_PLAN.md](DEVELOPMENT_PLAN.md).
 >
 > The **authoritative triage path is deterministic**: alert → ingest → normalize → dedupe
 > → enrich → **deterministic risk scoring (`scoring.v2`)** → **deterministic decision
@@ -36,7 +36,7 @@ workflows, and a Docker lab.
 5. [Architecture Overview](#architecture-overview)
 6. [Deterministic Scoring & Decision Routing](#deterministic-scoring--decision-routing)
 7. [Phase 5 — Deterministic Detection Evaluation](#phase-5--deterministic-detection-evaluation)
-8. [Phase 6 — Detection Quality & Correlation (Planned)](#phase-6--detection-quality--correlation-planned)
+8. [Phase 6 — Detection Quality & Correlation (Implemented)](#phase-6--detection-quality--correlation-implemented)
 9. [Triage Pipeline (End to End)](#triage-pipeline-end-to-end)
 10. [Technologies](#technologies)
 11. [Repository Layout](#repository-layout)
@@ -229,19 +229,22 @@ locally on Python 3.11, 2026-09-10):
 > actions, so this fixture lands as FN. Resolving that semantics belongs to the Phase 6
 > expanded regression corpus.
 
-**What Phase 5 does *not* do:** it does not assert the metric values (they are printed,
-so there is **no detection-quality CI gate yet** — that is Phase 6); it does not measure
-enrichment quality (all fixtures run with enrichment disabled/skipped); it does not cover
-Wazuh rule-level detection coverage; and a 6-fixture corpus is **not** a benchmark.
+**What Phase 5 does *not* do:** the original Phase 5 baseline only printed its 6-fixture
+metric values. The expanded Phase 6 corpus now measures the 24 scenarios and Phase 6.6
+asserts detection-quality thresholds in CI; it still does not measure live Wazuh rule-level
+detection coverage, enrichment quality remains outside this gate, and the corpus is not a
+benchmark.
 
-## Phase 6 — Detection Quality & Correlation (In Progress)
+## Phase 6 — Detection Quality & Correlation (Implemented)
 
-**Status: 🟡 in progress — 5 of 6 items implemented.** The **detection coverage
+**Status: ✅ implemented · locally validated — 6 of 6 items.** The **detection coverage
 framework**, **ATT&CK mapping**, **24-scenario regression corpus**, **cross-alert
-correlation** (Phase 6.4, investigation contexts), and **analyst explainability** are
-implemented and locally validated (see below); detection-quality metric thresholds
-remain outstanding. Full detail: [docs/detection-coverage.md](docs/detection-coverage.md) and
-[DEVELOPMENT_PLAN.md](DEVELOPMENT_PLAN.md).
+correlation** (Phase 6.4, investigation contexts), **analyst explainability**, and
+**detection-quality CI gates** are implemented and locally validated. The quality gate
+asserts precision ≥ 1.0, recall ≥ 11/12, F1 ≥ 22/23, FPR ≤ 0.0 and confusion-matrix bounds
+(TP ≥ 11, FP ≤ 0, FN ≤ 1, TN ≥ 12) through the existing pytest CI job. Live Wazuh rule
+coverage is explicitly out of scope. Full detail: [docs/detection-coverage.md](docs/detection-coverage.md)
+and [DEVELOPMENT_PLAN.md](DEVELOPMENT_PLAN.md).
 
 | Phase 6 item | Intent | Current state |
 | --- | --- | --- |
@@ -250,7 +253,7 @@ remain outstanding. Full detail: [docs/detection-coverage.md](docs/detection-cov
 | **Expanded regression corpus** | Grow the labeled corpus well beyond 6 fixtures (incl. label/action semantics such as UC-1's first-occurrence case) | ✅ implemented (Phase 6.3) — corpus grown to 24 scenarios / 12 negatives (per-scenario negatives, custom-rule near-misses, recurrence-boundary negative) with label semantics defined and enforced; SCN-01 remains the documented UC-1 first-occurrence FN |
 | **Cross-alert correlation** | Correlate related alerts (same host/user/indicator over time) into a single investigation context | ✅ **implemented (Phase 6.4)** — deterministic, explainable *investigation contexts* grouping distinct alerts (different dedupe groups) that share evidence (shared indicator, source/destination IP, or same-agent + ATT&CK technique) within a configurable window. Read API: `GET /api/v1/correlations`. Dedupe/recurrence/incidents unchanged; user correlation unsupported (no stable canonical user field) |
 | **Analyst explainability** | Extend per-alert explanations so an analyst can see why an alert mattered and what changed | ✅ **implemented (Phase 6.5)** — deterministic, read-only `GET /api/v1/alerts/{alert_id}/explanation` (`explanation.v1`): the stored alert, detection metadata (stored `rule.mitre` verbatim), scoring factor breakdown reconciled against the authoritative score, decision reasons, dedupe/recurrence facts, correlation context and evidence, incident linkage, and audit history — explicit nulls for missing facts, never re-scoring or inferring |
-| **Detection-quality CI gates** | Fail CI when precision/recall/F1 regress beyond a threshold | 🟡 partial — corpus-quality gate pins 24 scenarios and prints metrics; precision/recall/F1 values are not asserted |
+| **Detection-quality CI gates** | Fail CI when precision/recall/F1 regress beyond a threshold | ✅ **implemented** — `DetectionQualityThresholds` defines precision 1.0, recall 11/12, F1 22/23, FPR 0.0, TP 11, FP 0, FN 1, TN 12; `assert_detection_quality_gate()` asserts all 8 conditions over the 24-scenario corpus, and the existing pytest CI job executes the gate |
 
 ## Triage Pipeline (End to End)
 
@@ -378,7 +381,7 @@ scan. Console JS: `node --test app/tests/js/console_core.test.cjs` → **15 pass
 | Contract (sample alerts ↔ normalizer/scorer) | pytest fixtures from `app/tests/fixtures/` | all samples parse and score |
 | Integration (API + temp SQLite + auth + audit + lifecycle) | FastAPI `TestClient` | all acceptance-path tests green |
 | External fakes (VirusTotal/MISP behavior) | `httpx.MockTransport` injected clients — no network in tests | outage/quota/timeout paths covered |
-| **Evaluation (Phase 5)** | pytest + `evaluation/` corpus, ground truth, metrics | ground-truth contracts and corpus/ground-truth parity must hold (metric *values* are printed, not asserted) |
+| **Evaluation (Phase 5 + 6.6)** | pytest + `evaluation/` corpus, ground truth, metrics + detection-quality gate | ground-truth contracts and corpus/ground-truth parity must hold; TP/FP/FN/TN and precision/recall/F1/FPR are asserted via `assert_detection_quality_gate()` over the 24-scenario corpus |
 | **Detection coverage (Phase 6)** | pytest + `evaluation/detection_catalog.yaml` vs the ruleset, fixtures, ground truth, runbooks, tests, and the coverage doc | every documented mapping must resolve (39 read-only tests; no scoring/routing behavior touched) |
 | Console JS | Node `--test` | 15 tests green |
 | Security | `scripts/check_secrets.sh`, metrics no-secret canary, authz tests | all green |
@@ -599,11 +602,11 @@ have not been exercised against a live rule match**.
 
 ** Outstanding (scoped, not done):** `scripts/send_test_alert` simulator; the ARCHITECTURE.md §8.2 `scoring.v2` weight *rescaling* (the intel factor itself is implemented; the pre-existing weights are unchanged); PostgreSQL profile; stats endpoints + daily digest workflow (WF6); runbook linkage from decisions; TheHive CE export; containment approval/response runbook; Phase 4 failure-spool, duplicate-delivery, `/metrics` hygiene, and 10k alerts/day soak validations; CI coverage threshold and nightly compose smoke job. (The Phase 2.2 static allowlist + asset-inventory loaders, the Phase 2.3 enrichment TTL cache, the Phase 2.6 late-enrichment re-score, the Phase 2.7A automatic sweep, and the Phase 2.7B provider verdict visibility previously listed here are implemented · locally validated; what remains for allowlisting is an operator-side run with a populated policy and a corpus-level `suppress` pin, what remains for cache and late-enrichment is a live-provider run, and the sweep is disabled by default.)
 
-**🔮 Future / planned:** a pinned corpus-level correlation outcome, and detection-quality
-CI gates that assert precision/recall/F1 thresholds (6.6). (The detection coverage
-framework, the ATT&CK mapping registry, the 24-scenario regression corpus, cross-alert
-correlation, and analyst explainability are ✅ implemented; the coverage framework's own
-blind spots are listed as gaps G1–G10 in
+**🔮 Future / planned:** a pinned corpus-level correlation outcome. The detection coverage
+framework, ATT&CK mapping registry, 24-scenario regression corpus, cross-alert correlation,
+analyst explainability, and detection-quality CI gates are ✅ implemented; live Wazuh
+coverage measurement remains explicitly out of scope. The coverage framework's own blind
+spots are listed as gaps G1–G10 in
 [docs/detection-coverage.md](docs/detection-coverage.md).)
 
 **Known documentation drift outside this README/plan** (tracked, not fixed here):
@@ -611,9 +614,9 @@ blind spots are listed as gaps G1–G10 in
 now the deterministic evaluation phase and no LLM exists; `app/README.md` still declares
 "Status: Phase 1E"; `docs/sample-alerts/README.md` documents a `scripts/send_test_alert`
 script that is not implemented; `CHANGELOG.md` has no Phase 5 entry yet;
-`docs/detection-coverage.md` gap **G10** still says no allowlist provider/loader exists,
-which Phase 2.2 has since superseded (only the missing corpus-level `suppress` pin is
-still true there); and `CHANGELOG.md` now includes Phase 2.2/2.6/2.7A/2.7B after this reconciliation — Phase 5 entry still missing.
+`docs/detection-coverage.md` gap **G10** has been reconciled with Phase 2.2: the allowlist
+provider/loader exists and is disabled by default; only the missing corpus-level
+`suppress` pin remains. `CHANGELOG.md` now also records the Phase 6.6 gate reconciliation.
 
 ## Optional Future Functionality (Not Implemented)
 

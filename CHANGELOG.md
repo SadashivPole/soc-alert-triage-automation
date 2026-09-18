@@ -6,6 +6,19 @@ semantic (`v0.1.0` targeted at the end of Phase 1).
 
 ## [Unreleased]
 
+### Added — Phase 6.6: deterministic detection-quality CI gates (documentation reconciliation)
+
+- **Detection-quality metrics are explicitly asserted in CI.** The existing evaluation
+  harness builds TP/FP/FN/TN over the 24-scenario corpus and `DetectionQualityThresholds`
+  asserts precision ≥ 1.0, recall ≥ 11/12, F1 ≥ 22/23, FPR ≤ 0.0, TP ≥ 11, FP ≤ 0,
+  FN ≤ 1, TN ≥ 12 through the existing pytest `python-checks` job.
+- The current measured corpus result is TP 11 / FP 0 / FN 1 / TN 12, with precision 1.0,
+  recall 0.9167, F1 0.9565, and FPR 0.0. `test_detection_quality_gates.py` also proves
+  the gate rejects a degraded metric.
+- This is a deterministic corpus/detection-quality gate only; it does not claim live
+  Wazuh rule coverage, and no new scoring/config/workflow behavior was added.
+
+
 ### Added — Phase 2.7B: provider-specific IOC verdict visibility in WF2 (PR #47)
 
 - **WF2 now renders per-provider IOC verdicts.** `n8n/workflows/WF2_soc-analyst-notify.json` `Format Notification` node adds `verdictFor()` (maps sanitized provider payload to `malicious`/`suspicious`/`matched`/`reputation=…`/`lookup_status`) and `verdictRows` loop over `ioc.enrichment` per provider, producing `IOC Verdicts:` section in the email body. Payload already preserves sanitized `lookup_status`/`result` (malicious/suspicious/tags) per indicator — `app/src/soc_triage/notifications/payload.py` `_sanitize_enrichment` keeps only allow-listed small keys.

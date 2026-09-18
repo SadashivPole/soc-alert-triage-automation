@@ -36,7 +36,7 @@ history. Status claims elsewhere are descriptive, not authoritative.
 | **Phase 3 — Incidents, analyst workflow & observability** | 🟡 Partially validated | Incidents, lifecycle, read APIs, timeline, sweeper, console, runbooks, `/metrics` + Grafana profile all implemented; PostgreSQL profile + stats/digest ⬜ |
 | **Phase 4 — Real Wazuh integration & approved response** | 🟡 Partially validated | 4.1/4.2 source-audited + live-validated end-to-end; 4.4 validated; 4.3 authored but not live-validated; 4.5/4.6/4.7 and runtime failure/duplicate checks ⬜ |
 | **Phase 5 — Deterministic detection evaluation** | ✅ Implemented · locally validated | Labeled corpus, ground truth, confusion matrix, precision/recall/F1/FPR, runtime evaluation tests |
-| **Phase 6 — Detection quality & correlation** | 🟡 In progress (5 of 6 items implemented) | Detection coverage framework ✅ (6.1); ATT&CK mapping ✅ (6.2 — registry + rendered view + validation tests); expanded regression corpus ✅ (6.3, 24 scenarios); cross-alert correlation ✅ (6.4); analyst explainability ✅ (6.5); detection-quality CI gates 🟡 (6.6 — corpus-quality gate pins 24 scenarios; precision/recall/F1 thresholds still not asserted) |
+| **Phase 6 — Detection quality & correlation** | ✅ Implemented · locally validated | Detection coverage framework ✅ (6.1); ATT&CK mapping ✅ (6.2 — registry + rendered view + validation tests); expanded regression corpus ✅ (6.3, 24 scenarios); cross-alert correlation ✅ (6.4); analyst explainability ✅ (6.5); detection-quality CI gates ✅ (6.6 — precision/recall/F1/FPR and confusion-matrix bounds asserted by the existing pytest CI job) |
 
 No release tags have been cut. The package version is `0.1.0a1` and `CHANGELOG.md` is
 still under `[Unreleased]`.
@@ -298,9 +298,9 @@ continuously measured and regressions are blocked".
 
 **Status: in progress — 5 of 6 items implemented (detection coverage framework; ATT&CK
 mapping; expanded regression corpus of 24 scenarios; cross-alert correlation as an
-investigation context; analyst explainability).** Item 6.6 still does not assert
-precision/recall/F1 thresholds (the corpus-quality gate pins completeness, not metric
-values). Everything else below is still a scope, not an achievement.
+investigation context; analyst explainability).** Item 6.6 now asserts precision/recall/F1 thresholds and confusion-matrix bounds over the
+24-scenario corpus through the existing pytest CI job. Live Wazuh rule coverage remains
+out of scope for this gate. Everything else below is still a scope, not an achievement.
 
 | # | Item | Scope | Status |
 | --- | --- | --- | --- |
@@ -309,7 +309,7 @@ values). Everything else below is still a scope, not an achievement.
 | 6.3 | Expanded regression corpus | Grow the labeled corpus well beyond 6 fixtures; add negatives per scenario; define and document the positive/negative ↔ decision-action semantics (including the UC-1 first-occurrence case) | ✅ **implemented** — corpus grown to 24 scenarios (12 positive / 12 negative), including per-scenario negatives, custom-rule near-misses, and a just-below-trigger recurrence boundary (`SCN-17`–`SCN-24`); label semantics defined and enforced (SCN-01 remains the documented UC-1 first-occurrence FN) |
 | 6.4 | Cross-alert correlation | Correlate related alerts (same host, user, or indicator over time) into one investigation context (today only rule+agent recurrence is grouped) | ✅ **implemented** (investigation-context scope; user correlation unsupported by design — no stable canonical user field) — see below |
 | 6.5 | Analyst explainability | Extend per-alert explanations beyond today's factor-by-factor score justification, decision reasons, and incident timeline — e.g. "what changed since the last occurrence" | ✅ **implemented** (merged via PR #31) — deterministic, read-only per-alert explanations (`explanation.v1`): `GET /api/v1/alerts/{alert_id}/explanation` assembles the stored alert/detection/score/decision/dedupe/correlation/incident/audit facts with explicit nulls, never re-scoring or inferring |
-| 6.6 | Detection-quality CI gates | Fail CI when precision/recall/F1 degrade beyond an agreed threshold, on a corpus large enough to make the thresholds meaningful | 🟡 **partial** — `test_detection_quality_gates.py` pins corpus completeness (24 scenarios, fixture sync, regression coverage, G5 liveness) and prints TP/FP/FN/TN; precision/recall/F1 values are still printed, not asserted (gap G8: live Wazuh coverage is not measured) |
+| 6.6 | Detection-quality CI gates | Fail CI when precision/recall/F1 degrade beyond an agreed threshold, on a corpus large enough to make the thresholds meaningful | ✅ **implemented · locally validated** — `DetectionQualityThresholds` defines precision ≥ 1.0, recall ≥ 11/12, F1 ≥ 22/23, FPR ≤ 0.0, TP ≥ 11, FP ≤ 0, FN ≤ 1, TN ≥ 12; `assert_detection_quality_gate()` enforces all 8 conditions from `test_evaluation.py`, and `test_detection_quality_gates.py` proves a degraded metric is rejected. The gate runs through the existing `python-checks` pytest job; it is a corpus/detection-quality gate, not live Wazuh coverage measurement. |
 
 ### 6.1 Detection coverage framework — what is now implemented (Phase 6.2 task)
 
@@ -406,8 +406,10 @@ second-delivery non-escalation at pipeline level).
 Plus `SCN-17`–`SCN-24` (all negative, all `monitor`): authorized FIM, expected account
 creation, non-malicious hash, custom-rule SSH/FIM/web near-misses, a non-triggering web
 request, and a two-delivery recurrence boundary that stays below rapid-burst. The labeled
-corpus is now 24 scenarios (12 positive / 12 negative). Quality thresholds on the metrics
-remain 6.6. An allowlist provider now exists (Phase 2.2 — static `allowlist.v1`, registered
+corpus is now 24 scenarios (12 positive / 12 negative). Quality thresholds are now asserted
+in 6.6 via `DetectionQualityThresholds` and the existing evaluation gate (TP 11, FP 0,
+FN 1, TN 12; precision 1.0, recall 11/12, F1 22/23, FPR 0.0). An allowlist provider now exists
+(Phase 2.2 — static `allowlist.v1`, registered
 only when `TRIAGE_ALLOWLIST_PATH` points at a policy; it performs no matching until that
 policy has entries), so the `suppress` route is reachable in the runtime path once an
 operator configures a populated policy (loader → chain merge → decision router wiring is
@@ -498,7 +500,7 @@ accompanying Phase 2.3 measured 1258 passed on Python 3.11).
 | Contract (sample alerts ↔ normalizer/scorer) | every PR | pytest fixtures (`app/tests/fixtures/`) | all samples parse + score |
 | Integration (API + temp SQLite + auth + audit + lifecycle) | every PR | FastAPI `TestClient` | all acceptance-path tests green |
 | External fakes (VirusTotal/MISP behavior) | every PR | injected `httpx.MockTransport` clients (no `respx`, no network) | outage/quota/timeout paths covered |
-| Evaluation (Phase 5) | every PR | pytest + `evaluation/` corpus/ground truth/metrics | ground-truth contracts and corpus parity hold; metric **values** are printed, not asserted |
+| Evaluation (Phase 5 + 6.6) | every PR | pytest + `evaluation/` corpus/ground truth/metrics + detection-quality gate | ground-truth contracts and corpus parity hold; TP/FP/FN/TN, precision/recall/F1/FPR are asserted over the 24-scenario corpus via `assert_detection_quality_gate()` |
 | Console JS | every PR | Node 22 `--test` | 15 tests green |
 | Security | every PR | `check_secrets.sh`, secret-canary metrics test, authz matrix | all green |
 | E2E smoke (compose) | — | compose + curl assertions | ⬜ **not implemented** (no nightly compose job) |
@@ -540,7 +542,7 @@ deterministic seeds for any randomized behavior (jitter tests use seeded RNG).
 | n8n breaking API changes between versions | workflow imports fail | pin the n8n image tag; workflows exported per version; static/security tests in CI |
 | Wazuh integrator behaviour differs across 4.x minors | lost alerts | version pinned in compose; source-audited against the pinned image; live-validated once; ⬜ soak + failure-recovery runtime checks |
 | Evaluation corpus too small / label semantics ambiguous | misleading quality numbers | Phase 5 numbers are labelled as a 6-fixture smoke baseline; Phase 6 expands the corpus and defines label semantics before adding CI thresholds |
-| Quality metrics printed but not asserted | silent regressions | explicitly tracked as ⬜ Phase 6 (detection-quality CI gates) |
+| Detection-quality metrics regress | silent regressions | ✅ mitigated — `DetectionQualityThresholds` and `assert_detection_quality_gate()` enforce 8 corpus-quality conditions through the existing pytest CI job |
 | Coverage threshold documented but not enforced | untested paths slip through | stated honestly; enforcement tracked as ⬜ in the testing table |
 | Documentation drift (status restated in several files) | reviewers lose trust | single status vocabulary; README + this file are the only status sources; out-of-date statements are listed as known drift rather than silently ignored |
 | Scope creep toward offensive tooling | charter violation | CONTRIBUTING explicitly rejects offensive capabilities; review checklist item |
@@ -568,5 +570,5 @@ Recorded rather than hidden; each is a small docs-only follow-up.
 | `app/README.md` | Declares "Status: Phase 1E", which predates Phases 2–5. |
 | `docs/sample-alerts/README.md` | Documents `./scripts/send_test_alert`, which is not implemented. |
 | `CHANGELOG.md` | No Phase 5 entry yet (the evaluation framework is merged but undocumented there). |
-| `docs/detection-coverage.md` (gap G10) | Still states that "no allowlist provider/loader exists yet (Phase 2.2 outstanding)". Phase 2.2 is now ✅ implemented · locally validated; the residual, still-true part of G10 is that the evaluation corpus does not pin a `suppress` outcome. |
+| `docs/detection-coverage.md` (gap G10) | Previously stated that the allowlist provider/loader was missing. Reconciled: Phase 2.2 provides the allowlist provider/loader; the remaining G10 gap is that the evaluation corpus does not pin a `suppress` outcome. |
 | `CHANGELOG.md` | No Phase 5 entry yet; Phase 2.2/2.6/2.7A/2.7B entries added in this reconciliation — Phase 5 still missing. |
