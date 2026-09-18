@@ -38,7 +38,7 @@ import json
 import threading
 import time
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from uuid import UUID
@@ -455,8 +455,10 @@ def test_real_chain_and_cache_are_the_observation_surface(db_url: str) -> None:
         iocs = _fixture_iocs("04_wazuh_malware_hash_virustotal.json")
         assert iocs
 
-        # Earlier lookups (a prior alert) answered not_found and are cached.
-        t0 = datetime(2026, 9, 17, 10, 0, 0, tzinfo=UTC)
+        # Keep seeded cache records fresh relative to the current test run.
+        # The provider cache uses a finite TTL, so fixed historical timestamps
+        # would expire before the test can exercise the cache-hit path.
+        t0 = datetime.now(UTC) - timedelta(minutes=10)
         for ioc in iocs:
             cache.put("virustotal", ioc, _cache_record(ioc, status="not_found", ts=t0), now=t0)
 
@@ -471,7 +473,7 @@ def test_real_chain_and_cache_are_the_observation_surface(db_url: str) -> None:
         assert first["enrichment_status"] == "complete"
 
         # A later lookup (e.g. a repeat alert) refreshes the verdict to found.
-        t1 = datetime(2026, 9, 17, 11, 0, 0, tzinfo=UTC)
+        t1 = datetime.now(UTC) - timedelta(minutes=1)
         for ioc in iocs:
             cache.put(
                 "virustotal", ioc, _cache_record(ioc, status="found", ts=t1, malicious=10), now=t1

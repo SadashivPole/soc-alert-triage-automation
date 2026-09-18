@@ -177,12 +177,20 @@ def test_start_late_enrichment_task_returns_none_when_disabled() -> None:
 def test_run_late_enrichment_loop_runs_passes_and_stops_on_cancellation(
     factory: sessionmaker,
 ) -> None:
-    # A candidate inside the lookback window, so the immediate first pass
-    # actually drives the (mock) service.
-    _persist_alert(factory, received_at=NOW - timedelta(seconds=10), rule_id="5720")
+    # The loop uses the real UTC clock, so the candidate must be recent
+    # relative to the current test run rather than the fixed NOW constant
+    # used by the deterministic sweep_once tests.
+    current_time = datetime.now(UTC)
+
+    _persist_alert(
+        factory,
+        received_at=current_time - timedelta(seconds=10),
+        rule_id="5720",
+    )
 
     service = Mock()
     service.reassess_persisted_if_changed.return_value = None
+
     app = SimpleNamespace(
         state=SimpleNamespace(
             settings=_settings(enabled=True, interval=1, lookback=3600),
@@ -193,14 +201,17 @@ def test_run_late_enrichment_loop_runs_passes_and_stops_on_cancellation(
 
     async def scenario() -> None:
         task = asyncio.create_task(sweep_mod.run_late_enrichment_loop(app))
+
+        # The first pass must run immediately, before the configured
+        # one-second interval sleep.
         await asyncio.sleep(0.05)
+
         task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await task
 
     asyncio.run(scenario())
 
-    # The first pass runs immediately; the cancellation is clean (task done).
     assert service.reassess_persisted_if_changed.call_count >= 1
     assert service.reassess_persisted_if_changed.call_args.kwargs["decided_at"] is not None
 
