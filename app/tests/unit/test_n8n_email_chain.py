@@ -223,6 +223,25 @@ def test_notification_formatters_render_objects_as_text() -> None:
     assert "timeline_url" not in formatter_code
     assert "links.alert_api" in formatter_code
     assert "links.feedback_url" in formatter_code
+    # Phase 2.7B: WF2 must render per-provider IOC verdicts as plain text.
+    assert "IOC Verdicts:" in formatter_code
+    assert "Object.entries(enrichmentMap)" in formatter_code
+    assert "verdictRows" in formatter_code
+    assert "verdictText" in formatter_code
+
+
+
+def test_wf2_renders_provider_verdict_rows() -> None:
+    """WF2 must include provider lookup verdict fields in analyst notifications."""
+    workflow = _load_workflows()["WF2_soc-analyst-notify.json"]
+    formatter = _function_code(workflow)
+
+    assert "lookup_status" in formatter
+    assert "malicious" in formatter
+    assert "suspicious" in formatter
+    assert "matched" in formatter
+    assert "verdictRows" in formatter
+    assert "verdictText" in formatter
 
 
 def test_payload_supplies_feedback_url_for_workflow_emails() -> None:
