@@ -6,6 +6,28 @@ semantic (`v0.1.0` targeted at the end of Phase 1).
 
 ## [Unreleased]
 
+### Added — Phase 2.7B: provider-specific IOC verdict visibility in WF2 (PR #47)
+
+- **WF2 now renders per-provider IOC verdicts.** `n8n/workflows/WF2_soc-analyst-notify.json` `Format Notification` node adds `verdictFor()` (maps sanitized provider payload to `malicious`/`suspicious`/`matched`/`reputation=…`/`lookup_status`) and `verdictRows` loop over `ioc.enrichment` per provider, producing `IOC Verdicts:` section in the email body. Payload already preserves sanitized `lookup_status`/`result` (malicious/suspicious/tags) per indicator — `app/src/soc_triage/notifications/payload.py` `_sanitize_enrichment` keeps only allow-listed small keys.
+- Evidence: `test_n8n_payload.py::test_payload_preserves_provider_lookup_verdict_fields` pins VT `malicious:8` and MISP `tags:["apt:38"]` preservation, `test_n8n_email_chain.py` adds WF2 binding checks, ruff/mypy/secret scan green. No `full_log`, no secrets in payload; live VirusTotal enrichment and Mailpit analyst notification were verified; MISP was not live-validated.
+
+### Added — Phase 2.7A: automatic late-enrichment sweep (PR #46)
+
+- **A restart-safe, idempotent background sweep** (`app/src/soc_triage/services/late_enrichment_sweep.py`): `sweep_once` scans at most `_BATCH_LIMIT=200` alerts received within `LATE_ENRICHMENT_LOOKBACK_SECONDS` (default 604800 s / 7 days) oldest-first, re-enriches each via `LateEnrichmentService.reassess_persisted_if_changed` with timestamp-insensitive fingerprint guard — unchanged enrichment (cache replay, retried identical failure) returns `None` without scoring/persisting/audit; changed enrichment (late definitive verdict, newly enabled provider) runs atomic `persist_assessment` (same incident create/attach path, same `before`/`after` audit snapshots). `run_late_enrichment_loop` runs `sweep_once` in `asyncio.to_thread` every `LATE_ENRICHMENT_SWEEP_INTERVAL_SECONDS` (default 300 s), first pass immediate, clean cancel on shutdown.
+- **Disabled by default** (`LATE_ENRICHMENT_SWEEP_ENABLED=false`), matching Phase 2.2/2.3 convention; with no providers configured zero external calls (ARCHITECTURE §7.3). Fail-open per-alert error isolation (logs `error_type` only), transaction-level failure logged and retried next tick, no new n8n notifications (Phase 2.7B scope).
+- Evidence: 7 sweep unit (`test_late_enrichment_sweep.py`: batch limit, window inclusive/outside, fingerprint guard, error isolation) + 9 trigger integration (`test_late_enrichment_trigger.py`: disabled default, enabled wiring, unchanged no-op, changed re-score, incident create/attach on escalation, idempotent second pass, restart persistence, per-alert failure isolation) + CI (ruff/mypy/pytest/secret scan). No live VT/MISP run, no ingest path change.
+
+### Added — Phase 2.6: late-enrichment re-score (PR #45)
+
+- **Deterministic re-assessment workflow** (`app/src/soc_triage/services/late_enrichment.py` + `assessment_persistence.py`): `LateEnrichmentService.reassess` runs `EnrichmentChain.enrich` over a persisted canonical alert, recomputes `RiskScorer.score` (pure, reads only sanitized `IOC.enrichment[provider]`) and `DecisionEngine.decide`, returns `LateEnrichmentResult` with previous risk/decision; `reassess_persisted` atomically persists via `persist_assessment` (alert payload update + `alert.scored`/`alert.decided` audit with before/after snapshots + incident create/attach when decision escalates to `open_incident`); `reassess_persisted_if_changed` adds timestamp-insensitive fingerprint guard (`_enrichment_fingerprint` excludes volatile `timestamp`, sorts indicators/providers) so same enrichment never re-scores twice — Phase 2.7A idempotency guard.
+- **No new notifications, no ingest path change.** Re-assessment is caller-driven (sweep or management hook); persistence uses same `session_scope` pattern as Phase 3.2 feedback sync; fail-open (provider failure → `failed` record, not crash).
+- Evidence: 12 unit (`test_late_enrichment.py`: fingerprint stability, changed vs unchanged, degraded fallback, audit snapshot shape) + 3 integration (`test_late_enrichment_integration.py`: persist + incident create/attach + before/after audit + idempotency) + ruff/mypy/secret scan + full suite. No live VT/MISP run, no Docker-lab run.
+
+### Added — Phase 2.2: static local policy wiring (backfilled — previously missing changelog entry)
+
+- **Deterministic local policies** `app/config/allowlists.yaml` (`allowlist.v1`) and `app/config/asset_inventory.yaml` (`asset_inventory.v1`): loaded only when `TRIAGE_ALLOWLIST_PATH` / `TRIAGE_ASSET_INVENTORY_PATH` set (empty ⇒ disabled, shipped files contain no entries), fail-loud validation, exact normalized indicator + IPv4 CIDR matching, provider `enrichment_status: skipped` (adds no intel points), existing `allowlist` (−20) factor and `suppress` route unchanged, asset inventory pure fill-only seam (precedence `agent_id`→IP→name, source fields win, no `asset_criticality` weight change), no network I/O, no AI/LLM.
+- Evidence: 47 targeted tests (26 allowlist unit +16 asset-inventory unit +5 integration wiring) + ruff/mypy/CI on 3.11 & 3.12 + secret scan. No Docker-lab operator run with populated policy, no corpus-level `suppress` pin (G10 residual).
+
 ### Added — Phase 2.5: deterministic scoring v2 (`threat_intel` factor) + updated goldens
 
 - **A threat-intelligence factor in the deterministic scoring engine** (ARCHITECTURE.md §8.2,
@@ -53,8 +75,7 @@ semantic (`v0.1.0` targeted at the end of Phase 1).
   `docs/detection-coverage.md`.
 - **Explicitly not claimed:** no live VirusTotal or MISP lookup was performed — intel verdicts are
   exercised only as the sanitized payloads the fake-transport providers emit, and there was no
-  Docker-lab operator run with populated intel. Late-enrichment re-score (2.6) remains
-  outstanding.
+  Docker-lab operator run with populated intel. Late-enrichment re-score (2.6) is now implemented — see Phase 2.6 entry above; §8.2 weight rescaling remains explicit open item.
 
 ### Added — Phase 2.4: MISP `intel` compose profile + deterministic seeding guide
 
@@ -110,8 +131,7 @@ semantic (`v0.1.0` targeted at the end of Phase 1).
   `ARCHITECTURE.md` (§7.3, §13), `DEVELOPMENT_PLAN.md`, `.env.example`.
 - **Explicitly not claimed:** no Docker/MISP instance was started (no Docker daemon in the
   development sandbox), so no live MISP lookup, seeding run, or UI import was exercised;
-  MISP was **not** live-validated. Late-enrichment re-score (2.6) remains untouched; scoring v2
-  (2.5) is delivered by the entry above.
+  MISP was **not** live-validated. Late-enrichment re-score (2.6) is now implemented — see Phase 2.6/2.7A entries above; scoring v2 (2.5) is delivered by the entry above.
 
 ### Added — Phase 2.3: enrichment response TTL cache
 
