@@ -61,11 +61,11 @@ flowchart TB
 
     subgraph core["Docker network: soc-core (internal)"]
         API["triage-api (FastAPI) :8000"]
-        DB[("SQLite volume → PostgreSQL profile")]
+        DB[("SQLite (default) → PostgreSQL\n(profile: postgres, optional)")]
         MP["Mailpit (SMTP sink) :1025/:8025"]
         WAZ["wazuh-manager (profile: full)"]
         MISP["MISP (profile: intel)"]
-        PG[("PostgreSQL (profile: postgres)")]
+        PG[("PostgreSQL (profile: postgres)\npostgres:16-alpine, soc-core only")]
     end
 
     AG["Wazuh agents (lab only, optional)"] -->|1514/1515| WAZ
@@ -98,7 +98,7 @@ publish only under the `full` profile. MISP and PostgreSQL stay internal (profil
 | **n8n** | n8n (self-hosted) | Notification fan-out, SLA escalation timers, incident ticket creation, analyst feedback form, daily digest; workflow JSONs version-controlled in `n8n/workflows/` | 1–3 |
 | **Wazuh manager** | Wazuh 4.x | Detection source: rules/decoders/FIM; ships alerts via its `integrator` module + custom script; optional API queries for agent context | 4 |
 | **Simulator** | `scripts/send_test_alert` | Replays synthetic alerts from `docs/sample-alerts/` (also CI fixtures) so the whole pipeline is demoable without Wazuh | 1 |
-| **Persistence** | SQLite (file volume) → PostgreSQL | Tables: `alerts`, `ioc_observations`, `incidents`, `feedback`, `audit_log`, `dead_letters`; migrations via Alembic | 1 / 3 |
+| **Persistence** | SQLite (default, file volume) → PostgreSQL (optional `postgres` profile) | Tables: `alerts`, `ioc_observations`, `incidents`, `feedback`, `audit_log`, `dead_letters`; migrations via Alembic; dialect-aware JSON extraction (`json_extract` SQLite / `->`/`->>` PostgreSQL) | 1 / 3 (Phase 3.8: `postgres` profile implemented, SQLite default preserved) |
 | **Mailpit** | axllent/mailpit | Local SMTP sink + web UI — proves email flows without touching real relays | 1 |
 | **MISP (optional)** | MISP docker (profile `intel`) | Self-hosted threat intel: seeded with public/synthetic events; attribute lookups enrich alerts | 2 |
 | **SOC console (later)** | Static HTML + JSON endpoints (optionally Grafana profile) | Alert queue, score justifications, incident board, FP-rate trends | 3 |
@@ -843,9 +843,13 @@ only; the manager image has no project dependencies).
   [`docs/specs/phase-3.7-prometheus-observability.md`](docs/specs/phase-3.7-prometheus-observability.md).
 - **No DB aggregates in Phase 3.7:** the only database touch per scrape is the cheap,
   dialect-agnostic liveness ping (`SELECT 1`) and `alembic_version` read already used by
-  `/health` / `/ready`. Incident-count-by-status style aggregate gauges are **deferred to
+  `/health` / `/ready`. Incident-count-by-status style aggregate gauges were **deferred to
   Phase 3.8** (PostgreSQL profile + migration parity tests) — Phase 3.7 counters are
-  in-process, so SQLite/PostgreSQL parity is trivially preserved.
+  in-process, so SQLite/PostgreSQL parity is preserved; Phase 3.8 implements the optional
+  `postgres` profile (`postgres:16-alpine`, `soc-core` only, no host ports, `postgres-data`,
+  `pg_isready`, `postgres-preflight` guard) and dialect-aware JSON extraction
+  (`json_extract` on SQLite / `->`/`->>` on PostgreSQL) with parity tests, SQLite default
+  remains unchanged.
 - **Grafana (optional):** visualizes the metrics via the profile-gated `observability`
   compose profile (Prometheus internal scrape + Grafana on port 3000 for the lab,
   ARCHITECTURE §13). No Grafana/Prometheus dependency is mandatory; the pipeline runs
@@ -908,7 +912,7 @@ Full policy: [SECURITY.md](SECURITY.md). Key points:
 
 Designed-in upgrades, deliberately deferred until needed:
 
-1. **SQLite → PostgreSQL** (profile exists from Phase 3; Alembic migrations identical).
+1. **SQLite → PostgreSQL** (optional `postgres` profile implemented in Phase 3.8: `postgres:16-alpine`, `soc-core` only, no host ports, `postgres-data` volume, `pg_isready` healthcheck, `postgres-preflight` guard, `psycopg[binary]` driver, dialect-aware JSON extraction, SQLite default preserved; Alembic migrations identical).
 2. **Background tasks → dedicated worker** (asyncio worker process; same codebase, `--worker` entrypoint).
 3. **Single n8n → queue mode** (Redis + multiple executors) if workflow volume grows.
 4. **Per-source HMAC keys + mTLS** on ingest when multiple Wazuh managers report in.

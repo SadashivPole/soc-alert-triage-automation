@@ -594,6 +594,89 @@ services:
           cpus: "0.5"
           memory: 256M
 
+  # ---------------------------------------------------------------------------
+  # Phase 3.8 — optional `postgres` profile: scalable PostgreSQL database.
+  #
+  # `docker compose --profile postgres up -d` adds ONLY postgres + a one-shot
+  # preflight guard. It is strictly additive and OPTIONAL: no default service
+  # depends_on it, nothing is published to the host (internal `soc-core` only),
+  # and with the profile disabled the stack keeps running SQLite-backed
+  # (zero-config lab, ARCHITECTURE.md §13, §19). The API reaches Postgres via
+  # TRIAGE_DB_URL=postgresql+psycopg://user:pass@postgres:5432/db (psycopg3).
+  #
+  # Why a guard container instead of `${VAR:?}`: Compose interpolates the WHOLE
+  # file before filtering inactive profiles, so a required-variable syntax here
+  # would make the default `docker compose up -d` fail until Postgres was
+  # configured — the opposite of "strictly additive". `postgres-preflight`
+  # runs only with the profile and aborts it with an explicit message if
+  # POSTGRES_PASSWORD is missing, so Postgres never boots with an empty
+  # password. POSTGRES_* defaults stay empty and unsafe states are impossible
+  # rather than merely discouraged. See .env.example for the commented template.
+  # ---------------------------------------------------------------------------
+
+  # One-shot, network-less secret guard for the `postgres` profile.
+  postgres-preflight:
+    image: busybox:1.37.0
+    container_name: soc-postgres-preflight
+    profiles: ["postgres"]
+    restart: "no"
+    network_mode: none
+    read_only: true
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-}
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -eu
+        if [ -z "$${POSTGRES_PASSWORD:-}" ]; then
+          echo "ERROR: the 'postgres' profile requires POSTGRES_PASSWORD in .env" >&2
+          echo "Generate one, e.g.: openssl rand -base64 24" >&2
+          echo "And set TRIAGE_DB_URL=postgresql+psycopg://\${POSTGRES_USER:-soc_triage}:\${POSTGRES_PASSWORD}@postgres:5432/\${POSTGRES_DB:-soc_triage}" >&2
+          exit 1
+        fi
+        echo "postgres profile: required POSTGRES_PASSWORD is present"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 32M
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: soc-postgres
+    restart: unless-stopped
+    profiles: ["postgres"]
+    depends_on:
+      postgres-preflight:
+        condition: service_completed_successfully
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-soc_triage}
+      POSTGRES_USER: ${POSTGRES_USER:-soc_triage}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-}
+      POSTGRES_INITDB_ARGS: "--auth-host=scram-sha-256"
+      TZ: ${TZ:-UTC}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks:
+      - soc-core
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+    security_opt:
+      - no-new-privileges:true
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M
+
 networks:
   soc-core:
     driver: bridge
@@ -629,4 +712,9 @@ volumes:
   misp-core-files:
     driver: local
   misp-core-gnupg:
+    driver: local
+  # Phase 3.8 — `postgres` profile state only (additive; never required by the
+  # default stack). Holds the PostgreSQL data; TRIAGE_DB_URL must point at it
+  # when the profile is enabled.
+  postgres-data:
     driver: local

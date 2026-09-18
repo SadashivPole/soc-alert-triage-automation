@@ -19,9 +19,11 @@ from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import Select, delete, func, select, update
+from sqlalchemy import Select, String, delete, func, select, update
 from sqlalchemy.engine import CursorResult
+from sqlalchemy.ext.compiler import compiles
 from sqlalchemy.orm import Session
+from sqlalchemy.sql import expression
 
 from ..audit import AuditEntry
 from ..ingest.deduplication import EventRecord, GroupState
@@ -97,9 +99,73 @@ def _audit_to_record(row: AuditEvent) -> AuditRecord:
     )
 
 
+class _JsonExtractCompat(expression.FunctionElement):
+    """Dialect-aware JSON path extract preserving SQLite behavior.
+
+    SQLite: ``json_extract(col, '$.a.b')`` — the existing behavior.
+    PostgreSQL: ``(col -> 'a') ->> 'b'`` — native JSON operators, text result.
+    """
+
+    type = String()
+    name = "json_extract_compat"
+    inherit_cache = True
+
+    def __init__(self, column: Any, path: str) -> None:
+        if isinstance(path, str) and path.startswith("$."):
+            keys = path[2:].split(".")
+        elif isinstance(path, str) and path.startswith("$"):
+            keys = path[1:].lstrip(".").split(".")
+            keys = [k for k in keys if k]
+        elif isinstance(path, str):
+            keys = [path]
+        else:
+            keys = []
+        self._keys: list[str] = keys
+        super().__init__(column, path)
+
+
+@compiles(_JsonExtractCompat)
+def _compile_json_extract_compat_default(
+    element: _JsonExtractCompat, compiler: Any, **kw: Any
+) -> str:
+    col = element.clauses.clauses[0]
+    path = element.clauses.clauses[1]
+    return compiler.process(func.json_extract(col, path), **kw)
+
+
+@compiles(_JsonExtractCompat, "sqlite")
+def _compile_json_extract_compat_sqlite(
+    element: _JsonExtractCompat, compiler: Any, **kw: Any
+) -> str:
+    col = element.clauses.clauses[0]
+    path = element.clauses.clauses[1]
+    return compiler.process(func.json_extract(col, path), **kw)
+
+
+@compiles(_JsonExtractCompat, "postgresql")
+def _compile_json_extract_compat_postgres(
+    element: _JsonExtractCompat, compiler: Any, **kw: Any
+) -> str:
+    col = element.clauses.clauses[0]
+    keys = element._keys
+    if not keys:
+        path = element.clauses.clauses[1]
+        return compiler.process(func.json_extract(col, path), **kw)
+    expr: Any = col
+    for k in keys[:-1]:
+        expr = expr.op("->")(k)
+    expr = expr.op("->>")(keys[-1])
+    return compiler.process(expr, **kw)
+
+
 def _json_extract(column: Any, path: str) -> Any:
-    """SQLite/Postgres-portable JSON path extract (``$.a.b``)."""
-    return func.json_extract(column, path)
+    """SQLite/Postgres-portable JSON path extract (``$.a.b``).
+
+    Preserves SQLite ``json_extract`` behavior; on PostgreSQL compiles to
+    ``(col -> 'a') ->> 'b'`` via dialect-specific compilation.
+    """
+
+    return _JsonExtractCompat(column, path)
 
 
 def _event_to_record(event: AlertEvent, alert: Alert) -> EventRecord:
