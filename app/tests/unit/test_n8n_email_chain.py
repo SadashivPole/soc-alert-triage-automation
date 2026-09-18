@@ -223,12 +223,12 @@ def test_notification_formatters_render_objects_as_text() -> None:
     assert "timeline_url" not in formatter_code
     assert "links.alert_api" in formatter_code
     assert "links.feedback_url" in formatter_code
+
     # Phase 2.7B: WF2 must render per-provider IOC verdicts as plain text.
     assert "IOC Verdicts:" in formatter_code
     assert "Object.entries(enrichmentMap)" in formatter_code
     assert "verdictRows" in formatter_code
     assert "verdictText" in formatter_code
-
 
 
 def test_wf2_renders_provider_verdict_rows() -> None:
