@@ -27,6 +27,7 @@ services:
       N8N_WEBHOOK_TOKEN: ${N8N_WEBHOOK_TOKEN:-lab-n8n-token-change-in-production}
       N8N_WEBHOOK_URL: ${N8N_WEBHOOK_URL:-http://n8n:5678/webhook/soc-alert-scored}
       TRIAGE_API_BASE_URL: ${TRIAGE_API_BASE_URL:-http://triage-api:8000}
+      VIRUSTOTAL_API_KEY: ${VIRUSTOTAL_API_KEY:-}
       # Phase 2.4 — MISP threat-intel lookups (optional `intel` profile).
       # Both MISP_URL and MISP_API_KEY must be non-empty to enable the provider
       # (disable-by-empty, ARCHITECTURE.md §14); the defaults stay empty, so the

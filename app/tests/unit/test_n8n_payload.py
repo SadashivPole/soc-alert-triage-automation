@@ -181,6 +181,53 @@ def test_payload_ioc_summary_sanitized() -> None:
         assert isinstance(ioc.enrichment, dict)
 
 
+def test_payload_preserves_provider_lookup_verdict_fields() -> None:
+    alert = _make_scored_alert()
+    alert = alert.model_copy(
+        update={
+            "iocs": [
+                IOC(
+                    type=IOCType.IPV4,
+                    value="203.0.113.50",
+                    enrichment={
+                        "virustotal": {
+                            "lookup_status": "found",
+                            "result": {
+                                "malicious": 8,
+                                "suspicious": 0,
+                                "harmless": 60,
+                                "undetected": 2,
+                            },
+                        }
+                    },
+                ),
+                IOC(
+                    type=IOCType.DOMAIN,
+                    value="evil.example.com",
+                    enrichment={
+                        "misp": {
+                            "lookup_status": "found",
+                            "result": {
+                                "tags": ["apt:38"],
+                            },
+                        }
+                    },
+                ),
+            ]
+        },
+    )
+
+    payload = build_n8n_payload(alert, dedupe_status="new_generation")
+
+    vt = payload.iocs[0].enrichment["virustotal"]
+    misp = payload.iocs[1].enrichment["misp"]
+
+    assert vt["lookup_status"] == "found"
+    assert vt["result"]["malicious"] == 8
+    assert misp["lookup_status"] == "found"
+    assert misp["result"]["tags"] == ["apt:38"]
+
+
 def test_payload_recurrence_and_rule_info() -> None:
     alert = _make_scored_alert()
     payload = build_n8n_payload(alert, dedupe_status="repeated")
