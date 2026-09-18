@@ -10,24 +10,7 @@ workflows, and a Docker lab.
 ![n8n](https://img.shields.io/badge/n8n-workflows-orange)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
-> **Project status (honest).** Phase 0 and Phase 1 are complete. **Phase 2 is partially
-> validated** — Phase 2.2 (static local policy wiring: allowlist `allowlist.v1` + asset
-> inventory `asset_inventory.v1`, deterministic local wiring, disabled by default) and
-> Phase 2.3 (enrichment response TTL cache: SQLite-backed, per-type TTLs, disabled by
-> default) are implemented · locally validated (automated tests + CI), and Phase 2.5
-> (deterministic `scoring.v2`: a config-driven `threat_intel` factor over the sanitized
-> VT/MISP verdicts, goldens re-pinned) is implemented · locally validated (payload-level,
-> no live intel run); only the late-enrichment re-score (2.6) remains outstanding. The
-> optional MISP `intel` compose profile and
-> its deterministic synthetic seeding guide (Phase 2.4) are implemented and statically
-> validated (not live-started in CI — no Docker daemon in the dev sandbox). **Phase 3** remains
-> implemented with named items outstanding; **Phase 4 (real Wazuh integration)** is
-> implemented and partially live-validated; **Phase 5 (deterministic detection
-> evaluation)** is implemented and locally validated; **Phase 6 (detection quality &
-> correlation) is in progress — the coverage framework and cross-alert correlation
-> (Phase 6.4 investigation contexts) are implemented** — see
-> [Development Roadmap](#development-roadmap) and
-> [DEVELOPMENT_PLAN.md](DEVELOPMENT_PLAN.md).
+> **Project status (honest).** Phase 0 and Phase 1 are complete. **Phase 2 is implemented · locally validated** — Phase 2.2 (static local policy wiring: allowlist `allowlist.v1` + asset inventory `asset_inventory.v1`), Phase 2.3 (enrichment response TTL cache), Phase 2.5 (deterministic `scoring.v2` `threat_intel` factor), Phase 2.6 (late-enrichment re-score), Phase 2.7A (automatic late-enrichment sweep, disabled by default, idempotent), and Phase 2.7B (provider-specific IOC verdict visibility in WF2) are implemented · locally validated (payload-level and fake-transport tests, with live VirusTotal/Mailpit verification; MISP not live-validated); the optional MISP `intel` compose profile and its deterministic synthetic seeding guide (Phase 2.4) are implemented and statically validated (not live-started in CI). §8.2 weight rescaling remains explicit open item. **Phase 3** remains implemented with named items outstanding; **Phase 4 (real Wazuh integration)** is implemented and partially live-validated; **Phase 5 (deterministic detection evaluation)** is implemented and locally validated; **Phase 6 (detection quality & correlation) is in progress — 5 of 6 items implemented** — see [Development Roadmap](#development-roadmap) and [DEVELOPMENT_PLAN.md](DEVELOPMENT_PLAN.md).
 >
 > The **authoritative triage path is deterministic**: alert → ingest → normalize → dedupe
 > → enrich → **deterministic risk scoring (`scoring.v2`)** → **deterministic decision
@@ -298,7 +281,7 @@ Status markers describe the current tree.
    factor and `suppress` route, reporting `enrichment_status: skipped` so it never adds
    intel points. Both are loaded only when `TRIAGE_ALLOWLIST_PATH` /
    `TRIAGE_ASSET_INVENTORY_PATH` point at a policy file; neither performs network I/O.
-   Outstanding: late-enrichment re-score (2.6).
+   Phase 2.6 late-enrichment re-score (deterministic re-assessment via `LateEnrichmentService` + atomic `persist_assessment`, fingerprint idempotency), Phase 2.7A automatic sweep (disabled by default, bounded, idempotent, fail-open, restart-safe), and Phase 2.7B provider-specific IOC verdict visibility in WF2 (payload preserves sanitized provider verdicts, WF2 renders per-provider verdict table) are implemented · locally validated (fake-transport tests plus live VirusTotal/Mailpit verification; MISP not live-validated).
 4.  **Score** — deterministic engine computes 0–100, a tier, and a factor-by-factor
    justification list; weights live in the versioned config file. Phase 2.5 adds the
    `threat_intel` factor: it folds the sanitized VT/MISP verdicts attached to indicators
@@ -470,7 +453,7 @@ Full detail, acceptance criteria, and evidence per phase:
 | --- | --- | --- | --- |
 | **Phase 0 — Foundation** | Docs & scaffolding |  implemented · locally validated | ARCHITECTURE, DEVELOPMENT_PLAN, SECURITY, CONTRIBUTING, README, `.env.example`, directory tree, `check_secrets.sh` |
 | **Phase 1 — MVP triage pipeline** | Core triage loop |  implemented · locally validated | FastAPI app, ingest + normalize + dedupe, SQLite models + Alembic, scoring v1, decisions v1, n8n webhook client, compose (API+n8n+Mailpit), unit/integration tests.  `scripts/send_test_alert` simulator not implemented |
-| **Phase 2 — Enrichment & threat intelligence** | Threat intel |  partially validated | Phase 2.2 static local policies implemented · locally validated: allowlist `allowlist.v1` + asset inventory `asset_inventory.v1`, deterministic local wiring, disabled by default, 47 targeted tests; Phase 2.3 enrichment response TTL cache implemented · locally validated (SQLite-backed, 6 h hash / 1 h IP TTLs, disabled by default, fail-open, 61 targeted tests); VirusTotal + MISP provider clients implemented but exercised only with fake HTTP transports (no live lookup recorded), plus IOC extractor, fail-open chain, rate limiting/retries; Phase 2.4 MISP `intel` compose profile + deterministic synthetic seeding guide implemented and statically validated (pinned images, internal-only, secrets from env, lookup-only); Phase 2.5 deterministic `scoring.v2` `threat_intel` factor implemented · locally validated (sanitized-payload driven, fail-safe, 56 targeted tests, goldens re-pinned); ⬜ late-enrichment re-score |
+| **Phase 2 — Enrichment & threat intelligence** | Threat intel | ✅ implemented · locally validated | Phase 2.2 static local policies ✅ (47 tests); Phase 2.3 enrichment TTL cache ✅ (61 tests); Phase 2.4 MISP `intel` profile + seeding guide ✅ statically validated (57 tests); Phase 2.5 scoring v2 `threat_intel` factor ✅ (56 tests); Phase 2.6 late-enrichment re-score ✅ (12+3 tests); Phase 2.7A automatic sweep ✅ (7+9 tests, disabled by default, idempotent); Phase 2.7B provider verdict visibility in WF2 ✅; VT/MISP fake-transport coverage, disabled by default, plus live VirusTotal/Mailpit verification for 2.7B; MISP remains not live-validated; §8.2 weight rescaling explicit open item |
 | **Phase 3 — Incidents, analyst workflow & observability** | Analyst loop |  partially validated | Incidents (3.1), lifecycle + feedback (3.2), read APIs + timeline (3.3), TTL sweeper (3.4), static console (3.5), runbooks (3.6), Prometheus `/metrics` + optional Grafana (3.7);  Postgres profile (3.8), stats endpoints + digest (3.9) |
 | **Phase 4 — Real Wazuh integration & approved response** | Full integration |  partially validated | Source-audited + live-validated `full` profile and `custom-triage` integrator (4.1/4.2), agent enrollment validated (4.4), custom rules/decoders authored (4.3, not live-validated);  approval/containment runbook (4.5), TheHive CE export (4.6), failure-spool + duplicate-delivery runtime checks and 10k/day soak (4.7) |
 | **Phase 5 — Deterministic detection evaluation** | Detection quality measurement |  implemented · locally validated | Labeled corpus, ground truth, confusion matrix, precision/recall/F1/FPR, runtime evaluation tests replaying fixtures through the real ingest path |
@@ -592,22 +575,7 @@ docker compose --profile intel up -d          # + self-hosted MISP (internal onl
 
 Consolidated, evidence-based view of where the project really stands.
 
-** Implemented and locally validated (automated tests, CI):** ingest/normalize/dedupe,
-SQLite persistence + migrations, audit log, deterministic scoring `scoring.v2`
-(Phase 2.5: `threat_intel` factor over sanitized VT/MISP verdicts, config-driven,
-fail-safe on unavailable intel, 56 targeted tests),
-deterministic decisions `decisions.v1`, the **Phase 2.2 static local policies** (allowlist
-`allowlist.v1` + asset inventory `asset_inventory.v1` — deterministic local file loading
-and matching, disabled by default, 47 targeted unit/integration tests; automated tests +
-CI only, no Docker-lab operator run), the **Phase 2.3 enrichment response TTL cache**
-(SQLite-backed, per-type TTLs per ARCHITECTURE §7.2, disabled by default, fail-open,
-61 targeted unit/integration tests; automated tests + CI only, no live-provider run),
-incident persistence/lifecycle/read APIs/timeline,
-TTL auto-close sweeper, analyst feedback capture + incident transitions, n8n workflow
-exports with static validation, the static SOC console (+ 15 JS tests), Prometheus
-`/metrics`, the **Phase 5 evaluation framework**, and the **Phase 6 detection coverage
-framework** (catalog + doc + 39 validation tests; see [Testing & CI](#testing--ci) for the
-last recorded full-suite count, which predates Phase 2.2).
+** Implemented and locally validated (automated tests, CI):** ingest/normalize/dedupe, SQLite persistence + migrations, audit log, deterministic scoring `scoring.v2` (Phase 2.5: `threat_intel` factor over sanitized VT/MISP verdicts, config-driven, fail-safe, 56 targeted tests), deterministic decisions `decisions.v1`, the **Phase 2.2 static local policies** (allowlist `allowlist.v1` + asset inventory `asset_inventory.v1` — 47 tests), the **Phase 2.3 enrichment response TTL cache** (61 tests), **Phase 2.6 late-enrichment re-score** (12+3 tests, fingerprint idempotency), **Phase 2.7A automatic sweep** (7+9 tests, disabled by default, idempotent, fail-open), **Phase 2.7B provider verdict visibility in WF2** (payload + WF2 verdict table), incident persistence/lifecycle/read APIs/timeline, TTL auto-close sweeper, analyst feedback capture + incident transitions, n8n workflow exports with static validation, the static SOC console (+ 15 JS tests), Prometheus `/metrics`, the **Phase 5 evaluation framework**, and the **Phase 6 detection coverage framework** (catalog + doc + 39 validation tests; see [Testing & CI](#testing--ci) for the last recorded full-suite count, which predates Phase 2.2).
 
 ** Source-audited (not live-run in the build environment):** the Phase 4 Wazuh wiring —
 the pinned `wazuh/wazuh-manager:4.9.2` image behaviour, `integratord` log redirection,
@@ -622,33 +590,14 @@ have not been exercised against a live rule match**.
 - **Phase 4.1/4.2 + 4.4** — live-validated end-to-end by the maintainer on Windows/Docker
   Desktop (2026-09-06): real Windows agent enrolled and active, a real Wazuh alert
   forwarded (`status=202`), scored (`38`/`low`/`monitor`), and delivered to n8n (HTTP 200).
-- **Phase 2 enrichment** — provider logic is exercised only with fake HTTP transports; no
-  live VirusTotal or MISP lookup has been recorded. The Phase 2.4 `intel` profile
-  (`misp-db`/`misp-redis`/`misp-core`/`misp-nginx`, pinned images, internal `soc-core`
-  only, no host ports, secrets from env) and the seeding guide/fixture are validated
-  statically only — MISP was not started, so no live lookup is claimed. The Phase 2.2 static policies need no
-  transport at all (local file load + pure matching), and are validated by automated tests
-  and CI only — they have not been exercised in the Docker lab, and the shipped policy files
-  contain no entries. The Phase 2.3 response TTL cache is likewise validated by automated
-  tests and CI only (fake transports, temporary SQLite) — it has not been exercised against
-  a live provider, and it is disabled by default.
+- **Phase 2 enrichment** — provider logic is covered by fake HTTP transports; Phase 2.7B also received live VirusTotal enrichment + Mailpit notification verification. No live MISP lookup has been recorded. The Phase 2.4 `intel` profile and seeding guide/fixture are validated statically only — MISP was not started, so no live lookup is claimed. Phase 2.2 static policies need no transport (local file load + pure matching), validated by automated tests and CI only — shipped policy files contain no entries, no Docker-lab operator run. Phase 2.3 response TTL cache likewise validated by automated tests and CI only (fake transports, temporary SQLite) — no live-provider run, disabled by default. Phase 2.6 re-score and 2.7A sweep are validated by targeted unit/integration tests only — no live-provider run, sweep disabled by default, idempotent fingerprint guard, fail-open.
 - **n8n workflows** — exported JSON, import helper, and static/security tests pass; the
   runtime notification chain was validated in the lab (Mailpit), but there is no
   automated n8n execution test in CI.
 - **Observability** — runtime-validated for Phase 3.7, with the post-Phase-4 `/metrics`
   hygiene re-check outstanding.
 
-** Outstanding (scoped, not done):** `scripts/send_test_alert` simulator;
-late-enrichment re-score; the ARCHITECTURE.md §8.2 `scoring.v2` weight *rescaling*
-(the intel factor itself is implemented; the pre-existing weights are unchanged);
-PostgreSQL profile; stats endpoints + daily digest workflow
-(WF6); runbook linkage from decisions; TheHive CE export; containment approval/response
-runbook; Phase 4 failure-spool, duplicate-delivery, `/metrics` hygiene, and 10k
-alerts/day soak validations; CI coverage threshold and nightly compose smoke job.
-(The Phase 2.2 static allowlist + asset-inventory loaders and the Phase 2.3 enrichment
-response TTL cache previously listed here are implemented · locally validated; what
-remains for allowlisting is an operator-side run with a populated policy and a
-corpus-level `suppress` pin, and what remains for the cache is a live-provider run.)
+** Outstanding (scoped, not done):** `scripts/send_test_alert` simulator; the ARCHITECTURE.md §8.2 `scoring.v2` weight *rescaling* (the intel factor itself is implemented; the pre-existing weights are unchanged); PostgreSQL profile; stats endpoints + daily digest workflow (WF6); runbook linkage from decisions; TheHive CE export; containment approval/response runbook; Phase 4 failure-spool, duplicate-delivery, `/metrics` hygiene, and 10k alerts/day soak validations; CI coverage threshold and nightly compose smoke job. (The Phase 2.2 static allowlist + asset-inventory loaders, the Phase 2.3 enrichment TTL cache, the Phase 2.6 late-enrichment re-score, the Phase 2.7A automatic sweep, and the Phase 2.7B provider verdict visibility previously listed here are implemented · locally validated; what remains for allowlisting is an operator-side run with a populated policy and a corpus-level `suppress` pin, what remains for cache and late-enrichment is a live-provider run, and the sweep is disabled by default.)
 
 **🔮 Future / planned:** a pinned corpus-level correlation outcome, and detection-quality
 CI gates that assert precision/recall/F1 thresholds (6.6). (The detection coverage
@@ -664,7 +613,7 @@ now the deterministic evaluation phase and no LLM exists; `app/README.md` still 
 script that is not implemented; `CHANGELOG.md` has no Phase 5 entry yet;
 `docs/detection-coverage.md` gap **G10** still says no allowlist provider/loader exists,
 which Phase 2.2 has since superseded (only the missing corpus-level `suppress` pin is
-still true there); and `CHANGELOG.md` has no Phase 2.2 entry yet.
+still true there); and `CHANGELOG.md` now includes Phase 2.2/2.6/2.7A/2.7B after this reconciliation — Phase 5 entry still missing.
 
 ## Optional Future Functionality (Not Implemented)
 

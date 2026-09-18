@@ -338,35 +338,11 @@ provenance.
 
 ### 7.3 Guarantees
 
-- Enrichment **never blocks** the pipeline beyond a 5 s budget: slow uncached lookups are
-  skipped, the alert proceeds, and a background retry fills gaps later (best-effort
-  re-score on arrival).
-- Every outbound call is logged (target host only — never API keys), timed, and counted
-  (quota usage per day) so quota state is observable.
-- Optional sources auto-disable when their env keys are empty — the system must run fully
-  functional (scoring v1) with **zero external services**.
+- Enrichment **never blocks** the pipeline beyond a 5 s budget: slow uncached lookups are skipped, the alert proceeds, and a background retry fills gaps later (best-effort re-score on arrival via Phase 2.6 `LateEnrichmentService` + Phase 2.7A sweep).
+- Every outbound call is logged (target host only — never API keys), timed, and counted (quota usage per day) so quota state is observable.
+- Optional sources auto-disable when their env keys are empty — the system must run fully functional (scoring v1) with **zero external services**.
 
-**Implementation status of this subsystem (updated through Phase 2.4):** extraction
-(§7.1) and the provider interface are implemented. Of steps 1–4 above: step 1 (allowlist)
-is implemented as the Phase 2.2 static policy provider (registered only when
-`TRIAGE_ALLOWLIST_PATH` is set); step 2 (local cache) is the Phase 2.3 response TTL
-cache (`enrichment_cache` table, per-type TTLs — 6 h hashes / 1 h IPs / 1 h other types
-— provider-scoped keys, definitive verdicts only, byte-identical replay, bounded with
-soonest-expiring eviction, fail-open, **disabled by default** via
-`TRIAGE_ENRICHMENT_CACHE_ENABLED`, consulted before the rate limiter so hits consume no
-quota); steps 3–4 (VirusTotal v3, MISP) are implemented as HTTP providers exercised only
-with fake transports and disabled by default (empty key/URL ⇒ never called); Phase 2.4
-adds the optional `intel` compose profile (§13) plus a deterministic synthetic seeding
-guide, so a self-hosted MISP can be brought up **internally** and seeded with
-documentation-range indicators only — the provider remains lookup-only
-(`GET /attributes/restSearch`) and no live MISP run has been performed. Providers
-implement the runtime-checkable `soc_triage.enrichment.providers.EnrichmentProvider`
-protocol (`name`, `enabled`, `enrich(iocs, *, context) → ProviderEnrichment`);
-`EnrichmentChain` runs them in registration order, merges payloads per indicator, and
-aggregates `enrichment_status: complete|partial|failed|skipped`. A provider that raises
-is recorded as `failed` (exception *type* only, never its message) and skipped —
-enrichment never blocks ingestion. With no intel keys configured the registered chain
-still performs zero external calls and reports `enrichment_status: skipped`.
+**Implementation status of this subsystem (updated through Phase 2.7B):** extraction (§7.1) and the provider interface are implemented. Of steps 1–4 above: step 1 (allowlist) is implemented as the Phase 2.2 static policy provider (registered only when `TRIAGE_ALLOWLIST_PATH` is set); step 2 (local cache) is the Phase 2.3 response TTL cache (`enrichment_cache` table, per-type TTLs — 6 h hashes / 1 h IPs / 1 h other types — provider-scoped keys, definitive verdicts only, byte-identical replay, bounded with soonest-expiring eviction, fail-open, **disabled by default** via `TRIAGE_ENRICHMENT_CACHE_ENABLED`, consulted before the rate limiter so hits consume no quota); steps 3–4 (VirusTotal v3, MISP) are implemented as HTTP providers covered by fake-transport tests and disabled by default; Phase 2.7B also has live VirusTotal/Mailpit verification, while MISP has not been live-validated (empty key/URL ⇒ never called); Phase 2.4 adds the optional `intel` compose profile (§13) plus a deterministic synthetic seeding guide, so a self-hosted MISP can be brought up **internally** and seeded with documentation-range indicators only — the provider remains lookup-only (`GET /attributes/restSearch`) and no live MISP run has been performed. **Phase 2.6** adds deterministic late-enrichment re-assessment (`LateEnrichmentService.reassess` / `reassess_persisted` / `reassess_persisted_if_changed` + `persist_assessment` atomic incident create/attach, timestamp-insensitive enrichment fingerprint for idempotency, fail-open, no extra n8n notification). **Phase 2.7A** adds an automatic, restart-safe sweep (`late_enrichment_sweep.py`: `sweep_once` + `run_late_enrichment_loop` started from lifespan, ADR-4 no Celery/Redis, blocking work in `asyncio.to_thread`, bounded batch `_BATCH_LIMIT=200`, lookback `LATE_ENRICHMENT_LOOKBACK_SECONDS`, interval `LATE_ENRICHMENT_SWEEP_INTERVAL_SECONDS`, disabled by default `LATE_ENRICHMENT_SWEEP_ENABLED=false`, idempotent via fingerprint guard, per-alert error isolation). **Phase 2.7B** adds provider-specific IOC verdict visibility: `notifications/payload.py` preserves sanitized `lookup_status`/`result` (malicious/suspicious/tags) per indicator per provider, and `WF2_soc-analyst-notify.json` renders a per-provider verdict table (`verdictFor` + `verdictRows`). Providers implement the runtime-checkable `soc_triage.enrichment.providers.EnrichmentProvider` protocol (`name`, `enabled`, `enrich(iocs, *, context) → ProviderEnrichment`); `EnrichmentChain` runs them in registration order, merges payloads per indicator, and aggregates `enrichment_status: complete|partial|failed|skipped`. A provider that raises is recorded as `failed` (exception *type* only, never its message) and skipped — enrichment never blocks ingestion. With no intel keys configured the registered chain still performs zero external calls and reports `enrichment_status: skipped`.
 
 ---
 
