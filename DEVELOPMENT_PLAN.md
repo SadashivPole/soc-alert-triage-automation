@@ -34,7 +34,7 @@ history. Status claims elsewhere are descriptive, not authoritative.
 | **Phase 1 — MVP triage pipeline** | ✅ Implemented · locally validated | Ingest → normalize → dedupe → score → decide → notify, tests green (simulator script ✅ implemented) |
 | **Phase 2 — Enrichment & threat intelligence** | ✅ Implemented · locally validated | 2.2 static allowlist + asset inventory ✅ (47 tests); 2.3 enrichment response TTL cache ✅ (61 tests); 2.4 MISP client + `intel` profile + seeding guide ✅ statically validated (57 tests — no live MISP run); 2.5 scoring v2 `threat_intel` factor ✅ (56 tests); 2.6 late-enrichment re-score ✅ (12 unit +3 integration); 2.7A automatic sweep ✅ (7+9 tests, disabled by default, idempotent); 2.7B provider-specific IOC verdict visibility in WF2 ✅; VT/MISP fake-transport, disabled by default; §8.2 weight rescaling explicit open item |
 | **Phase 3 — Incidents, analyst workflow & observability** | 🟡 Partially validated | Incidents, lifecycle, read APIs, timeline, sweeper, console, runbooks, `/metrics` + Grafana profile, PostgreSQL profile, and Phase 3.9 stats/WF6 are implemented; Docker/n8n runtime validation and other named gaps remain |
-| **Phase 4 — Real Wazuh integration & approved response** | 🟡 Partially validated | 4.1/4.2 source-audited + live-validated end-to-end; 4.4 validated; 4.3 authored but not live-validated; 4.6 TheHive CE export + `thehive` profile ✅ implemented · test-validated only (no live CE run claimed); 4.7 soak harness ✅ authored (`scripts/phase47_soak.py`) + CI integrity tests implemented, live 10k/day execution not performed; 4.5 containment runbook and runtime failure checks ⬜ |
+| **Phase 4 — Real Wazuh integration & approved response** | 🟡 Partially validated | 4.1/4.2 source-audited + live-validated end-to-end; 4.4 validated; V7/V9 partially live-validated with specific remaining runtime checks; V8 secret/log hygiene verified but post-Phase-4 `/metrics` hygiene re-check remains; 4.3 authored but not live-validated; 4.6 TheHive CE export + `thehive` profile implemented and test-validated only (no live CE run claimed); 4.7 soak harness authored with CI integrity tests, but live 10k/day execution not performed; 4.5 containment runbook remains outstanding |
 | **Phase 5 — Deterministic detection evaluation** | ✅ Implemented · locally validated | Labeled corpus, ground truth, confusion matrix, precision/recall/F1/FPR, runtime evaluation tests |
 | **Phase 6 — Detection quality & correlation** | ✅ Implemented · locally validated | Detection coverage framework ✅ (6.1); ATT&CK mapping ✅ (6.2 — registry + rendered view + validation tests); expanded regression corpus ✅ (6.3, 24 scenarios); cross-alert correlation ✅ (6.4); analyst explainability ✅ (6.5); detection-quality CI gates ✅ (6.6 — precision/recall/F1/FPR and confusion-matrix bounds asserted by the existing pytest CI job) |
 
@@ -218,14 +218,38 @@ Desktop, real Windows Wazuh agent 007) — ✅ locally validated**
   `ossec.log`, and compose logs; no `full_log`/alert-body content in logs; no `user:pass@`
   URLs in logs.
 
+**C. Additional live runtime validation (performed by the maintainer on 2026-09-19, Windows/Docker
+Desktop, active Windows Wazuh agent 009) — 🟡 partially validated**
+
+- Fresh `Phase4Test` / rule `60602` detections (`V7-SPOOL-01`, `V7-SPOOL-02`, `V7-SPOOL-03`) were
+  generated while `triage-api` was unavailable. The events were confirmed in `alerts.json`, but
+  `wazuh-integratord` was processing an older rule `19007` backlog and did not reach the fresh
+  `60602` events during the outage window. The fresh-agent → integratord → spool path therefore
+  remains unverified.
+- Controlled replay used the exact real Wazuh alert bodies extracted from `alerts.json` and the
+  **real installed** `/var/ossec/integrations/custom-triage` integrator, with a dedicated
+  `WAZUH_INTEGRATOR_SPOOL_DIR` at `/tmp/v7-controlled-spool`. The controlled spool was owned by
+  `wazuh:wazuh` with mode `0700`; the API was stopped for buffering and restarted for replay/drain.
+- Retry handling was live-verified at `attempts=3` with `alert_buffered`; spool entries were
+  `0600`, the spool directory was `0700`, and no `.tmp` files remained.
+- Three real Wazuh alert bodies were replayed oldest-first through the installed integrator;
+  `spool_flush` reported `delivered=3`, the controlled spool drained, and marker order was
+  `V7-SPOOL-01 → V7-SPOOL-02 → V7-SPOOL-03`.
+- Repeated distinct alerts in one group aggregated as occurrences `1 → 2 → 3`.
+- An exact re-delivery was absorbed without creating a second alert row;
+  `delivery_count` changed `1 → 2`, `duplicate_deliveries` changed `0 → 1`, and
+  `alert.duplicate_absorbed` was audited.
+- On the previously validated live incident path, repeated Wazuh alerts attached to one incident
+  (`INC-2026-09-19-0001`) rather than opening a second incident.
+
 **Checklist item status
 ([docs/specs/phase-4-live-validation-checklist.md](docs/specs/phase-4-live-validation-checklist.md)):**
 
 | Check | Status |
 | --- | --- |
-| V7 failure/spool recovery (stop `triage-api` → retries → `alert_buffered`; spool `0700`/`0600`, no stale `.tmp`; restart → oldest-first replay, spool drains, no duplicate incident) | ⬜ outstanding |
-| V8 post-Phase-4 `/metrics` hygiene (no new families, no Wazuh data) | ✅ runtime-verified |
-| V9 idempotent duplicate delivery at runtime (occurrences increment, no duplicate row/incident) | ✅ runtime-verified (also covered by automated tests) |
+| V7 failure/spool recovery | 🟡 partially validated — retry budget → `alert_buffered`; spool `0700`/`0600`, no `.tmp`; controlled three-entry oldest-first replay through the installed integrator; occurrence aggregation; exact-duplicate absorption. Remaining: fresh agent → `wazuh-integratord` → spool while API is down, because the `19007` backlog delayed the fresh `60602` events. |
+| V8 post-Phase-4 `/metrics` hygiene (no new families, no Wazuh data) | 🟡 partially validated — secret/log hygiene verified; post-Phase-4 `/metrics` hygiene re-check remains outstanding. |
+| V9 idempotent duplicate delivery at runtime | 🟡 partially validated — repeated distinct alerts aggregated as occurrences `1 → 2 → 3`; exact duplicate absorbed with no second alert row; repeated alerts on the previously validated incident path remained attached to `INC-2026-09-19-0001`. Remaining: exact duplicate of an `open_incident`-producing live event. |
 | 4.3 custom rules/decoder live match | ⬜ outstanding |
 | 4.5 containment approval runbook / response proposal flow | ⬜ outstanding |
 | 4.6 TheHive CE export **live** run against a started CE instance | ⬜ outstanding (client/export/API + `thehive` profile implemented · test-validated only; **no live CE run claimed**, operator-side) |

@@ -22,3 +22,5 @@ Rules for every file here:
 
 - [phase-3.7-prometheus-observability.md](phase-3.7-prometheus-observability.md) —
   Phase 3.7 — Prometheus `/metrics` + optional Grafana profile.
+- [phase-4-live-validation-checklist.md](phase-4-live-validation-checklist.md) —
+  Phase 4 live Wazuh validation evidence, methodology, and remaining runtime checks.

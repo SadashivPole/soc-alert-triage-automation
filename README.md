@@ -562,7 +562,7 @@ Full detail, acceptance criteria, and evidence per phase:
 | **Phase 1 — MVP triage pipeline** | Core triage loop |  implemented · locally validated | FastAPI app, ingest + normalize + dedupe, SQLite models + Alembic, scoring v1, decisions v1, n8n webhook client, compose (API+n8n+Mailpit), unit/integration tests. ✅ `scripts/send_test_alert.py` simulator implemented |
 | **Phase 2 — Enrichment & threat intelligence** | Threat intel | ✅ implemented · locally validated | Phase 2.2 static local policies ✅ (47 tests); Phase 2.3 enrichment TTL cache ✅ (61 tests); Phase 2.4 MISP `intel` profile + seeding guide ✅ statically validated (57 tests); Phase 2.5 scoring v2 `threat_intel` factor ✅ (56 tests); Phase 2.6 late-enrichment re-score ✅ (12+3 tests); Phase 2.7A automatic sweep ✅ (7+9 tests, disabled by default, idempotent); Phase 2.7B provider verdict visibility in WF2 ✅; VT/MISP fake-transport coverage, disabled by default, plus live VirusTotal/Mailpit verification for 2.7B; MISP remains not live-validated; §8.2 weight rescaling explicit open item |
 | **Phase 3 — Incidents, analyst workflow & observability** | Analyst loop | 🟡 partially validated | Incidents (3.1), lifecycle + feedback (3.2), read APIs + timeline (3.3), TTL sweeper (3.4), static console (3.5), runbooks (3.6), Prometheus `/metrics` + optional Grafana (3.7), PostgreSQL profile (3.8), and stats endpoints + WF6 digest (3.9) ✅ implemented · locally validated; named Docker/runtime gaps remain |
-| **Phase 4 — Real Wazuh integration & approved response** | Full integration |  partially validated | Source-audited + live-validated `full` profile and `custom-triage` integrator (4.1/4.2), agent enrollment validated (4.4), custom rules/decoders authored (4.3, not live-validated); containment approval/response runbook ⬜; TheHive CE export + `thehive` compose profile ✅ implemented · test-validated only, no live CE run claimed; soak harness ✅ authored (`scripts/phase47_soak.py`) + CI integrity tests ✅ implemented, no live 10k/day run; failure-spool runtime check ⬜ |
+| **Phase 4 — Real Wazuh integration & approved response** | Full integration |  partially validated | Source-audited + live-validated `full` profile and `custom-triage` integrator (4.1/4.2), agent enrollment validated (4.4), custom rules/decoders authored (4.3, not live-validated); containment approval/response runbook ⬜; TheHive CE export + `thehive` compose profile ✅ implemented · test-validated only, no live CE run claimed; soak harness ✅ authored (`scripts/phase47_soak.py`) + CI integrity tests ✅ implemented, no live 10k/day run; failure-spool runtime check 🟡 partially validated — V7 retry budget → `alert_buffered`, spool `0700`/`0600`, multi-entry oldest-first replay through the installed integrator, occurrence aggregation and exact-duplicate absorption live-verified 2026-09-19; fresh agent → `integratord` → spool during an API outage ⬜ |
 | **Phase 5 — Deterministic detection evaluation** | Detection quality measurement |  implemented · locally validated | Labeled corpus, ground truth, confusion matrix, precision/recall/F1/FPR, runtime evaluation tests replaying fixtures through the real ingest path |
 | **Phase 6 — Detection quality & correlation** | Coverage & correlation | ✅ implemented · locally validated | detection coverage framework ✅ (6.1), ATT&CK mapping ✅ (6.2), expanded regression corpus ✅ (6.3, 24 scenarios), cross-alert correlation ✅ (6.4), analyst explainability ✅ (6.5), detection-quality CI gates ✅ (6.6 — precision/recall/F1/FPR and confusion-matrix bounds asserted by the existing pytest CI job) |
 
@@ -676,7 +676,8 @@ docker compose --profile intel up -d          # + self-hosted MISP (internal onl
 > (`triage-api:8000/metrics` UP, 15 s scrape, port 9090 not host-published), and Grafana
 > (localhost:3000, Phase 3.7 dashboard loading with metrics populated) all verified
 > healthy. That validation predates the Phase 4 Wazuh work; the follow-up check that
-> `/metrics` exposes no new families and no Wazuh data was subsequently runtime-verified.
+> `/metrics` exposes no new families and no Wazuh data (checklist V8) is still outstanding
+> until it is reconciled with recorded evidence.
 
 ## Validation Status & Known Gaps
 
@@ -684,33 +685,49 @@ Consolidated, evidence-based view of where the project really stands.
 
 ** Implemented and locally validated (automated tests, CI):** ingest/normalize/dedupe, SQLite persistence + migrations, audit log, deterministic scoring `scoring.v2` (Phase 2.5: `threat_intel` factor over sanitized VT/MISP verdicts, config-driven, fail-safe, 56 targeted tests), deterministic decisions `decisions.v1`, the **Phase 2.2 static local policies** (allowlist `allowlist.v1` + asset inventory `asset_inventory.v1` — 47 tests), the **Phase 2.3 enrichment response TTL cache** (61 tests), **Phase 2.6 late-enrichment re-score** (12+3 tests, fingerprint idempotency), **Phase 2.7A automatic sweep** (7+9 tests, disabled by default, idempotent, fail-open), **Phase 2.7B provider verdict visibility in WF2** (payload + WF2 verdict table), incident persistence/lifecycle/read APIs/timeline, TTL auto-close sweeper, analyst feedback capture + incident transitions, n8n workflow exports with static validation, the static SOC console (+ 15 JS tests), Prometheus `/metrics`, the **Phase 5 evaluation framework**, and the **Phase 6 detection coverage framework** (catalog + doc + 39 validation tests; see [Testing & CI](#testing--ci) for the last recorded full-suite count, which predates Phase 2.2).
 
-** Source-audited (not live-run in the build environment):** the Phase 4 Wazuh wiring —
-the pinned `wazuh/wazuh-manager:4.9.2` image behaviour, `integratord` log redirection,
-integrator install path/ownership, and the `ossec.conf` mount path. Three defects found
-this way were fixed (documented in `CHANGELOG.md` and
-[docs/specs/phase-4-live-validation-checklist.md](docs/specs/phase-4-live-validation-checklist.md)).
-The custom rules/decoders in `wazuh/ruleset/` are **authored and mounted read-only but
-have not been exercised against a live rule match**.
+** Source-audited, then live-confirmed on the maintainer's lab (never run in CI / the build
+environment):** the Phase 4 Wazuh wiring — the pinned `wazuh/wazuh-manager:4.9.2` image
+behaviour, `integratord` log redirection, integrator install path/ownership, and the
+`ossec.conf` mount path — was first verified by reading the upstream sources (2026-09-05);
+three defects found this way were fixed (documented in `CHANGELOG.md` and
+[docs/specs/phase-4-live-validation-checklist.md](docs/specs/phase-4-live-validation-checklist.md)),
+and the fixed wiring was then confirmed against a real manager on 2026-09-06 (checklist
+V2–V6: integration block present in the *running* `ossec.conf`, integrator installed
+`root:wazuh 750`, `integrations.log` receiving structured lines, agent → manager →
+integrator → API end-to-end). The custom rules/decoders in `wazuh/ruleset/` remain
+**authored and mounted read-only but not exercised against a live rule match**.
 
 ** Partially validated:**
 
 - **Phase 4.1/4.2 + 4.4** — live-validated end-to-end by the maintainer on Windows/Docker
-  Desktop (2026-09-06): real Windows agent enrolled and active, a real Wazuh alert
-  forwarded (`status=202`), scored (`38`/`low`/`monitor`), and delivered to n8n (HTTP 200).
-  Idempotent duplicate delivery at runtime (V9: occurrences increment, no duplicate
-  row/incident) and post-Phase-4 `/metrics` hygiene (V8: no new families, no Wazuh
-  data) were additionally runtime-verified; failure-spool recovery (V7) remains
-  outstanding.
+  Desktop (2026-09-06, Windows Wazuh agent 007): real Windows agent enrolled and active, a
+  real Wazuh alert forwarded (`status=202`), scored (`38`/`low`/`monitor`), and delivered
+  to n8n (HTTP 200). Failure/spool behaviour (V7) and idempotent duplicate delivery (V9)
+  were live-validated on 2026-09-19 (Windows Wazuh agent 009): retry budget →
+  `alert_buffered` after `attempts=3`; spool `0700`, entries `0600`, no `.tmp`; three real
+  Wazuh alert bodies replayed oldest-first through the real installed integrator
+  (`spool_flush` delivered `3`, controlled spool drained, marker order
+  `V7-SPOOL-01 → 02 → 03`); repeated distinct alerts in one group aggregated as
+  occurrences `1 → 2 → 3`; an exact re-delivery absorbed with no second alert row
+  (`delivery_count 1 → 2`, `duplicate_deliveries 0 → 1`, `alert.duplicate_absorbed`
+  audited); and, on the previously validated live incident path, repeated Wazuh alerts
+  attached to one incident (`INC-2026-09-19-0001`) rather than opening a second. Still
+  outstanding: a fresh agent detection reaching `wazuh-integratord` → spool while the API
+  is down (`integratord` was still draining an older rule `19007` backlog and did not
+  reach the fresh `60602` events within the outage window); an exact duplicate of an
+  `open_incident`-producing live event; and the post-Phase-4 `/metrics` hygiene re-check
+  (V8 — the secret/log hygiene checks themselves are verified).
 - **Phase 2 enrichment** — provider logic is covered by fake HTTP transports; Phase 2.7B also received live VirusTotal enrichment + Mailpit notification verification. No live MISP lookup has been recorded. The Phase 2.4 `intel` profile and seeding guide/fixture are validated statically only — MISP was not started, so no live lookup is claimed. Phase 2.2 static policies need no transport (local file load + pure matching), validated by automated tests and CI only — shipped policy files contain no entries, no Docker-lab operator run. Phase 2.3 response TTL cache likewise validated by automated tests and CI only (fake transports, temporary SQLite) — no live-provider run, disabled by default. Phase 2.6 re-score and 2.7A sweep are validated by targeted unit/integration tests only — no live-provider run, sweep disabled by default, idempotent fingerprint guard, fail-open.
 - **n8n workflows** — exported JSON, import helper, and static/security tests pass.
   Docker/n8n runtime startup and workflow activation were live-validated on
   Windows/Docker Desktop, and the notification/Mailpit flow was validated; WF6
   scheduled execution itself was not live-triggered, and there is no automated n8n
   execution test in CI.
-- **Observability** — runtime-validated for Phase 3.7, with the post-Phase-4 `/metrics`
-  hygiene re-check (no new families, no Wazuh data) subsequently runtime-verified.
+- **Observability** — runtime-validated for Phase 3.7; the post-Phase-4 `/metrics` hygiene
+  re-check (no new families, no Wazuh data — checklist V8) remains outstanding until it is
+  reconciled with recorded evidence.
 
-** Outstanding (scoped, not done):** the ARCHITECTURE.md §8.2 `scoring.v2` weight *rescaling* (the intel factor itself is implemented; the pre-existing weights are unchanged); runbook linkage from decisions; containment approval/response runbook; Phase 4 failure-spool runtime check; CI coverage threshold and nightly compose smoke job. WF6 scheduled execution itself was not live-triggered. **Not outstanding (implemented · test-validated only):** the TheHive CE client/export/API and the optional `thehive` compose profile (no live TheHive CE run claimed — see `thehive/README.md`), and the Phase 4.7 soak harness `scripts/phase47_soak.py` plus its CI-runnable integrity tests (`app/tests/integration/test_phase47_soak_integrity.py`) — both implemented; the live 10k/day soak execution is not performed or claimed (see `docs/specs/phase-4.7-soak-runbook.md` and `scripts/README.md`). (The Phase 2.2 static allowlist + asset-inventory loaders, the Phase 2.3 enrichment TTL cache, the Phase 2.6 late-enrichment re-score, the Phase 2.7A automatic sweep, the Phase 2.7B provider verdict visibility, and the Phase 3.8 PostgreSQL profile previously listed here are implemented · locally validated; what remains for allowlisting is an operator-side run with a populated policy and a corpus-level `suppress` pin, what remains for cache and late-enrichment is a live-provider run, sweep disabled by default, and PostgreSQL live validation requires an operator-supplied `postgres` profile.)
+** Outstanding (scoped, not done):** the ARCHITECTURE.md §8.2 `scoring.v2` weight *rescaling* (the intel factor itself is implemented; the pre-existing weights are unchanged); runbook linkage from decisions; containment approval/response runbook; the remaining Phase 4 live checks — a fresh agent detection reaching `wazuh-integratord` → spool during an API outage (V7), an exact duplicate of an `open_incident`-producing live event (V9), and the post-Phase-4 `/metrics` hygiene re-check (V8); CI coverage threshold and nightly compose smoke job. WF6 scheduled execution itself was not live-triggered. **Not outstanding (implemented · test-validated only):** the TheHive CE client/export/API and the optional `thehive` compose profile (no live TheHive CE run claimed — see `thehive/README.md`), and the Phase 4.7 soak harness `scripts/phase47_soak.py` plus its CI-runnable integrity tests (`app/tests/integration/test_phase47_soak_integrity.py`) — both implemented; the live 10k/day soak execution is not performed or claimed (see `docs/specs/phase-4.7-soak-runbook.md` and `scripts/README.md`). (The Phase 2.2 static allowlist + asset-inventory loaders, the Phase 2.3 enrichment TTL cache, the Phase 2.6 late-enrichment re-score, the Phase 2.7A automatic sweep, the Phase 2.7B provider verdict visibility, and the Phase 3.8 PostgreSQL profile previously listed here are implemented · locally validated; what remains for allowlisting is an operator-side run with a populated policy and a corpus-level `suppress` pin, what remains for cache and late-enrichment is a live-provider run, sweep disabled by default, and PostgreSQL live validation requires an operator-supplied `postgres` profile.)
 
 **🔮 Future / planned:** a pinned corpus-level correlation outcome. The detection coverage
 framework, ATT&CK mapping registry, 24-scenario regression corpus, cross-alert correlation,
