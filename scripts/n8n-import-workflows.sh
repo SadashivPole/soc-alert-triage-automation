@@ -1,9 +1,9 @@
 #!/bin/sh
-# Phase 2 lab helper: provision the lab SMTP credential, then import and
+# Phase 2/3.9 lab helper: provision the lab SMTP credential, then import and
 # activate the checked-in n8n workflows.
 #
 # Lab-focused startup step for docker-compose. It deliberately imports only the
-# four canonical lab workflows (WF1/WF2/WF3/WF5) so generated or unrelated JSON
+# five canonical lab workflows (WF1/WF2/WF3/WF5/WF6) so generated or unrelated JSON
 # files are never picked up. The workflow files contain stable ids, so re-running
 # this on an existing n8n-data volume updates those workflows instead of creating
 # duplicates.
@@ -78,7 +78,8 @@ for name in \
   WF1_soc-triage-router.json \
   WF2_soc-analyst-notify.json \
   WF3_soc-incident-escalation.json \
-  WF5_soc-analyst-feedback.json
+  WF5_soc-analyst-feedback.json \
+  WF6_soc-daily-digest.json
 do
   file="${WORKFLOW_DIR}/${name}"
   if [ ! -f "${file}" ]; then

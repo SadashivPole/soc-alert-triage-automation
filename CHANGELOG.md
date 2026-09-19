@@ -6,6 +6,21 @@ semantic (`v0.1.0` targeted at the end of Phase 1).
 
 ## [Unreleased]
 
+### Added — Phase 3.9: daily stats API and WF6 digest
+
+- Added the read-only, shared-token-protected `GET /api/v1/stats/daily` endpoint.
+  It reports a previous-UTC-day default or an explicit `date=YYYY-MM-DD` half-open
+  UTC window, aggregate volumes, denominator-clear false-positive metrics, deterministic
+  top-ten rule counts, and advisory rule/agent tuning suggestions at three false-positive
+  records. Stats queries use the existing repository layer and SQLite remains the default;
+  no scoring, decision, routing, or Wazuh-rule behavior changed.
+- Added `n8n/workflows/WF6_soc-daily-digest.json`: 07:00 UTC schedule, environment-backed
+  API URL/token/email settings, response validation, deterministic text/HTML formatting,
+  existing `SMTP Lab Mailpit` credential binding, and a no-email fail-safe on API errors.
+  The workflow contains no secrets and never edits Wazuh rules.
+- Added focused stats integration tests and WF6 JSON/security contract tests. The checked-in
+  implementation is statically/test validated; live Docker/n8n execution is not claimed.
+
 ### Added — Phase 6.6: deterministic detection-quality CI gates (documentation reconciliation)
 
 - **Detection-quality metrics are explicitly asserted in CI.** The existing evaluation

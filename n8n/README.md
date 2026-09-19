@@ -4,6 +4,13 @@ n8n owns everything that happens *after* the Triage API decides: notification fa
 SLA escalation timers, incident creation, the analyst feedback form, and the daily
 digest. Design: [ARCHITECTURE.md §11](../ARCHITECTURE.md#11-n8n-workflow-architecture).
 
+**Phase 3.9 — WF6 implemented (static validation).** `GET /api/v1/stats/daily` is a
+read-only, shared-token-protected aggregate API. WF6 runs at 07:00 UTC, validates the
+response, formats deterministic text/HTML, and sends one email through the existing
+`SMTP Lab Mailpit` credential. Endpoint failures take a no-email fail-safe branch.
+Tuning suggestions are human-review signals only; the workflow never edits Wazuh rules.
+The Docker/n8n runtime is not claimed as live-validated in this change.
+
 **Phase 2B — Implemented (FIXED):**
 - WF1_soc-triage-router: webhook `/webhook/soc-alert-scored`, **real shared-secret validation** against `$env.N8N_CALLBACK_TOKEN` / `$env.N8N_WEBHOOK_TOKEN` (exact match, reject missing/wrong, accept exact, never log token, never place secret in JSON), payload schema validation (no full_log), severity-based routing. No secrets, no destructive, no autonomous, fail-open.
 - WF2_soc-analyst-notify: L1 notification (email via SMTP credential ref + optional chat webhook), structured payload with alert_id, severity, score, decision, rule info, recurrence, IOC summary, enrichment summary, investigation links. Real token validation, summary-only (no full_log). **contain_requested creates an approval-required request; no containment action is executed.**
@@ -16,7 +23,8 @@ n8n/
     ├── WF1_soc-triage-router.json
     ├── WF2_soc-analyst-notify.json
     ├── WF3_soc-incident-escalation.json
-    └── WF5_soc-analyst-feedback.json
+    ├── WF5_soc-analyst-feedback.json
+    └── WF6_soc-daily-digest.json
 ```
 
 ## Conventions
@@ -66,10 +74,10 @@ data automatically; operators must create a fresh volume only if they
 intentionally rotate the key.
 
 The helper deterministically provisions the lab SMTP credential, then imports
-and activates WF1, WF2, WF3 and WF5 from `n8n/workflows/`.
+and activates WF1, WF2, WF3, WF5, and WF6 from `n8n/workflows/`.
 
-- **SMTP credential (Phase 2D):** every Send Email (`emailSend`) node in
-  WF2/WF3/WF5 is bound to an n8n SMTP credential named **`SMTP Lab Mailpit`**
+- **SMTP credential (Phase 2D/3.9):** every Send Email (`emailSend`) node in
+  WF2/WF3/WF5/WF6 is bound to an n8n SMTP credential named **`SMTP Lab Mailpit`**
   (`n8n/credentials/smtp_lab_mailpit.json`). The file is a **top-level JSON
   array** — the format `n8n import:credentials` requires on n8n 1.85.0 — and
   carries the credential `id` `smtp-lab-mailpit`, which matches the id bound
@@ -83,7 +91,7 @@ and activates WF1, WF2, WF3 and WF5 from `n8n/workflows/`.
 - Workflow JSONs are mounted read-only at `/workflows`.
 - The JSONs contain stable ids, so re-running startup updates the existing
   records rather than creating duplicates.
-- The helper targets only the four canonical lab files; unrelated JSON files in
+- The helper targets only the five canonical lab files; unrelated JSON files in
   the mount are not imported.
 - Workflows are activated automatically before the n8n server starts (n8n's CLI
   currently deactivates imported workflows by default).
@@ -102,7 +110,7 @@ and activates WF1, WF2, WF3 and WF5 from `n8n/workflows/`.
    - `N8N_WEBHOOK_BASE_URL` (e.g. http://n8n:5678)
    - `TRIAGE_API_BASE_URL` (e.g. http://triage-api:8000)
    - `SOC_FROM_EMAIL`, `SOC_L1_EMAIL`, `SOC_L2_EMAIL`, `SLACK_CHANNEL_L1`
-4. Activate workflows: WF1, WF2, WF3, WF5 (order matters: router calls others via webhook)
+4. Activate workflows: WF1, WF2, WF3, WF5, WF6 (the router calls notification workflows via webhook; WF6 is schedule-triggered)
 5. Test: `./scripts/send_test_alert.py docs/sample-alerts/01_wazuh_ssh_brute_force.json` → check Mailpit UI at :8025 and audit_log
 
 ## Testing

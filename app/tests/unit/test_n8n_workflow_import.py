@@ -2,7 +2,7 @@
 
 Docker is unavailable in this sandbox, so these tests statically validate the
 lab import path used by ``docker-compose.yml``:
-* the checked-in WF1/WF2/WF3/WF5 files exist, parse, and have stable unique ids
+* the checked-in WF1/WF2/WF3/WF5/WF6 files exist, parse, and have stable unique ids
 * the import helper imports and activates exactly those files
 * the n8n service executes the helper before ``n8n start``
 * the compose environment still supplies every ``$env.*`` reference used by the
@@ -30,6 +30,7 @@ EXPECTED_WORKFLOW_FILES = {
     "WF2_soc-analyst-notify.json",
     "WF3_soc-incident-escalation.json",
     "WF5_soc-analyst-feedback.json",
+    "WF6_soc-daily-digest.json",
 }
 
 _SECRET_KEYS = {
