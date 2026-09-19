@@ -55,7 +55,7 @@ cookies.
 
 | Surface | Phase | Mechanism | Notes |
 | --- | --- | --- | --- |
-| `POST /api/v1/alerts/ingest` | 1 | `X-API-Key`, constant-time compare, per-key rate limit (default 120/min) | upgrade path: per-source keys + HMAC-SHA256 (`X-Signature`: body + timestamp, ±5 min window) |
+| `POST /api/v1/alerts/ingest` | 1 | `X-API-Key`, constant-time compare, bounded body (256 KiB); application-level per-key rate limiting is **not currently enforced** (planned hardening control) | upgrade path: per-source keys + HMAC-SHA256 (`X-Signature`: body + timestamp, ±5 min window) |
 | n8n → API callbacks (feedback, incident create, stats) | 1–3 | `N8N_CALLBACK_TOKEN` header | distinct from ingest key; least privilege per endpoint |
 | Alert/incident **read** APIs + timeline (Phase 3.3) | 3 | shared N8N token (`X-N8N-Token` / `X-Callback-Token` / Bearer) — same analyst channel as feedback | read-only; no dedicated analyst token yet (deferred to the console milestone) |
 | Analyst console/read APIs | 3 (later) | separate analyst token; read-mostly scopes | SSO/OIDC documented as future work |
@@ -63,7 +63,8 @@ cookies.
 | n8n UI | 1 | n8n's own auth; bind behind `soc-edge`; do not expose publicly | lab-only exposure guidance below |
 
 All endpoints: explicit authz matrix test in CI; deny-by-default; uniform error bodies
-that don't leak internals; rate limiting everywhere.
+that don't leak internals. Application-level rate limiting is a planned hardening
+control — it is not currently enforced.
 
 ## 4. Network & Container Security
 
@@ -73,8 +74,9 @@ that don't leak internals; rate limiting everywhere.
 - Containers run as non-root users with dropped capabilities; filesystems read-only
   where possible (writable named volumes for state only).
 - Images pinned by tag (digest pin at release); base images minimal (`slim`/`alpine`);
-  dependency scanning (`pip-audit`) in CI from Phase 1; container scanning (trivy) on
-  release builds from Phase 3.
+  dependency scanning (`pip-audit`) and container scanning (trivy) are
+  planned/documented hardening controls — neither is currently executed by the
+  checked-in CI workflow.
 - Healthchecks + resource limits on every service; `restart: unless-stopped`.
 - **Lab exposure guidance:** do not port-forward this stack to the internet. If remote
   access is needed, use a VPN or tunnel; Wazuh agent ports publish only in the `full`
@@ -98,19 +100,19 @@ that don't leak internals; rate limiting everywhere.
 
 | Threat | Vector | Mitigation (phase) |
 | --- | --- | --- |
-| Spoofed ingest | attacker POSTs fake alerts to exhaust/quota-burn or distract | API key (1) → HMAC per-source (3+) · rate limits · schema validation · dead-letter audit |
+| Spoofed ingest | attacker POSTs fake alerts to exhaust/quota-burn or distract | API key (1) → HMAC per-source (3+) · rate limits (planned) · schema validation · dead-letter audit |
 | Tampering | forged n8n callbacks altering alert state/feedback | callback token (1) · separate tokens per operation (3) · audit with before/after |
 | Repudiation | "who closed/contained this?" | append-only audit log for every state change (1) |
 | Information disclosure | secrets in logs; alert data via unauthenticated read APIs | allow-listed log fields + canary test (1) · authz matrix (1+) · no-PII policy |
-| Denial of service | alert floods, giant payloads | body size cap 256 KiB (1) · rate limits (1) · dedupe absorbs floods (1) · resource limits (1) |
+| Denial of service | alert floods, giant payloads | body size cap 256 KiB (1) · rate limits (planned) · dedupe absorbs floods (1) · resource limits (1) |
 | Elevation of privilege | n8n workflow hijack → containment abuse | workflows contain no secrets; approval endpoint requires explicit human auth (4) · n8n not exposed publicly |
-| Supply chain | malicious dependency or image | pinned versions, `pip-audit`, lockfiles, review checklist (1+) · trivy on releases (3+) |
+| Supply chain | malicious dependency or image | pinned versions, `pip-audit` (planned), lockfiles, review checklist (1+) · trivy on releases (planned) |
 
 ## 7. Logging & Audit Security
 
 - Structured logs with allow-listed fields; a CI test injects canary secret values into
   the environment and asserts they never appear in output.
-- Security-relevant events (auth failures, rate-limit trips, dead letters, config
+- Security-relevant events (auth failures, dead letters, config
   reloads, containment approvals) are logged at `WARNING`+ and duplicated to `audit_log`.
 - Log floods are themselves rate-limited (per-source suppression with counters).
 

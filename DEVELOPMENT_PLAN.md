@@ -31,10 +31,10 @@ history. Status claims elsewhere are descriptive, not authoritative.
 | Phase | Status | One-line evidence |
 | --- | --- | --- |
 | **Phase 0 — Foundation** | ✅ Implemented · locally validated | Docs, scaffolding, secret scanner, CI |
-| **Phase 1 — MVP triage pipeline** | ✅ Implemented · locally validated | Ingest → normalize → dedupe → score → decide → notify, tests green (⬜ simulator script) |
+| **Phase 1 — MVP triage pipeline** | ✅ Implemented · locally validated | Ingest → normalize → dedupe → score → decide → notify, tests green (simulator script ✅ implemented) |
 | **Phase 2 — Enrichment & threat intelligence** | ✅ Implemented · locally validated | 2.2 static allowlist + asset inventory ✅ (47 tests); 2.3 enrichment response TTL cache ✅ (61 tests); 2.4 MISP client + `intel` profile + seeding guide ✅ statically validated (57 tests — no live MISP run); 2.5 scoring v2 `threat_intel` factor ✅ (56 tests); 2.6 late-enrichment re-score ✅ (12 unit +3 integration); 2.7A automatic sweep ✅ (7+9 tests, disabled by default, idempotent); 2.7B provider-specific IOC verdict visibility in WF2 ✅; VT/MISP fake-transport, disabled by default; §8.2 weight rescaling explicit open item |
 | **Phase 3 — Incidents, analyst workflow & observability** | 🟡 Partially validated | Incidents, lifecycle, read APIs, timeline, sweeper, console, runbooks, `/metrics` + Grafana profile, PostgreSQL profile, and Phase 3.9 stats/WF6 are implemented; Docker/n8n runtime validation and other named gaps remain |
-| **Phase 4 — Real Wazuh integration & approved response** | 🟡 Partially validated | 4.1/4.2 source-audited + live-validated end-to-end; 4.4 validated; 4.3 authored but not live-validated; 4.6 TheHive CE export + `thehive` profile ✅ implemented · test-validated only (no live CE run claimed); 4.7 soak harness ✅ authored (`scripts/phase47_soak.py`) + CI integrity tests implemented, live 10k/day execution not performed; 4.5 containment runbook and runtime failure/duplicate checks ⬜ |
+| **Phase 4 — Real Wazuh integration & approved response** | 🟡 Partially validated | 4.1/4.2 source-audited + live-validated end-to-end; 4.4 validated; 4.3 authored but not live-validated; 4.6 TheHive CE export + `thehive` profile ✅ implemented · test-validated only (no live CE run claimed); 4.7 soak harness ✅ authored (`scripts/phase47_soak.py`) + CI integrity tests implemented, live 10k/day execution not performed; 4.5 containment runbook and runtime failure checks ⬜ |
 | **Phase 5 — Deterministic detection evaluation** | ✅ Implemented · locally validated | Labeled corpus, ground truth, confusion matrix, precision/recall/F1/FPR, runtime evaluation tests |
 | **Phase 6 — Detection quality & correlation** | ✅ Implemented · locally validated | Detection coverage framework ✅ (6.1); ATT&CK mapping ✅ (6.2 — registry + rendered view + validation tests); expanded regression corpus ✅ (6.3, 24 scenarios); cross-alert correlation ✅ (6.4); analyst explainability ✅ (6.5); detection-quality CI gates ✅ (6.6 — precision/recall/F1/FPR and confusion-matrix bounds asserted by the existing pytest CI job) |
 
@@ -86,7 +86,7 @@ still under `[Unreleased]`.
 **Goal:** a walking skeleton — alert in → normalize → dedupe → score (v1) → decide →
 n8n callback → notification visible in Mailpit. Fully offline (no VT/MISP).
 
-**Status: implemented and locally validated** (deliverable 1.9 outstanding).
+**Status: implemented and locally validated** (all deliverables implemented, including 1.9).
 
 | # | Deliverable | Status | Notes |
 | --- | --- | --- | --- |
@@ -98,7 +98,7 @@ n8n callback → notification visible in Mailpit. Fully offline (no VT/MISP).
 | 1.6 | Decision engine v1 + `app/config/decisions.yaml` | ✅ | matrix per ARCHITECTURE §9 |
 | 1.7 | n8n webhook client (outbound) + `pending_notifications` retry loop | ✅ | timeout + park-and-retry |
 | 1.8 | Docker compose: `triage-api`, `n8n`, `mailpit`; networks `soc-edge`/`soc-core` | ✅ | non-root images, healthchecks, limits |
-| 1.9 | Simulator `scripts/send_test_alert` | ⬜ | **not implemented**; sample alerts are replayed manually or by the Phase 5 harness |
+| 1.9 | Simulator `scripts/send_test_alert` | ✅ | **implemented** — `scripts/send_test_alert.py` replays `docs/sample-alerts/` fixtures over HTTP (stdlib-only; `--repeat`, `--base-url`, `--help`), covered by `app/tests/unit/test_send_test_alert.py` |
 | 1.10 | n8n WF1 (`soc-triage-router`) + WF2 (`soc-analyst-notify`) exports | ✅ | imported via `n8n/README.md` |
 | 1.11 | CI workflow (GitHub Actions) | ✅ | ruff, mypy, pytest, `check_secrets.sh`, console JS |
 | 1.12 | API reference (OpenAPI auto-docs) + quickstart in README | ✅ | honest "lab" wording |
@@ -214,18 +214,18 @@ Desktop, real Windows Wazuh agent 007) — ✅ locally validated**
   `POST /api/v1/alerts/ingest 202` → `alert_scored score=38 tier=low decision=monitor
   degraded=false` → IOC extraction `ioc_count=0 enrichment_status=skipped` → n8n
   notification HTTP 200 → alert present in `alerts.json` and the dated alert log.
-- Secret/log hygiene (checklist V8, partially verified): API key absent from `integrations.log`,
+- Secret/log hygiene (checklist V8, verified): API key absent from `integrations.log`,
   `ossec.log`, and compose logs; no `full_log`/alert-body content in logs; no `user:pass@`
   URLs in logs.
 
-**Still outstanding from the checklist
+**Checklist item status
 ([docs/specs/phase-4-live-validation-checklist.md](docs/specs/phase-4-live-validation-checklist.md)):**
 
 | Check | Status |
 | --- | --- |
 | V7 failure/spool recovery (stop `triage-api` → retries → `alert_buffered`; spool `0700`/`0600`, no stale `.tmp`; restart → oldest-first replay, spool drains, no duplicate incident) | ⬜ outstanding |
-| V8 post-Phase-4 `/metrics` hygiene (no new families, no Wazuh data) | ⬜ outstanding |
-| V9 idempotent duplicate delivery at runtime (occurrences increment, no duplicate row/incident) | ⬜ outstanding (covered by automated tests, not by a live run) |
+| V8 post-Phase-4 `/metrics` hygiene (no new families, no Wazuh data) | ✅ runtime-verified |
+| V9 idempotent duplicate delivery at runtime (occurrences increment, no duplicate row/incident) | ✅ runtime-verified (also covered by automated tests) |
 | 4.3 custom rules/decoder live match | ⬜ outstanding |
 | 4.5 containment approval runbook / response proposal flow | ⬜ outstanding |
 | 4.6 TheHive CE export **live** run against a started CE instance | ⬜ outstanding (client/export/API + `thehive` profile implemented · test-validated only; **no live CE run claimed**, operator-side) |
@@ -292,16 +292,16 @@ Confusion matrix: **TP 4 · FP 0 · FN 1 · TN 1** → **precision 1.0000**, **r
 
 ---
 
-## Phase 6 — Detection quality & correlation 🟡
+## Phase 6 — Detection quality & correlation ✅
 
 **Goal:** move from "the deterministic path behaves as pinned" to "detection quality is
 continuously measured and regressions are blocked".
 
-**Status: in progress — 5 of 6 items implemented (detection coverage framework; ATT&CK
+**Status: ✅ implemented · locally validated — 6 of 6 items implemented** (detection coverage framework; ATT&CK
 mapping; expanded regression corpus of 24 scenarios; cross-alert correlation as an
-investigation context; analyst explainability).** Item 6.6 now asserts precision/recall/F1 thresholds and confusion-matrix bounds over the
+investigation context; analyst explainability; detection-quality CI gates). Item 6.6 asserts precision/recall/F1 thresholds and confusion-matrix bounds over the
 24-scenario corpus through the existing pytest CI job. Live Wazuh rule coverage remains
-out of scope for this gate. Everything else below is still a scope, not an achievement.
+out of scope for this gate.
 
 | # | Item | Scope | Status |
 | --- | --- | --- | --- |
@@ -567,9 +567,6 @@ Recorded rather than hidden; each is a small docs-only follow-up.
 
 | File | Drift |
 | --- | --- |
-| `ARCHITECTURE.md` §8.3 | Refers to "optional LLM polish in Phase 5". Phase 5 is now the **deterministic detection evaluation** phase, and no LLM exists in the codebase. |
-| `app/README.md` | Declares "Status: Phase 1E", which predates Phases 2–5. |
-| `docs/sample-alerts/README.md` | Documents `./scripts/send_test_alert`, which is not implemented. |
 | `CHANGELOG.md` | No Phase 5 entry yet (the evaluation framework is merged but undocumented there). |
 | `docs/detection-coverage.md` (gap G10) | Previously stated that the allowlist provider/loader was missing. Reconciled: Phase 2.2 provides the allowlist provider/loader; the remaining G10 gap is that the evaluation corpus does not pin a `suppress` outcome. |
 | `CHANGELOG.md` | No Phase 5 entry yet; Phase 2.2/2.6/2.7A/2.7B entries added in this reconciliation — Phase 5 still missing. |

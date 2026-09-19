@@ -9,7 +9,7 @@ read-only, shared-token-protected aggregate API. WF6 runs at 07:00 UTC, validate
 response, formats deterministic text/HTML, and sends one email through the existing
 `SMTP Lab Mailpit` credential. Endpoint failures take a no-email fail-safe branch.
 Tuning suggestions are human-review signals only; the workflow never edits Wazuh rules.
-The Docker/n8n runtime is not claimed as live-validated in this change.
+The default Docker/n8n runtime was live-validated on Windows/Docker Desktop, including startup, workflow import/activation, notification flow, and Mailpit delivery. WF6 scheduled execution itself was not live-triggered.
 
 **Phase 2B — Implemented (FIXED):**
 - WF1_soc-triage-router: webhook `/webhook/soc-alert-scored`, **real shared-secret validation** against `$env.N8N_CALLBACK_TOKEN` / `$env.N8N_WEBHOOK_TOKEN` (exact match, reject missing/wrong, accept exact, never log token, never place secret in JSON), payload schema validation (no full_log), severity-based routing. No secrets, no destructive, no autonomous, fail-open.
@@ -59,8 +59,8 @@ n8n/
 
 #### Docker Compose (Phase 2C lab)
 
-The Phase 2C sandbox did **not** execute the Docker/n8n/Mailpit runtime. This
-section describes the configured startup behavior and is statically validated.
+The Phase 2C sandbox did **not** execute the Docker/n8n/Mailpit runtime, but the default Docker/n8n runtime was subsequently live-validated on Windows/Docker Desktop, including startup, workflow import/activation, notification flow, and Mailpit delivery; WF6 scheduled execution itself was not live-triggered. This
+section describes the configured startup behavior.
 
 The compose service overrides the `n8nio/n8n:1.85.0` entrypoint with `/bin/sh -c`
 so the import helper can run **before** `n8n start`. Do **not** pass `sh` as an
