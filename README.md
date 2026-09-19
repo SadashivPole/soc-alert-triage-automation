@@ -425,21 +425,110 @@ The Docker stack runs (default profile: `triage-api` + `n8n` + `mailpit`). You w
 | --- | --- | --- |
 | Docker Engine + Docker Compose | 24+ / v2 | Run the multi-service lab |
 | Git | any | Clone this repository |
-| Python | 3.11+ (via Docker; locally only for development/tests) | Triage API development & tests |
+| Python | 3.11+ on the host (Docker still runs the API itself) | Sample-alert replay script + API development & tests |
 | A free VirusTotal account | public API key | IOC enrichment (optional — empty key = disabled) |
 | ~4 GB RAM free | — | n8n + triage-api + mailpit stack |
+
+### 1. Clone and configure
 
 ```bash
 git clone https://github.com/SadashivPole/soc-alert-triage-automation.git
 cd soc-alert-triage-automation
 cp .env.example .env
 # Set TRIAGE_INGEST_API_KEY and generate a stable N8N_ENCRYPTION_KEY
-# (openssl rand -hex 24). Keep that key; changing it on an existing
+# (openssl rand -hex 24; on Windows without openssl use Git Bash or:
+#  python -c "import secrets; print(secrets.token_hex(24))").
+# Keep that key; changing it on an existing
 # n8n-data volume causes an encryption-key mismatch.
+```
+
+### 2. Build and start
+
+```bash
 docker compose build
 docker compose up -d
-# Test: POST /api/v1/alerts/ingest with an X-API-Key header
+docker compose ps   # triage-api + n8n + mailpit; n8n needs ~60s on first boot
 ```
+
+### 3. Health check
+
+```bash
+curl -s http://127.0.0.1:8000/health
+curl -s http://127.0.0.1:8000/ready
+```
+
+Windows PowerShell (use `curl.exe` — bare `curl` is a PowerShell alias):
+
+```powershell
+curl.exe -s http://127.0.0.1:8000/health
+curl.exe -s http://127.0.0.1:8000/ready
+```
+
+Expected field names come from `app/src/soc_triage/api/health.py`; `timestamp`
+varies per run (operator-side), and `instance`/`version` show the `.env`/package
+defaults unless overridden:
+
+```json
+{"status":"ok","service":"triage-api","instance":"soc-lab","version":"0.1.0a1","timestamp":"…","db":"ok"}
+{"status":"ready","checks":{"config":"ok","instance":"soc-lab","db":"ok","migrations":"ok"}}
+```
+
+### 4. Send a sample alert
+
+```bash
+export TRIAGE_INGEST_API_KEY='<value from .env>'
+export N8N_CALLBACK_TOKEN='<value from .env>'
+python scripts/send_test_alert.py docs/sample-alerts/01_wazuh_ssh_brute_force.json
+```
+
+```powershell
+$env:TRIAGE_INGEST_API_KEY = '<value from .env>'
+$env:N8N_CALLBACK_TOKEN = '<value from .env>'
+python scripts/send_test_alert.py docs/sample-alerts/01_wazuh_ssh_brute_force.json
+```
+
+Expected first delivery (`alert_id` is a fresh UUID per run — operator-side;
+every other value below is pinned by
+`app/tests/integration/test_scoring_pipeline.py::test_ingest_response_carries_score_and_decision`
+and `evaluation/ground_truth.json`):
+
+```text
+[1/1] HTTP 202 status=accepted duplicate=false dedupe_status=new_generation alert_id=<uuid> score=43 tier=low action=monitor occurrences=1
+OK: all 1 deliveries returned 202/200.
+```
+
+Re-running the identical command returns `HTTP 200 … duplicate=true
+dedupe_status=exact_duplicate` with the *same* `alert_id` — idempotent
+re-delivery, not an error (pinned by `test_ingest_exact_duplicate_is_idempotent`).
+`--repeat 3` therefore shows one 202 followed by two 200s (see
+[scripts/README.md](scripts/README.md)).
+
+### 5. Verify the persisted alert
+
+```bash
+curl -s -H "X-N8N-Token: $N8N_CALLBACK_TOKEN" \
+  http://127.0.0.1:8000/api/v1/alerts/<alert_id>
+```
+
+```powershell
+curl.exe -s -H "X-N8N-Token: $env:N8N_CALLBACK_TOKEN" `
+  http://127.0.0.1:8000/api/v1/alerts/<alert_id>
+```
+
+Expected fields (shape per `AlertDetail` in `app/src/soc_triage/api/schemas.py`):
+`source: "wazuh"`, rule `id: "5710"`, `risk: {score 43, tier "low"}`,
+`decision: {action "monitor"}`, `incident_id: null` (`monitor` opens no
+incident), `enrichment_status: "skipped"` (no intel keys configured).
+
+### 6. See it in the UIs
+
+- SOC console: `http://127.0.0.1:8000/console/` (paste the
+  `N8N_CALLBACK_TOKEN` value; it is kept in browser memory only)
+- Mailpit (analyst email sink): `http://127.0.0.1:8025`
+- n8n: `http://127.0.0.1:5678`
+
+Mailpit delivery on this path is operator-side: it depends on the lab n8n run
+and is not asserted by CI.
 
 Optional profiles (strictly additive — the default stack is unchanged):
 
@@ -448,6 +537,18 @@ docker compose --profile observability up -d   # Prometheus + Grafana (lab)
 docker compose --profile full up -d            # + real Wazuh manager 4.9.2 (lab)
 docker compose --profile intel up -d           # + self-hosted MISP (internal only)
 ```
+
+### Troubleshooting (quick start)
+
+| Symptom | Cause / fix |
+| --- | --- |
+| `Set N8N_ENCRYPTION_KEY in .env` on `up` | `.env` is missing that key — add a generated value (step 1) and re-run |
+| n8n crash-loops with `Mismatching encryption keys` | Key changed on an existing volume — restore the original key; only if lab data is disposable, `docker compose down -v` and re-`up` (workflows re-import) |
+| `curl: (7) Failed to connect` | Stack not up yet — `docker compose ps` and `docker compose logs triage-api` |
+| HTTP 401 `unauthorized` from the replay script | Shell key ≠ `.env` key — re-export `TRIAGE_INGEST_API_KEY` from `.env` |
+| HTTP 200 `duplicate=true` unexpectedly | Fixture already ingested (same `id`) — expected idempotent echo, not an error |
+| `GET /api/v1/alerts…` returns 401/403 | Read APIs need `X-N8N-Token: <N8N_CALLBACK_TOKEN>`, not the ingest key |
+| Empty Mailpit inbox | n8n still starting (wait ~60s, check `docker compose ps`), or the fail-open notification was skipped — check `docker compose logs n8n` |
 
 ## Development Roadmap
 

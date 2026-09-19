@@ -44,18 +44,23 @@ users, networks, or malware are represented.
 | `23_suspicious_web_non_triggering.json` | Trailing-quote query that looks suspicious but is not rule 31103 | 31101 / 3 | low/`monitor`; non-triggering web negative |
 | `24_ssh_recurrence_below_burst.json` | Two SSH failure deliveries stay one occurrence below rapid-burst (`min_occurrences=3`) | 5710 / 5 | low/`monitor` on both deliveries; recurrence-boundary negative |
 
-## Usage (once Phase 1 lands)
+## Usage
 
 ```bash
-# send one sample with the ingest API key
-./scripts/send_test_alert docs/sample-alerts/01_wazuh_ssh_brute_force.json
+# from the repository root, with the lab stack up and the ingest key exported
+export TRIAGE_INGEST_API_KEY='<value from .env>'
 
-# simulate a brute-force burst (dedupe demo)
-./scripts/send_test_alert --repeat 10 docs/sample-alerts/01_wazuh_ssh_brute_force.json
+# send one sample with the ingest API key
+python scripts/send_test_alert.py docs/sample-alerts/01_wazuh_ssh_brute_force.json
+
+# idempotency demo: first delivery 202, the rest 200 duplicate:true (same alert_id)
+python scripts/send_test_alert.py --repeat 10 docs/sample-alerts/01_wazuh_ssh_brute_force.json
 ```
 
-Until then, these files are design references for the normalizer (ARCHITECTURE.md §6)
-and will become pytest fixtures (`app/tests/fixtures/`) in Phase 1.
+These files double as pytest fixtures (`app/tests/fixtures/`) for the
+normalizer (ARCHITECTURE.md §6) and the scoring/evaluation contracts. Repeat
+replays are byte-identical, so they demonstrate dedupe absorption — not
+recurrence, which needs distinct event ids (see `scripts/README.md`).
 
 ## Rules for adding new samples
 

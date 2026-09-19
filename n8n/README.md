@@ -111,7 +111,7 @@ and activates WF1, WF2, WF3, WF5, and WF6 from `n8n/workflows/`.
    - `TRIAGE_API_BASE_URL` (e.g. http://triage-api:8000)
    - `SOC_FROM_EMAIL`, `SOC_L1_EMAIL`, `SOC_L2_EMAIL`, `SLACK_CHANNEL_L1`
 4. Activate workflows: WF1, WF2, WF3, WF5, WF6 (the router calls notification workflows via webhook; WF6 is schedule-triggered)
-5. Test: `./scripts/send_test_alert.py docs/sample-alerts/01_wazuh_ssh_brute_force.json` → check Mailpit UI at :8025 and audit_log
+5. Test: `TRIAGE_INGEST_API_KEY='<value from .env>' python scripts/send_test_alert.py docs/sample-alerts/01_wazuh_ssh_brute_force.json` (from the repo root, stack up) → check Mailpit UI at :8025 and audit_log
 
 ## Testing
 
