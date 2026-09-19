@@ -52,12 +52,13 @@ The full Phase 4.1/4.2 pipeline was live-validated on the user's Windows/Docker 
 - [x] Incident created if the score warrants
 
 ## V7. Failure / spool behaviour
-- [ ] `docker compose stop triage-api`; fire a detection — **REMAINS OUTSTANDING**
-- [ ] `integrations.log` shows retries then `alert_buffered` — **REMAINS OUTSTANDING**
-- [ ] Spool dir is `0700`; entries are `0600`; no `.tmp` files left behind — **REMAINS OUTSTANDING**
-- [ ] `docker compose start triage-api`; fire another detection — **REMAINS OUTSTANDING**
-- [ ] Buffered alert is replayed **oldest-first**, spool drains to empty — **REMAINS OUTSTANDING**
-- [ ] No duplicate incident created by the replay — **REMAINS OUTSTANDING**
+- [x] Retry budget exercised against the stopped `triage-api`; `integrations.log` showed `attempts=3` followed by `alert_buffered` — **VERIFIED**
+- [x] Spool directory is `0700`; buffered entry is `0600`; no `.tmp` file remained — **VERIFIED**
+- [ ] A fresh Wazuh-agent-generated detection while `triage-api` is unavailable — **REMAINS OUTSTANDING** (agents 007/008 were disconnected during this validation)
+- [x] After `triage-api` recovery, a second Wazuh-shaped alert was replayed through the real installed integrator; `spool_flush` delivered `1` and the spool drained to empty — **VERIFIED**
+- [ ] Multi-entry replay ordering beyond the single buffered item — **REMAINS OUTSTANDING**
+- [x] Replay produced no duplicate incident; the two validated Wazuh alerts were linked to the same incident (`INC-2026-09-19-0001`) — **VERIFIED**
+- [ ] V7-specific `delivery_count` / occurrence aggregation proof — **REMAINS OUTSTANDING**
 
 ## V8. Secret / log hygiene (partially verified)
 - [x] API key absent from `integrations.log`, `ossec.log`, and `docker compose logs` — **VERIFIED**
