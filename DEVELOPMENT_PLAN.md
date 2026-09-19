@@ -34,7 +34,7 @@ history. Status claims elsewhere are descriptive, not authoritative.
 | **Phase 1 — MVP triage pipeline** | ✅ Implemented · locally validated | Ingest → normalize → dedupe → score → decide → notify, tests green (simulator script ✅ implemented) |
 | **Phase 2 — Enrichment & threat intelligence** | ✅ Implemented · locally validated | 2.2 static allowlist + asset inventory ✅ (47 tests); 2.3 enrichment response TTL cache ✅ (61 tests); 2.4 MISP client + `intel` profile + seeding guide ✅ statically validated (57 tests — no live MISP run); 2.5 scoring v2 `threat_intel` factor ✅ (56 tests); 2.6 late-enrichment re-score ✅ (12 unit +3 integration); 2.7A automatic sweep ✅ (7+9 tests, disabled by default, idempotent); 2.7B provider-specific IOC verdict visibility in WF2 ✅; VT/MISP fake-transport, disabled by default; §8.2 weight rescaling explicit open item |
 | **Phase 3 — Incidents, analyst workflow & observability** | 🟡 Partially validated | Incidents, lifecycle, read APIs, timeline, sweeper, console, runbooks, `/metrics` + Grafana profile, PostgreSQL profile, and Phase 3.9 stats/WF6 are implemented; Docker/n8n runtime validation and other named gaps remain |
-| **Phase 4 — Real Wazuh integration & approved response** | 🟡 Partially validated | 4.1/4.2 source-audited + live-validated end-to-end; 4.4 validated; V7/V9 partially live-validated with specific remaining runtime checks; V8 secret/log hygiene verified but post-Phase-4 `/metrics` hygiene re-check remains; 4.3 authored but not live-validated; 4.6 TheHive CE export + `thehive` profile implemented and test-validated only (no live CE run claimed); 4.7 soak harness authored with CI integrity tests, but live 10k/day execution not performed; 4.5 containment runbook remains outstanding |
+| **Phase 4 — Real Wazuh integration & approved response** | 🟡 Partially validated | 4.1/4.2 source-audited + live-validated end-to-end; 4.4 validated; V7 runtime-verified; V9 partially live-validated with one specific remaining runtime check; V8 secret/log hygiene verified but post-Phase-4 `/metrics` hygiene re-check remains; 4.3 authored but not live-validated; 4.6 TheHive CE export + `thehive` profile implemented and test-validated only (no live CE run claimed); 4.7 soak harness authored with CI integrity tests, but live 10k/day execution not performed; 4.5 containment runbook remains outstanding |
 | **Phase 5 — Deterministic detection evaluation** | ✅ Implemented · locally validated | Labeled corpus, ground truth, confusion matrix, precision/recall/F1/FPR, runtime evaluation tests |
 | **Phase 6 — Detection quality & correlation** | ✅ Implemented · locally validated | Detection coverage framework ✅ (6.1); ATT&CK mapping ✅ (6.2 — registry + rendered view + validation tests); expanded regression corpus ✅ (6.3, 24 scenarios); cross-alert correlation ✅ (6.4); analyst explainability ✅ (6.5); detection-quality CI gates ✅ (6.6 — precision/recall/F1/FPR and confusion-matrix bounds asserted by the existing pytest CI job) |
 
@@ -222,10 +222,14 @@ Desktop, real Windows Wazuh agent 007) — ✅ locally validated**
 Desktop, active Windows Wazuh agent 009) — 🟡 partially validated**
 
 - Fresh `Phase4Test` / rule `60602` detections (`V7-SPOOL-01`, `V7-SPOOL-02`, `V7-SPOOL-03`) were
-  generated while `triage-api` was unavailable. The events were confirmed in `alerts.json`, but
-  `wazuh-integratord` was processing an older rule `19007` backlog and did not reach the fresh
-  `60602` events during the outage window. The fresh-agent → integratord → spool path therefore
-  remains unverified.
+  generated while `triage-api` was unavailable. The events were confirmed in `alerts.json`, and
+  the real installed `wazuh-integratord` processed them: each fresh `60602` event reached the retry
+  budget (`attempts=3`) and was buffered with `status=0`; after API recovery the buffered entries
+  were replayed successfully.
+- The production spool already contained unrelated older `19007` backlog entries at the start of
+  this validation, so the production spool was not treated as an empty baseline and those older
+  entries were not deleted. The three fresh V7 marker payloads were nevertheless drained
+  successfully, with no `60602` or `V7-SPOOL-*` payloads remaining in the spool after recovery.
 - Controlled replay used the exact real Wazuh alert bodies extracted from `alerts.json` and the
   **real installed** `/var/ossec/integrations/custom-triage` integrator, with a dedicated
   `WAZUH_INTEGRATOR_SPOOL_DIR` at `/tmp/v7-controlled-spool`. The controlled spool was owned by
@@ -247,7 +251,7 @@ Desktop, active Windows Wazuh agent 009) — 🟡 partially validated**
 
 | Check | Status |
 | --- | --- |
-| V7 failure/spool recovery | 🟡 partially validated — retry budget → `alert_buffered`; spool `0700`/`0600`, no `.tmp`; controlled three-entry oldest-first replay through the installed integrator; occurrence aggregation; exact-duplicate absorption. Remaining: fresh agent → `wazuh-integratord` → spool while API is down, because the `19007` backlog delayed the fresh `60602` events. |
+| V7 failure/spool recovery | ✅ runtime-verified — fresh agent-generated `60602` detections reached the real installed integrator during the API outage and were buffered after `attempts=3`; spool `0700`/`0600`, no `.tmp`; fresh V7 payloads drained after API recovery; controlled three-entry oldest-first replay through the installed integrator; occurrence aggregation; exact-duplicate absorption. Production spool contained unrelated older backlog and was not treated as an empty baseline. |
 | V8 post-Phase-4 `/metrics` hygiene (no new families, no Wazuh data) | 🟡 partially validated — secret/log hygiene verified; post-Phase-4 `/metrics` hygiene re-check remains outstanding. |
 | V9 idempotent duplicate delivery at runtime | 🟡 partially validated — repeated distinct alerts aggregated as occurrences `1 → 2 → 3`; exact duplicate absorbed with no second alert row; repeated alerts on the previously validated incident path remained attached to `INC-2026-09-19-0001`. Remaining: exact duplicate of an `open_incident`-producing live event. |
 | 4.3 custom rules/decoder live match | ⬜ outstanding |

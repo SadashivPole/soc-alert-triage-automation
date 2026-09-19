@@ -18,14 +18,17 @@ entries were observed, and a real Windows alert reached the Triage API and n8n
 (checklist V2–V6).
 
 Additional V7/V9 validation was performed on 2026-09-19 with active Windows Wazuh
-agent 009. Retry/buffering, spool permissions, controlled oldest-first replay,
-occurrence aggregation, and exact-duplicate absorption were live-verified through
-the real installed integrator. The fresh agent → `wazuh-integratord` → spool path
-during an API outage remains unverified because an older rule `19007` backlog
-delayed the fresh `60602` events. The post-Phase-4 `/metrics` hygiene re-check
-remains outstanding; the secret/log hygiene checks themselves are verified. An
-exact duplicate of an `open_incident`-producing live event also remains
-unverified. See the complete evidence and remaining checks in
+agent 009. Fresh `60602` detections reached the real installed integrator during
+the API outage, each reached `attempts=3` and `alert_buffered`, and the three
+fresh V7 marker payloads were subsequently drained after API recovery. Spool
+permissions, controlled oldest-first replay, occurrence aggregation, and
+exact-duplicate absorption were also live-verified through the real installed
+integrator. The production spool contained unrelated older `19007` backlog
+entries during this validation and was not treated as an empty baseline.
+The post-Phase-4 `/metrics` hygiene re-check remains outstanding; the secret/log
+hygiene checks themselves are verified. An exact duplicate of an
+`open_incident`-producing live event also remains unverified. See the complete
+evidence and remaining checks in
 [docs/specs/phase-4-live-validation-checklist.md](../docs/specs/phase-4-live-validation-checklist.md).
 
 Custom rules/decoders (4.3) and the human-approved containment runbook (4.5) are
