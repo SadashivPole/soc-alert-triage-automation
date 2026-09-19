@@ -10,13 +10,65 @@ validation. Everything here must be safe to run and defensive-only (see
 | `n8n-import-workflows.sh` | Import the exported n8n workflows (`n8n/workflows/*.json`) via the n8n API. | ✅ available |
 | `phase47_soak.py` | Phase 4.7 performance-soak harness: replays synthetic alerts at the ingest endpoint (single identity ⇒ acute recurrence/burst shape) and reports throughput/latency. | ✅ authored · **not executed in this repository's validation run** |
 | `app/tests/integration/test_phase47_soak_integrity.py` | Phase 4.7 CI-runnable integrity tests: distinct synthetic identities through the real ingest path prove dedup/idempotency. | ✅ implemented · locally validated (5 tests) |
-| `send_test_alert` | Replay synthetic alerts from `docs/sample-alerts/` into the ingest endpoint (with `--repeat` for dedupe demos). | ⬜ not implemented (Phase 1 backlog item only) |
+| `send_test_alert.py` | Replay one synthetic alert fixture from `docs/sample-alerts/` into `POST /api/v1/alerts/ingest` (with `--repeat` for the idempotency demo). Stdlib-only, Windows + Linux. | ✅ available |
 
 Run the hygiene check any time:
 
 ```bash
 bash scripts/check_secrets.sh
 ```
+
+---
+
+## `send_test_alert.py` — sample-alert replay (demo utility)
+
+**Purpose.** The minimal demo path: read one Wazuh-shaped JSON fixture and POST
+it unchanged to `POST /api/v1/alerts/ingest` with `X-API-Key` auth, printing
+one allow-listed summary line per delivery (`alert_id`, `score`, `tier`,
+`action`, `dedupe_status` — never `normalized`/`full_log`, never the key).
+Covers the Phase 1 backlog item `scripts/send_test_alert`.
+
+**Usage.**
+
+```bash
+# From the repository root; needs a running triage-api (README quick start).
+export TRIAGE_INGEST_API_KEY='<value from .env>'
+python scripts/send_test_alert.py docs/sample-alerts/01_wazuh_ssh_brute_force.json
+```
+
+```powershell
+# PowerShell equivalent (same script, same output).
+$env:TRIAGE_INGEST_API_KEY = '<value from .env>'
+python scripts/send_test_alert.py docs/sample-alerts/01_wazuh_ssh_brute_force.json
+```
+
+**Arguments and defaults.**
+
+| Argument | Default | Meaning |
+| --- | --- | --- |
+| `fixture` | *(required)* | Path to a JSON fixture (must contain one JSON object) |
+| `--base-url` | `http://127.0.0.1:8000` | Triage API base URL; posts to `<base-url>/api/v1/alerts/ingest` |
+| `--api-key` | `$TRIAGE_INGEST_API_KEY` | `X-API-Key` header value (flag wins over env; never printed) |
+| `--repeat` | `1` | Replay the identical bytes N times (must be ≥ 1) |
+| `--timeout` | `30.0` | Per-request timeout in seconds (must be > 0) |
+
+**`--repeat` semantics (no surprise).** Replays are byte-identical, so the
+first delivery returns **HTTP 202** (`new_generation`) and every further
+delivery returns **HTTP 200** with `duplicate: true` and the *same*
+`alert_id` (idempotent re-delivery per `app/src/soc_triage/api/alerts.py`).
+That is the dedupe demo: recurrence/occurrences need distinct event ids,
+which this minimal script deliberately does not synthesize (the
+`phase47_soak.py` harness below covers the id-varying shape).
+
+**Exit behavior.** Exits `0` when every delivery returned 202/200; exits `1`
+when any delivery got another status or a transport error; exits `2` for
+usage/config errors (missing fixture, invalid JSON, missing API key).
+`Ctrl-C` exits `130`.
+
+**Tests.** `app/tests/unit/test_send_test_alert.py` (fake transport only, no
+network): argument parsing, fixture loading, URL construction, API-key
+handling, repeat handling, response parsing, exit behavior, and a
+never-print-secrets check — run with the suite (`cd app && pytest`).
 
 ---
 
