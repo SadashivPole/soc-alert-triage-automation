@@ -8,8 +8,9 @@ profiles, ports, and hardening rules are fixed by design in
 **Status:** the default stack (`triage-api`, `n8n`, `mailpit`) and the optional Phase 3.7
 `observability` (`prometheus`, `grafana`), Phase 4.1 `full` (`wazuh-manager`) and Phase 2.4
 `intel` (MISP) profiles are **implemented** in the root `docker-compose.yml`; every profile
-is optional and additive (the default stack is unchanged). The `postgres` profile remains
-planned per the roadmap.
+is optional and additive (the default stack is unchanged). The Phase 3.8 `postgres`
+profile is **implemented and contract-tested** (SQLite default preserved); live
+PostgreSQL validation remains operator-side.
 See [docs/specs/phase-3.7-prometheus-observability.md](../docs/specs/phase-3.7-prometheus-observability.md).
 
 Files:

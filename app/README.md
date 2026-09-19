@@ -3,8 +3,9 @@
 The core service: ingest → normalize → dedupe → enrich → score → decide → persist →
 notify n8n. Full design: [ARCHITECTURE.md §12](../ARCHITECTURE.md#12-python-service-triage-api-architecture).
 
-**Status: Phase 1E — ingestion, deduplication, persistent storage, audit, IOC
-extraction & the enrichment interface implemented**
+**Status: triage-API implementation — ingest, normalize, dedupe, enrichment,
+deterministic scoring (`scoring.v2`), decision routing (`decisions.v1`), incidents,
+read APIs, feedback, stats, the static console, and Prometheus `/metrics` implemented**
 ([DEVELOPMENT_PLAN.md](../DEVELOPMENT_PLAN.md)). This includes
 the application factory, `GET /health` and `GET /ready` (with database
 liveness/migration checks), typed environment configuration, structured JSON
@@ -15,7 +16,9 @@ logging, the shared error envelope, Wazuh alert ingest/normalize
 state, per-event idempotency records, append-only audit log), Alembic
 migrations applied automatically at startup, and **IOC extraction with a
 provider-based enrichment interface** (offline only — no external calls yet).
-Scoring/decisioning/notifications are later Phase 1 work.
+Deterministic scoring (`scoring.v2`), decision routing (`decisions.v1`), incident
+lifecycle, read APIs, feedback, stats, the static console, and `/metrics` are
+implemented; the VirusTotal/MISP providers exist and are disabled by default.
 
 ```
 app/

@@ -103,7 +103,7 @@ publish only under the `full` profile. MISP and PostgreSQL stay internal (profil
 | **MISP (optional)** | MISP docker (profile `intel`) | Self-hosted threat intel: seeded with public/synthetic events; attribute lookups enrich alerts | 2 |
 | **SOC console (later)** | Static HTML + JSON endpoints (optionally Grafana profile) | Alert queue, score justifications, incident board, FP-rate trends | 3 |
 | **TheHive CE (optional, later)** | TheHive 5 Community Edition | Case management export — CE only, never Premium | 4+ |
-| **LLM assistant (optional)** | any OpenAI-compatible API | Draft analyst-facing summaries/suggestions appended **after** deterministic scoring; always labeled; disabled by default | 5 |
+| **LLM assistant (optional)** | any OpenAI-compatible API | Draft analyst-facing summaries/suggestions appended **after** deterministic scoring; always labeled; disabled by default | future (unscheduled) |
 
 ---
 
@@ -121,7 +121,7 @@ sequenceDiagram
     participant AN as Analyst
 
     W->>API: POST /api/v1/alerts/ingest (X-API-Key, Wazuh JSON)
-    API->>API: authn, schema check, size/rate limits
+    API->>API: authn, schema check, size limits
     API->>API: normalize → canonical alert
     API->>DB: dedupe check (rule+agent window) → insert or bump recurrence
     API->>API: extract IOCs (ip / domain / hash)
@@ -238,7 +238,9 @@ it stores what Wazuh already logged (see SECURITY.md data policy).
 
 - AuthN: `X-API-Key` (constant-time comparison). Upgrade path: HMAC-SHA256 signature
   (`X-Signature` over body + timestamp) for per-source keys — see SECURITY.md.
-- Guards: request body ≤ 256 KiB; per-key rate limit (default 120 req/min, tunable);
+- Guards: request body ≤ 256 KiB (413 beyond the cap); no application-level per-key
+  rate limiter is currently enforced (per-key rate limiting is a planned hardening
+  control, not an implemented guard);
   Pydantic validation with a *tolerant* schema (unknown fields preserved under
   `source_event`, never rejected for extras — Wazuh rulesets evolve).
 
@@ -389,8 +391,9 @@ weights with the new factor.
 
 - Total clipped to 0–100: `0–24 informational` · `25–44 low` · `45–69 medium` · `70–84 high` · `85–100 critical`.
 - Output always includes `engine_version`, per-factor `points/max/detail`, and a generated
-  one-paragraph human summary (template-based in v1/v2; optional LLM polish in Phase 5,
-  clearly labeled `ai_assisted: true` and never used for the numeric score).
+  one-paragraph human summary (template-based in v1/v2; a future optional LLM polish —
+  not implemented, and unrelated to the Phase 5 deterministic detection evaluation —
+  would be clearly labeled `ai_assisted: true` and never used for the numeric score).
 - Golden-file tests pin expected scores for the sample-alert scenarios; any weight change
   must consciously update the goldens (that is the tuning workflow).
 
@@ -580,9 +583,8 @@ Workflows are exported JSON under `n8n/workflows/` (version-controlled; import p
 | ID | Workflow | Trigger | Flow |
 | --- | --- | --- | --- |
 | WF1 | `soc-triage-router` | webhook `/webhook/soc-alert-scored` (API callback) | auth check → Switch on tier → route to WF2/WF3 |
-| WF2 | `soc-analyst-notify` | called by WF1 | render message (IOCs, score factors, runbook) → Email (SMTP) + chat webhook → hand off to WF4 |
-| WF3 | `soc-incident-create` | called by WF1 (high/critical) | create incident via API (or TheHive CE case if enabled) → attach to notification |
-| WF4 | `soc-sla-escalation` | from WF2 | Wait node (15/30 min) → if no ack (checked via API) → escalate: re-notify with L2 tag, loop max 2× |
+| WF2 | `soc-analyst-notify` | called by WF1 | render message (IOCs, score factors, runbook) → Email (SMTP) + chat webhook |
+| WF3 | `soc-incident-escalation` | called by WF1 (high/critical) | urgent email + chat → 15-minute SLA wait → ack check via read-only API → L2 escalation if unacknowledged (fail-safe escalate on endpoint error) |
 | WF5 | `soc-analyst-feedback` | n8n Form trigger (`/form/soc-analyst-feedback-form`) + machine webhook `/webhook/soc-analyst-feedback` | form pages (alert_id, analyst_email, verdict allow-list, notes) → validate → POST `/api/v1/alerts/{id}/feedback` (token auth) → confirmation |
 | WF6 | `soc-daily-digest` | Cron 07:00 UTC | query API stats endpoints → email digest (volumes, top rules, FP rate, tuning suggestions) |
 
@@ -622,7 +624,7 @@ app/src/soc_triage/
 │                           #        stats, health, metrics, internal (n8n errors)
 ├── core/                   # config (pydantic-settings, env-driven), logging (structlog),
 │                           # metrics (Prometheus registry, app-scoped), security
-│                           # (api-key auth, rate limiting), errors, ids
+│                           # (api-key auth), errors, ids
 ├── db/                     # engine/session bootstrap, unit-of-work transactions,
 │                           # storage errors (never leaks internals)
 ├── models/                 # SQLAlchemy ORM (alerts, alert_dedupe_groups, alert_events,
@@ -908,7 +910,7 @@ pipeline**. Nothing is dropped silently; every degraded path writes an audit ent
 | Integration | FastAPI TestClient + temp SQLite | auth, ingest→state-machine transitions, feedback, audit rows, error paths |
 | External fakes | `respx` / fake httpx clients | VT rate limiter & quota behavior, MISP outage, timeout paths |
 | E2E smoke (Phase 1+) | compose `sim` profile | simulator → API → SQLite state + n8n webhook receiver; nightly job in CI |
-| Security tests | canary-secret log fuzz, authz matrix | no secrets in logs; unauthenticated calls rejected; rate limits enforced |
+| Security tests | canary-secret log fuzz, authz matrix | no secrets in logs; unauthenticated calls rejected; oversize bodies rejected |
 
 ---
 
@@ -918,7 +920,8 @@ Full policy: [SECURITY.md](SECURITY.md). Key points:
 
 - Defensive-only scope enforced by policy and review; no offensive tooling will be merged.
 - AuthN: `X-API-Key` ingest (constant-time compare), `N8N_CALLBACK_TOKEN` for workflow
-  callbacks; documented upgrade to HMAC request signing; all endpoints rate-limited;
+  callbacks; documented upgrade to HMAC request signing; application-level rate
+  limiting is planned, not currently enforced;
   admin/read endpoints get a separate analyst token in Phase 3.
 - Network segmentation (`soc-edge` vs `soc-core`), minimal published ports, non-root
   containers, pinned images, healthchecks, resource limits.
