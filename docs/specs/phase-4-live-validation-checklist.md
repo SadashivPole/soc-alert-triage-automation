@@ -53,12 +53,14 @@ The full Phase 4.1/4.2 pipeline was live-validated on the user's Windows/Docker 
 
 ## V7. Failure / spool behaviour
 - [x] Retry budget exercised against the stopped `triage-api`; `integrations.log` showed `attempts=3` followed by `alert_buffered` — **VERIFIED**
-- [x] Spool directory is `0700`; buffered entry is `0600`; no `.tmp` file remained — **VERIFIED**
-- [ ] A fresh Wazuh-agent-generated detection while `triage-api` is unavailable — **REMAINS OUTSTANDING** (agents 007/008 were disconnected during this validation)
-- [x] After `triage-api` recovery, a second Wazuh-shaped alert was replayed through the real installed integrator; `spool_flush` delivered `1` and the spool drained to empty — **VERIFIED**
-- [ ] Multi-entry replay ordering beyond the single buffered item — **REMAINS OUTSTANDING**
-- [x] Replay produced no duplicate incident; the two validated Wazuh alerts were linked to the same incident (`INC-2026-09-19-0001`) — **VERIFIED**
-- [ ] V7-specific `delivery_count` / occurrence aggregation proof — **REMAINS OUTSTANDING**
+- [x] Spool directory is `0700`; buffered entries are `0600`; no `.tmp` files remained — **VERIFIED**
+- [ ] A fresh Wazuh-agent-generated detection while `triage-api` is unavailable reaches the real installed integrator and is buffered — **REMAINS OUTSTANDING**. A real Windows Wazuh agent (009) generated three fresh `60602` detections during the API outage and the events were written to `alerts.json`, but `wazuh-integratord` was still processing an older `19007` backlog and did not reach those fresh `60602` events during the outage window.
+- [x] Three exact real Wazuh-generated alert bodies from the fresh-agent run were replayed through the real installed integrator after API recovery; `spool_flush` delivered `3`, the controlled spool drained to empty, and the API received `V7-SPOOL-01` → `V7-SPOOL-02` → `V7-SPOOL-03` in marker order — **VERIFIED**
+- [x] Multi-entry replay ordering beyond a single buffered item was exercised with three real Wazuh alert bodies and replayed oldest-first through the real installed integrator — **VERIFIED**
+- [x] Replay produced occurrence aggregation for `wazuh:60602:009`; the new generation recorded occurrences `1 → 2 → 3` — **VERIFIED**
+- [x] Exact replay of `V7-SPOOL-03` was absorbed as an idempotent duplicate: `delivery_count` changed `1 → 2`, `duplicate_deliveries` changed `0 → 1`, and the `alert.duplicate_absorbed` audit record was persisted — **VERIFIED**
+- [x] No duplicate incident was observed in the previously validated live Wazuh incident replay path; the two validated Wazuh alerts were linked to the same incident (`INC-2026-09-19-0001`) — **VERIFIED**
+- [ ] V7-specific fresh-agent outage-trigger validation remains outstanding because the fresh `60602` detections were not reached by `wazuh-integratord` during the outage window — **REMAINS OUTSTANDING**
 
 ## V8. Secret / log hygiene (partially verified)
 - [x] API key absent from `integrations.log`, `ossec.log`, and `docker compose logs` — **VERIFIED**
@@ -66,8 +68,10 @@ The full Phase 4.1/4.2 pipeline was live-validated on the user's Windows/Docker 
 - [x] No `user:pass@` URL anywhere in logs — **VERIFIED**
 - [ ] `/metrics` unchanged — no new families, no Wazuh data — **REMAINS OUTSTANDING** (verify after any fix)
 
-## V9. Idempotent duplicate delivery (REMAINS OUTSTANDING)
-- [ ] Same alert/rule/agent — occurrences increments, no duplicate alert row/incident — **REMAINS OUTSTANDING**
+## V9. Idempotent duplicate delivery
+- [x] Exact same alert/rule/agent replay was absorbed idempotently; no second alert row was created, `delivery_count` incremented `1 → 2`, and `duplicate_deliveries` incremented `0 → 1` — **VERIFIED**
+- [x] Repeated alerts in the same Wazuh group incremented occurrences `1 → 2 → 3` without creating a second alert row for the exact duplicate — **VERIFIED**
+- [ ] Duplicate delivery through an `open_incident`-producing live event remains separately unverified in this Phase4Test replay, because the controlled `60602` events scored into `monitor` / `queue_l1` rather than `open_incident` — **REMAINS OUTSTANDING**
 
 ## V10. Regression gate
 ```bash
