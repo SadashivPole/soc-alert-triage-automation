@@ -50,6 +50,29 @@ semantic (`v0.1.0` targeted at the end of Phase 1).
   throughput, or SLA-safe timing claim is made anywhere. The harness is preserved
   byte-for-byte and is for an operator-side run.
 
+### Added — Phase 4.7: CI-runnable soak-integrity tests + runbook
+
+- `app/tests/integration/test_phase47_soak_integrity.py` (5 tests): the CI-runnable
+  complement to the protected harness. It drives the **real** `POST /api/v1/alerts/ingest`
+  path (FastAPI `TestClient`, temp SQLite) with a spread of **distinct** `rule.id`/`agent.id`
+  identities, and demonstrates rather than infers the contracts a soak depends on: distinct
+  identities stay distinct (accepted 202, one alert row + one event identity each); exact
+  re-delivery is idempotent (HTTP 200, `duplicate: true`, original `alert_id`, no new row);
+  database dedupe counters (`occurrences == 1`, `duplicate_deliveries == 1`,
+  `delivery_count == 2`) prove the absorption; an `id`-only repeat (the harness's shape)
+  increments occurrences without new rows; and a coarse wall-clock guard (spread ingest
+  under 30 s) catches pathological stalls. Throughput is printed as `[diagnostic, NOT a
+  benchmark]` and is **never asserted as an SLA**.
+- `docs/specs/phase-4.7-soak-runbook.md`: documents the harness's exact semantics (it
+  mutates only `payload["id"]`, so a run is an acute recurrence/burst around one
+  `rule.id + agent.id` identity, not a spread of independent identities), the
+  integrity-vs-live distinction, the Windows/Docker operator environment, acceptance/
+  evidence fields, a results template, and the binding truth rules (no live 10k claim
+  without a recorded run; printed throughput is never an SLA/benchmark; the harness is
+  byte-for-byte protected).
+- **No live 10k/day soak, and no Docker/live TheHive/MISP/PostgreSQL validation, is
+  claimed from this work.** Those remain operator-side.
+
 ### Added — Phase 3.9: daily stats API and WF6 digest
 
 - Added the read-only, shared-token-protected `GET /api/v1/stats/daily` endpoint.
