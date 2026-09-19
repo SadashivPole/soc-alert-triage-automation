@@ -6,6 +6,50 @@ semantic (`v0.1.0` targeted at the end of Phase 1).
 
 ## [Unreleased]
 
+### Added — Phase 4.6: TheHive CE case export + optional `thehive` compose profile
+
+- **TheHive 5 Community Edition case export** (`app/src/soc_triage/thehive/client.py`,
+  `export.py`, `app/src/soc_triage/api/incident_thehive.py` over the existing
+  `THEHIVE_*` settings): `POST /api/v1/incidents/{incident_id}/thehive` (n8n-token
+  protected) builds a safe case export (severity map `SEV1..SEV4` → `4..1`, bounded
+  scalar fields, IOC-type allow-map, never forwards `full_log`/secrets) and creates a
+  TheHive case (`POST /api/v1/case`) plus one observable per allowed IOC; disable-by-empty
+  (`THEHIVE_URL` + `THEHIVE_API_KEY` both non-empty to enable) and repeated exports return
+  the existing case id. Errors are bounded and never log secrets.
+- **Optional additive `thehive` compose profile** in `docker-compose.yml`: pinned CE image
+  `strangebee/thehive:5.7.6` plus its required Cassandra (`cassandra:4.1.12`) and
+  Elasticsearch (`docker.elastic.co/elasticsearch/elasticsearch:8.19.21`) index — exact
+  vendor tags from `StrangeBeeCorp/docker` `versions.env`. Internal `soc-core` network only,
+  no host ports, no default-service dependency, `no-new-privileges:true` + `cap_drop: ALL`,
+  healthchecks (cqlsh / `_cat/health` / `/thehive/api/status`), a `thehive-preflight`
+  one-shot guard (no `${VAR:?}` inside the profile, so the default stack keeps parsing),
+  and additive named volumes only. SQLite remains the triage-api default.
+- **Community Edition only, never Premium**: the CE image is free/open-source and no
+  Premium image, connector, feature, or license reference is added anywhere.
+- **No live TheHive CE run is claimed.** The client/export/API are covered by
+  fake-transport/integration tests and the profile by static contract tests;
+  live startup is documented as operator-side work in `thehive/README.md`.
+- Evidence: `app/tests/integration/test_incident_thehive.py` (5 tests) +
+  `app/tests/integration/test_thehive_export.py` (4 tests) +
+  `app/tests/unit/test_thehive_profile.py` (21 tests) + existing Docker contract tests
+  extended for the additive profile. No scoring, decision, routing, or Wazuh-rule
+  behavior changed.
+
+### Added — Phase 4.7: performance soak harness (authored, not executed)
+
+- `scripts/phase47_soak.py`: a deterministic, self-contained soak harness that POSTs unique
+  synthetic alerts (derived from the `01_wazuh_ssh_brute_force.json` fixture) to
+  `/api/v1/alerts/ingest` via subprocess `curl.exe`, expects HTTP 202, and reports
+  request counts, status-count breakdown, throughput, and mean/median/p95/p99/max latency,
+  plus the 10k-alerts/day average arrival-rate reference (`10_000 / 86_400 ≈ 0.116 alerts/s`).
+- Defaults documented in `scripts/README.md`: `--base-url http://127.0.0.1:8000`,
+  `--count 100`, `--timeout 30`, `--progress 25`; `--api-key` is required. On non-Windows
+  hosts the harness depends on a `curl.exe` on PATH (Windows `curl.exe`; a POSIX `curl`
+  can be aliased to it — see `scripts/README.md`).
+- **The soak was not executed in this repository's validation run** — no soak result,
+  throughput, or SLA-safe timing claim is made anywhere. The harness is preserved
+  byte-for-byte and is for an operator-side run.
+
 ### Added — Phase 3.9: daily stats API and WF6 digest
 
 - Added the read-only, shared-token-protected `GET /api/v1/stats/daily` endpoint.
