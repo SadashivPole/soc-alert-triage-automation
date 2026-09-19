@@ -146,6 +146,7 @@ async def update_incident_assignment(
         current = _current_assignment(records)
 
         changed = current != body.assignee
+        actor = (body.actor or "analyst").strip() or "analyst"
 
         if changed:
             audit_repository.append(
@@ -154,7 +155,7 @@ async def update_incident_assignment(
                         action=ACTION_INCIDENT_ASSIGNED,
                         entity_type=ENTITY_INCIDENT,
                         entity_id=incident_id,
-                        actor=body.actor,
+                        actor=actor,
                         before={"assignee": current},
                         after={"assignee": body.assignee},
                     )

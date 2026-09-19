@@ -3,8 +3,8 @@
 Docker/n8n runtime is unavailable in this sandbox, so these tests statically
 validate the complete email delivery chain that the lab exercises at runtime:
 
-* every ``emailSend`` node in the checked-in workflows has an SMTP credential
-  bound (n8n refuses to execute a Send Email node without one — the root cause
+* every ``emailSend`` node in the checked-in workflows (including WF6) has an
+  SMTP credential bound (n8n refuses to execute a Send Email node without one — the root cause
   of the Phase 2D "notification never arrives" bug);
 * the lab SMTP credential exists, points at the local Mailpit sink, and carries
   no real secret;
@@ -44,6 +44,7 @@ WORKFLOW_FILES = [
     "WF2_soc-analyst-notify.json",
     "WF3_soc-incident-escalation.json",
     "WF5_soc-analyst-feedback.json",
+    "WF6_soc-daily-digest.json",
 ]
 
 
@@ -81,8 +82,8 @@ def test_every_email_node_has_smtp_credential_bound() -> None:
                 f"{name}: {node['name']} credential name must be "
                 f"{SMTP_CREDENTIAL_NAME!r}, got {smtp.get('name')!r}"
             )
-    # WF2 (1) + WF3 (2) + WF5 (1) = 4 notification emails.
-    assert found == 4, f"expected 4 emailSend nodes across lab workflows, found {found}"
+    # WF2 (1) + WF3 (2) + WF5 (1) + WF6 (1) = 5 notification emails.
+    assert found == 5, f"expected 5 emailSend nodes across lab workflows, found {found}"
 
 
 def test_lab_smtp_credential_file_points_at_mailpit() -> None:

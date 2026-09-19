@@ -30,6 +30,7 @@ from ..models.incident import Incident
 from ..models.records import (
     CorrelationContextRecord,
     CorrelationMemberSummary,
+    DailyStatsRecord,
     PersistedAlert,
     TimelineEvent,
 )
@@ -58,6 +59,50 @@ def make_pagination(*, limit: int, offset: int, total: int) -> Pagination:
         total=total,
         has_more=offset + limit < total,
     )
+
+
+class DailyStatsVolumesResponse(BaseModel):
+    """Aggregate record volumes for one UTC reporting day."""
+
+    model_config = {"frozen": True}
+
+    alerts: int = Field(ge=0)
+    incidents: int = Field(ge=0)
+    feedback: int = Field(ge=0)
+
+
+class DailyStatsTopRuleResponse(BaseModel):
+    """One aggregate-only top-rule row."""
+
+    model_config = {"frozen": True}
+
+    rule_id: str
+    count: int = Field(ge=0)
+
+
+class DailyStatsTuningSuggestionResponse(BaseModel):
+    """Human-review tuning candidate; never an automatic rule edit."""
+
+    model_config = {"frozen": True}
+
+    rule_id: str
+    agent_id: str
+    false_positive_count: int = Field(ge=3)
+
+
+class DailyStatsResponse(BaseModel):
+    """Read-only daily SOC statistics response (UTC only)."""
+
+    model_config = {"frozen": True}
+
+    date: str
+    timezone: str
+    volumes: DailyStatsVolumesResponse
+    false_positive_rate: float = Field(ge=0.0, le=1.0)
+    false_positive_count: int = Field(ge=0)
+    feedback_count: int = Field(ge=0)
+    top_rules: list[DailyStatsTopRuleResponse] = Field(default_factory=list)
+    tuning_suggestions: list[DailyStatsTuningSuggestionResponse] = Field(default_factory=list)
 
 
 class RuleSummary(BaseModel):
@@ -607,6 +652,34 @@ def _correlation_member_read(member: CorrelationMemberSummary) -> CorrelationMem
     )
 
 
+def daily_stats_from_record(record: DailyStatsRecord) -> DailyStatsResponse:
+    """Project the service aggregate onto the public API contract."""
+    return DailyStatsResponse(
+        date=record.date.isoformat(),
+        timezone=record.timezone,
+        volumes=DailyStatsVolumesResponse(
+            alerts=record.volumes.alerts,
+            incidents=record.volumes.incidents,
+            feedback=record.volumes.feedback,
+        ),
+        false_positive_rate=record.false_positive_rate,
+        false_positive_count=record.false_positive_count,
+        feedback_count=record.feedback_count,
+        top_rules=[
+            DailyStatsTopRuleResponse(rule_id=item.rule_id, count=item.count)
+            for item in record.top_rules
+        ],
+        tuning_suggestions=[
+            DailyStatsTuningSuggestionResponse(
+                rule_id=item.rule_id,
+                agent_id=item.agent_id,
+                false_positive_count=item.false_positive_count,
+            )
+            for item in record.tuning_suggestions
+        ],
+    )
+
+
 def correlation_context_summary_from_record(
     context: CorrelationContextRecord,
 ) -> CorrelationContextSummaryRead:
@@ -687,6 +760,10 @@ __all__ = [
     "CorrelationListResponse",
     "CorrelationMemberEvidenceRead",
     "CorrelationMemberRead",
+    "DailyStatsResponse",
+    "DailyStatsTopRuleResponse",
+    "DailyStatsTuningSuggestionResponse",
+    "DailyStatsVolumesResponse",
     "IncidentDetail",
     "IncidentListResponse",
     "IncidentSummary",
@@ -696,6 +773,7 @@ __all__ = [
     "alert_summary_from_record",
     "correlation_context_summary_from_record",
     "correlation_detail_from_records",
+    "daily_stats_from_record",
     "incident_detail_from_domain",
     "incident_summary_from_domain",
     "make_pagination",

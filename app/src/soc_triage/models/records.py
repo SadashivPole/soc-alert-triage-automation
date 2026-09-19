@@ -9,7 +9,7 @@ definition without the models package importing ``api/``.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any
 from uuid import UUID
 
@@ -140,6 +140,54 @@ class TimelineEvent(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
+class DailyStatsVolumes(BaseModel):
+    """Persisted-record volumes for one UTC reporting window."""
+
+    model_config = {"frozen": True}
+
+    alerts: int = Field(ge=0)
+    incidents: int = Field(ge=0)
+    feedback: int = Field(ge=0)
+
+
+class DailyStatsTopRule(BaseModel):
+    """A bounded, aggregate-only rule volume."""
+
+    model_config = {"frozen": True}
+
+    rule_id: str
+    count: int = Field(ge=0)
+
+
+class DailyStatsTuningSuggestion(BaseModel):
+    """A human-review candidate derived from repeated false-positive feedback."""
+
+    model_config = {"frozen": True}
+
+    rule_id: str
+    agent_id: str
+    false_positive_count: int = Field(ge=3)
+
+
+class DailyStatsRecord(BaseModel):
+    """Aggregate daily statistics returned by the read-side service.
+
+    This record intentionally contains counts and identifiers only. It never
+    carries alert payloads, notes, or other analyst-controlled free text.
+    """
+
+    model_config = {"frozen": True}
+
+    date: date
+    timezone: str
+    volumes: DailyStatsVolumes
+    false_positive_rate: float = Field(ge=0.0, le=1.0)
+    false_positive_count: int = Field(ge=0)
+    feedback_count: int = Field(ge=0)
+    top_rules: list[DailyStatsTopRule] = Field(default_factory=list)
+    tuning_suggestions: list[DailyStatsTuningSuggestion] = Field(default_factory=list)
+
+
 __all__ = [
     "DEFAULT_PAGE_LIMIT",
     "MAX_PAGE_LIMIT",
@@ -148,6 +196,10 @@ __all__ = [
     "CorrelationEvidenceItem",
     "CorrelationMemberRecord",
     "CorrelationMemberSummary",
+    "DailyStatsRecord",
+    "DailyStatsTopRule",
+    "DailyStatsTuningSuggestion",
+    "DailyStatsVolumes",
     "PersistedAlert",
     "TimelineEvent",
 ]

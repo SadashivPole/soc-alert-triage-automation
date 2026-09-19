@@ -10,6 +10,7 @@ from .incident_evidence import router as incident_evidence_router
 from .incident_notes import router as incident_notes_router
 from .incident_thehive import router as incident_thehive_router
 from .incidents import router as incidents_router
+from .stats import router as stats_router
 
 api_router = APIRouter()
 
@@ -23,3 +24,4 @@ api_router.include_router(incident_assignment_router)
 api_router.include_router(incident_notes_router)
 api_router.include_router(incident_evidence_router)
 api_router.include_router(incident_thehive_router)
+api_router.include_router(stats_router)

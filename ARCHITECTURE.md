@@ -586,6 +586,26 @@ Workflows are exported JSON under `n8n/workflows/` (version-controlled; import p
 | WF5 | `soc-analyst-feedback` | n8n Form trigger (`/form/soc-analyst-feedback-form`) + machine webhook `/webhook/soc-analyst-feedback` | form pages (alert_id, analyst_email, verdict allow-list, notes) → validate → POST `/api/v1/alerts/{id}/feedback` (token auth) → confirmation |
 | WF6 | `soc-daily-digest` | Cron 07:00 UTC | query API stats endpoints → email digest (volumes, top rules, FP rate, tuning suggestions) |
 
+**Phase 3.9 stats contract and WF6 behavior.** `GET /api/v1/stats/daily` is a read-only
+aggregate surface protected by the existing shared n8n token. It accepts an optional
+`date=YYYY-MM-DD`; without one it reports the previous UTC calendar day. The reporting
+window is `[00:00:00, next day 00:00:00)` in UTC. It returns alert rows received,
+incidents created, and feedback records received; false-positive count and total
+feedback denominator/rate; top ten rules ordered by count descending then `rule_id`
+ascending; and rule/agent pairs with at least three false-positive records in the
+window. The response contains identifiers and counts only, never raw alert payloads.
+Tuning suggestions are advisory: a human must approve any Wazuh rule change and the
+platform never edits rules automatically. The implementation uses aggregate queries
+through the existing SQLite-default repository layer; the optional PostgreSQL profile
+is not a new dependency of the stats feature.
+
+WF6 (`WF6_soc-daily-digest.json`) runs at 07:00 UTC, calls that endpoint with the
+existing environment-backed shared token, validates the response, formats deterministic
+plain-text and HTML, and sends through the existing `SMTP Lab Mailpit` credential.
+HTTP failures continue to a validation node and then a no-email fail-safe branch. The
+export contains no secrets and does not include raw event fields. Runtime Docker/n8n
+execution remains an operator-side validation item unless explicitly recorded.
+
 **n8n error strategy:** a global error workflow posts to the API `/internal/n8n-errors`
 for audit + console visibility; every node sets explicit continue/fail behavior; secrets
 live in n8n credentials (encrypted via `N8N_ENCRYPTION_KEY`), never in exported JSON —

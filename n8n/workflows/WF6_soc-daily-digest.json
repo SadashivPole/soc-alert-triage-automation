@@ -1,0 +1,262 @@
+{
+  "name": "WF6_soc-daily-digest",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 7 * * *"
+            }
+          ]
+        }
+      },
+      "id": "wf6-schedule-daily",
+      "name": "Schedule Trigger - Daily 07:00 UTC",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        240,
+        300
+      ],
+      "notes": "Daily digest schedule. Workflow timezone is explicitly UTC."
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ ($env.TRIAGE_API_BASE_URL || 'http://triage-api:8000') + '/api/v1/stats/daily' }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-N8N-Token",
+              "value": "={{ $env.N8N_WEBHOOK_TOKEN || $env.N8N_CALLBACK_TOKEN }}"
+            },
+            {
+              "name": "Accept",
+              "value": "application/json"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 5000,
+          "retryOnFail": true,
+          "maxRetries": 2,
+          "alwaysOutputData": true,
+          "continueOnFail": true
+        }
+      },
+      "id": "wf6-get-daily-stats",
+      "name": "HTTP - Get Daily Stats",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        500,
+        300
+      ],
+      "notes": "Read-only aggregate stats call. The URL and shared token come from n8n environment variables. Endpoint errors are passed to validation and never become an email digest.",
+      "continueOnFail": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "functionCode": "// Validate the aggregate response before formatting an email.\n// Fail safely: invalid/error responses take the no-email branch.\nconst input = $input.first().json || {};\nconst volumes = input.volumes || {};\nconst isDate = typeof input.date === 'string' && /^\\d{4}-\\d{2}-\\d{2}$/.test(input.date);\nconst isNumber = value => typeof value === 'number' && Number.isFinite(value) && value >= 0;\nconst valid = !input.error && input.timezone === 'UTC' && isDate\n  && isNumber(volumes.alerts) && isNumber(volumes.incidents) && isNumber(volumes.feedback)\n  && isNumber(input.false_positive_count) && isNumber(input.feedback_count)\n  && typeof input.false_positive_rate === 'number'\n  && Array.isArray(input.top_rules) && Array.isArray(input.tuning_suggestions);\n\nif (!valid) {\n  return { json: { _digest: { valid: false, reason: 'stats_endpoint_failed' } } };\n}\n\nreturn { json: { ...input, _digest: { valid: true } } };"
+      },
+      "id": "wf6-validate-stats",
+      "name": "Validate Stats Response",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 2,
+      "position": [
+        760,
+        300
+      ],
+      "notes": "Only validated aggregate fields continue to formatting. Invalid responses are skipped without exposing response details."
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "wf6-valid-stats-rule",
+                    "leftValue": "={{ $json._digest.valid }}",
+                    "rightValue": true,
+                    "operator": {
+                      "type": "boolean",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "valid"
+            }
+          ]
+        },
+        "options": {
+          "fallbackOutput": "extra",
+          "renameFallbackOutput": "skipped"
+        }
+      },
+      "id": "wf6-switch-valid",
+      "name": "Switch - Stats Available?",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [
+        1000,
+        300
+      ],
+      "notes": "Only a validated response reaches email formatting. Endpoint failures follow the fallback output and produce no email."
+    },
+    {
+      "parameters": {
+        "functionCode": "// Deterministic plain-text and HTML digest from aggregate fields only.\nconst stats = $input.first().json;\nconst escapeHtml = value => String(value)\n  .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')\n  .replace(/\\\"/g, '&quot;').replace(/'/g, '&#39;');\nconst fixed = value => Number(value).toFixed(4);\nconst lexical = (left, right) => String(left) < String(right) ? -1 : (String(left) > String(right) ? 1 : 0);\nconst topRules = [...stats.top_rules]\n  .sort((a, b) => Number(b.count) - Number(a.count) || lexical(a.rule_id, b.rule_id))\n  .map((item, index) => `${index + 1}. ${item.rule_id} — ${item.count}`);\nconst suggestions = [...stats.tuning_suggestions]\n  .sort((a, b) => Number(b.false_positive_count) - Number(a.false_positive_count)\n    || lexical(a.rule_id, b.rule_id)\n    || lexical(a.agent_id, b.agent_id))\n  .map(item => `${item.rule_id} / agent ${item.agent_id} — ${item.false_positive_count} false positives`);\nconst topText = topRules.length ? topRules.join('\\n') : 'None';\nconst suggestionText = suggestions.length ? suggestions.join('\\n') : 'None';\nconst bodyText = [\n  `SOC daily digest — ${stats.date} (${stats.timezone})`,\n  '',\n  'Volumes',\n  `Alerts: ${stats.volumes.alerts}`,\n  `Incidents: ${stats.volumes.incidents}`,\n  `Feedback: ${stats.volumes.feedback}`,\n  '',\n  `False-positive rate: ${fixed(stats.false_positive_rate)} (${stats.false_positive_count} / ${stats.feedback_count})`,\n  '',\n  'Top rules',\n  topText,\n  '',\n  'Tuning suggestions — human approval required; no rule changes were made',\n  suggestionText\n].join('\\n');\nconst topHtml = topRules.map(item => `<li>${escapeHtml(item)}</li>`).join('') || '<li>None</li>';\nconst suggestionHtml = suggestions.map(item => `<li>${escapeHtml(item)}</li>`).join('') || '<li>None</li>';\nconst html = `<h2>SOC daily digest — ${escapeHtml(stats.date)} (${escapeHtml(stats.timezone)})</h2>`\n  + `<h3>Volumes</h3><ul><li>Alerts: ${stats.volumes.alerts}</li><li>Incidents: ${stats.volumes.incidents}</li><li>Feedback: ${stats.volumes.feedback}</li></ul>`\n  + `<p>False-positive rate: ${fixed(stats.false_positive_rate)} (${stats.false_positive_count} / ${stats.feedback_count})</p>`\n  + `<h3>Top rules</h3><ol>${topHtml}</ol>`\n  + `<h3>Tuning suggestions — human approval required; no rule changes were made</h3><ul>${suggestionHtml}</ul>`;\nreturn { json: { _digest: { valid: true, subject: `[SOC] Daily digest — ${stats.date}`, bodyText, html } } };"
+      },
+      "id": "wf6-format-digest",
+      "name": "Format Daily Digest",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 2,
+      "position": [
+        1240,
+        220
+      ],
+      "notes": "Deterministic text and HTML rendering. The digest contains counts and safe identifiers only; tuning suggestions require human approval."
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{ $env.SOC_FROM_EMAIL }}",
+        "toEmail": "={{ $env.SOC_L1_EMAIL || $env.SOC_L2_EMAIL }}",
+        "subject": "={{ $json._digest.subject }}",
+        "emailType": "html",
+        "html": "={{ $json._digest.html }}",
+        "text": "={{ $json._digest.bodyText }}",
+        "options": {}
+      },
+      "id": "wf6-email-digest",
+      "name": "Email - Daily Digest",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2,
+      "position": [
+        1480,
+        220
+      ],
+      "notes": "Daily digest email through the existing SMTP Lab Mailpit credential. Recipients and sender come from n8n environment variables.",
+      "credentials": {
+        "smtp": {
+          "id": "smtp-lab-mailpit",
+          "name": "SMTP Lab Mailpit"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "functionCode": "// Safe terminal branch: do not email an incomplete report.\nreturn { json: { status: 'skipped', reason: 'stats_endpoint_failed' } };"
+      },
+      "id": "wf6-safe-stop",
+      "name": "Fail Safe - Skip Digest",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 2,
+      "position": [
+        1240,
+        420
+      ],
+      "notes": "Stats failure is non-destructive and produces no email. Operators can inspect the n8n execution status without a partial digest."
+    }
+  ],
+  "connections": {
+    "Schedule Trigger - Daily 07:00 UTC": {
+      "main": [
+        [
+          {
+            "node": "HTTP - Get Daily Stats",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP - Get Daily Stats": {
+      "main": [
+        [
+          {
+            "node": "Validate Stats Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Stats Response": {
+      "main": [
+        [
+          {
+            "node": "Switch - Stats Available?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Switch - Stats Available?": {
+      "main": [
+        [
+          {
+            "node": "Format Daily Digest",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Fail Safe - Skip Digest",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Daily Digest": {
+      "main": [
+        [
+          {
+            "node": "Email - Daily Digest",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "UTC"
+  },
+  "versionId": "wf6-soc-daily-digest-v1",
+  "id": "wf6-soc-daily-digest",
+  "meta": {
+    "instanceId": "soc-lab",
+    "description": "Phase 3.9 daily SOC digest: 07:00 UTC schedule, read-only stats API, deterministic safe formatting, existing SMTP Lab Mailpit credential, no automatic Wazuh rule changes, and no autonomous actions."
+  },
+  "pinData": {},
+  "tags": [
+    {
+      "name": "soc",
+      "createdAt": "2026-09-18"
+    },
+    {
+      "name": "phase-3.9",
+      "createdAt": "2026-09-18"
+    }
+  ]
+}

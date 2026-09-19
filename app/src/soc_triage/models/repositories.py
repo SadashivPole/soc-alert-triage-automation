@@ -19,7 +19,7 @@ from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import Select, String, delete, func, select, update
+from sqlalchemy import Integer, Select, String, delete, func, select, update
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.compiler import compiles
 from sqlalchemy.orm import Session
@@ -343,6 +343,96 @@ class AlertRepository:
         if row is None:
             raise LookupError(f"alert {alert_id} not found")
         row.normalized_payload = canonical.model_dump(mode="json")
+
+
+class StatsRepository:
+    """Aggregate-only read access for the daily statistics surface.
+
+    Every query is constrained to a half-open UTC window. The repository
+    selects denormalized columns and counts only; it never loads
+    ``normalized_payload`` or analyst notes, which keeps the digest bounded
+    and prevents raw event data from crossing the stats boundary.
+    """
+
+    MAX_TUNING_SUGGESTIONS = 100
+
+    def __init__(self, session: Session) -> None:
+        self._session = session
+
+    @staticmethod
+    def _window_filter(statement: Any, column: Any, start: datetime, end: datetime) -> Any:
+        """Apply the shared ``[start, end)`` UTC window to a statement."""
+        return statement.where(column >= as_utc(start), column < as_utc(end))
+
+    def count_alerts(self, start: datetime, end: datetime) -> int:
+        """Count alerts received in the reporting window."""
+        statement = self._window_filter(
+            select(func.count(Alert.alert_id)), Alert.received_at, start, end
+        )
+        return int(self._session.execute(statement).scalar_one())
+
+    def count_incidents(self, start: datetime, end: datetime) -> int:
+        """Count incidents created in the reporting window."""
+        statement = self._window_filter(
+            select(func.count(Incident.incident_id)), Incident.created_at, start, end
+        )
+        return int(self._session.execute(statement).scalar_one())
+
+    def feedback_counts(self, start: datetime, end: datetime) -> tuple[int, int]:
+        """Return ``(all_feedback, false_positive_feedback)`` for the window."""
+        statement = self._window_filter(
+            select(
+                func.count(AnalystFeedback.id),
+                func.coalesce(
+                    func.sum((AnalystFeedback.verdict == "false_positive").cast(Integer)),
+                    0,
+                ),
+            ),
+            AnalystFeedback.received_at,
+            start,
+            end,
+        )
+        total, false_positive = self._session.execute(statement).one()
+        return int(total), int(false_positive)
+
+    def top_rules(self, start: datetime, end: datetime) -> list[tuple[str, int]]:
+        """Return the ten highest-volume rules with stable tie-breaking."""
+        count = func.count(Alert.alert_id)
+        statement = self._window_filter(
+            select(Alert.rule_id, count.label("rule_count")), Alert.received_at, start, end
+        )
+        rows = self._session.execute(
+            statement.group_by(Alert.rule_id).order_by(count.desc(), Alert.rule_id.asc()).limit(10)
+        ).all()
+        return [(str(rule_id), int(rule_count)) for rule_id, rule_count in rows]
+
+    def tuning_suggestions(self, start: datetime, end: datetime) -> list[tuple[str, str, int]]:
+        """Find rule/agent pairs with at least three false-positive records.
+
+        Feedback records, rather than distinct alerts, are counted: the
+        architecture's trigger is three analyst feedback records for the same
+        rule and agent. Ordering is count descending, then rule and agent id
+        ascending so repeated calls produce byte-stable JSON.
+        """
+        count = func.count(AnalystFeedback.id)
+        statement = self._window_filter(
+            select(Alert.rule_id, Alert.agent_id, count.label("false_positive_count")),
+            AnalystFeedback.received_at,
+            start,
+            end,
+        )
+        rows = self._session.execute(
+            statement.join(Alert, Alert.alert_id == AnalystFeedback.alert_id)
+            .where(AnalystFeedback.verdict == "false_positive")
+            .group_by(Alert.rule_id, Alert.agent_id)
+            .having(count >= 3)
+            .order_by(count.desc(), Alert.rule_id.asc(), Alert.agent_id.asc())
+            .limit(self.MAX_TUNING_SUGGESTIONS)
+        ).all()
+        return [
+            (str(rule_id), str(agent_id), int(false_positive_count))
+            for rule_id, agent_id, false_positive_count in rows
+        ]
 
 
 class DedupeStateRepository:
@@ -1262,5 +1352,6 @@ __all__ = [
     "FeedbackRepository",
     "IncidentRepository",
     "NotificationRepository",
+    "StatsRepository",
     "as_utc",
 ]

@@ -128,7 +128,7 @@ current tree, not intent.
 | UC-4 | Alert dedup & recurrence-based escalation (same rule+agent keeps firing) | L1 | normalize → dedupe → score (recurrence) |  implemented |
 | UC-5 | Known-good allowlist suppression (backup servers, vulnerability scanners) | L1 | enrich (allowlist) → suppress |  implemented · locally validated — static `allowlist.v1` + `asset_inventory.v1` policies load deterministically and drive the existing `allowlist` (−20) factor and the `suppress` route; disabled by default, the shipped policy has no entries, and the evaluation corpus does not yet pin a `suppress` outcome |
 | UC-6 | Analyst triage verdict capture (true/false positive) → tuning dataset | L2 | feedback → tune |  feedback capture  implemented; automated weight tuning  outstanding |
-| UC-7 | Daily digest: volumes, top rules, false-positive rate | L2/manager | report |  outstanding (no digest workflow or stats endpoint) |
+| UC-7 | Daily digest: volumes, top rules, false-positive rate | L2/manager | report | ✅ implemented · locally validated — `GET /api/v1/stats/daily` + WF6 export; Docker/n8n live execution not claimed |
 | UC-8 | MITRE ATT&CK-tagged alert routing to the right runbook | L1 | score → route |  outstanding (ATT&CK tags flow through from Wazuh rule metadata and influence the score; runbook linkage is not implemented — Phase 6) |
 
 ## Architecture Overview
@@ -304,8 +304,10 @@ Status markers describe the current tree.
    the API; verdicts are stored, audited, and drive incident transitions.
    `contain_requested` records an **approval-required request** and executes nothing.
     Automated weight tuning from feedback is not implemented.
-9.  **Report** — a scheduled digest (volumes, top rules, FP rate) is designed but not
-   implemented; there is no stats endpoint and no digest workflow.
+9.  **Report** — `GET /api/v1/stats/daily` returns UTC-bounded volumes, denominator-clear
+   false-positive metrics, deterministic top rules, and human-review tuning suggestions;
+   WF6 formats the aggregate response into a daily 07:00 UTC email digest. Rule changes
+   are never automated.
 10.  **Incident lifecycle & console** — incidents persist with a state machine,
     read APIs, timeline, and TTL auto-close sweeper; the static SOC console provides the
     analyst queue/board/detail views.
@@ -315,7 +317,7 @@ Status markers describe the current tree.
 | Technology | Role | Status in this repo | Cost |
 | --- | --- | --- | --- |
 | **Python 3.11+ / FastAPI** | Triage API: ingest, normalize, dedupe, enrich, score, decide, REST surface |  implemented (CI on 3.11 & 3.12) | Free |
-| **n8n 1.85.0** | Workflow orchestration: notification fan-out, SLA escalation, analyst feedback form |  WF1/WF2/WF3/WF5 exported + import helper (⬜ WF6 digest) | Free, self-hosted |
+| **n8n 1.85.0** | Workflow orchestration: notification fan-out, SLA escalation, analyst feedback form, daily digest | ✅ WF1/WF2/WF3/WF5/WF6 exported + import helper; WF6 is statically validated, not live-executed here | Free, self-hosted |
 | **Wazuh 4.9.2** | SIEM/XDR: rules, decoders, FIM, agent telemetry — the alert source |  `full` profile + integrator implemented, live-validated end-to-end; custom ruleset authored but not live-validated | Free, self-hosted |
 | **MISP** | Self-hosted threat-intel platform for IOC attribute lookups |  provider + optional `intel` compose profile implemented (lookup-only, disabled by default); deterministic seeding guide in `misp/` — statically validated, not live-started in CI | Free, self-hosted |
 | **VirusTotal public API** | IOC enrichment (hashes, IPs, domains, URLs) |  client implemented with rate limiting/retries (disabled by default, fake-transport tested only) | Free public tier (4 req/min, 500/day) |
@@ -346,7 +348,7 @@ soc-alert-triage-automation/
 │   └── tests/                 # unit/ · integration/ · evaluation/ · js/ · fixtures/
 ├── evaluation/                # Phase 5 evaluation: corpus.json · ground_truth.json · metrics.py · evaluator.py
 │                              # Phase 6 coverage catalog: detection_catalog.yaml
-├── n8n/                       # exported workflow JSONs (WF1/WF2/WF3/WF5) + import docs + lab SMTP credential template
+├── n8n/                       # exported workflow JSONs (WF1/WF2/WF3/WF5/WF6) + import docs + lab SMTP credential template
 ├── wazuh/                     # manager config, custom rules/decoders, integrator script, entrypoint hook (Phase 4)
 ├── misp/                      # optional MISP `intel` profile: seeding guide, synthetic fixture, read-only check
 ├── deploy/                    # triage-api Dockerfile, Prometheus/Grafana provisioning
@@ -457,10 +459,10 @@ Full detail, acceptance criteria, and evidence per phase:
 | **Phase 0 — Foundation** | Docs & scaffolding |  implemented · locally validated | ARCHITECTURE, DEVELOPMENT_PLAN, SECURITY, CONTRIBUTING, README, `.env.example`, directory tree, `check_secrets.sh` |
 | **Phase 1 — MVP triage pipeline** | Core triage loop |  implemented · locally validated | FastAPI app, ingest + normalize + dedupe, SQLite models + Alembic, scoring v1, decisions v1, n8n webhook client, compose (API+n8n+Mailpit), unit/integration tests.  `scripts/send_test_alert` simulator not implemented |
 | **Phase 2 — Enrichment & threat intelligence** | Threat intel | ✅ implemented · locally validated | Phase 2.2 static local policies ✅ (47 tests); Phase 2.3 enrichment TTL cache ✅ (61 tests); Phase 2.4 MISP `intel` profile + seeding guide ✅ statically validated (57 tests); Phase 2.5 scoring v2 `threat_intel` factor ✅ (56 tests); Phase 2.6 late-enrichment re-score ✅ (12+3 tests); Phase 2.7A automatic sweep ✅ (7+9 tests, disabled by default, idempotent); Phase 2.7B provider verdict visibility in WF2 ✅; VT/MISP fake-transport coverage, disabled by default, plus live VirusTotal/Mailpit verification for 2.7B; MISP remains not live-validated; §8.2 weight rescaling explicit open item |
-| **Phase 3 — Incidents, analyst workflow & observability** | Analyst loop | 🟡 partially validated | Incidents (3.1), lifecycle + feedback (3.2), read APIs + timeline (3.3), TTL sweeper (3.4), static console (3.5), runbooks (3.6), Prometheus `/metrics` + optional Grafana (3.7), PostgreSQL profile (3.8) ✅ implemented · locally validated; stats endpoints + digest (3.9) ⬜ |
+| **Phase 3 — Incidents, analyst workflow & observability** | Analyst loop | 🟡 partially validated | Incidents (3.1), lifecycle + feedback (3.2), read APIs + timeline (3.3), TTL sweeper (3.4), static console (3.5), runbooks (3.6), Prometheus `/metrics` + optional Grafana (3.7), PostgreSQL profile (3.8), and stats endpoints + WF6 digest (3.9) ✅ implemented · locally validated; named Docker/runtime gaps remain |
 | **Phase 4 — Real Wazuh integration & approved response** | Full integration |  partially validated | Source-audited + live-validated `full` profile and `custom-triage` integrator (4.1/4.2), agent enrollment validated (4.4), custom rules/decoders authored (4.3, not live-validated);  approval/containment runbook (4.5), TheHive CE export (4.6), failure-spool + duplicate-delivery runtime checks and 10k/day soak (4.7) |
 | **Phase 5 — Deterministic detection evaluation** | Detection quality measurement |  implemented · locally validated | Labeled corpus, ground truth, confusion matrix, precision/recall/F1/FPR, runtime evaluation tests replaying fixtures through the real ingest path |
-| **Phase 6 — Detection quality & correlation** | Coverage & correlation | 🟡 in progress (5 of 6 items) |  detection coverage framework ✅ (6.1), ATT&CK mapping ✅ (6.2), expanded regression corpus ✅ (6.3, 24 scenarios), cross-alert correlation ✅ (6.4), analyst explainability ✅ (6.5); detection-quality CI gates 🟡 (6.6 corpus-quality pin of 24 scenarios; precision/recall/F1 thresholds not asserted) |
+| **Phase 6 — Detection quality & correlation** | Coverage & correlation | ✅ implemented · locally validated | detection coverage framework ✅ (6.1), ATT&CK mapping ✅ (6.2), expanded regression corpus ✅ (6.3, 24 scenarios), cross-alert correlation ✅ (6.4), analyst explainability ✅ (6.5), detection-quality CI gates ✅ (6.6 — precision/recall/F1/FPR and confusion-matrix bounds asserted by the existing pytest CI job) |
 
 No release tags have been cut: `CHANGELOG.md` is still under `[Unreleased]` and the Python
 package version is `0.1.0a1`.
@@ -600,7 +602,7 @@ have not been exercised against a live rule match**.
 - **Observability** — runtime-validated for Phase 3.7, with the post-Phase-4 `/metrics`
   hygiene re-check outstanding.
 
-** Outstanding (scoped, not done):** `scripts/send_test_alert` simulator; the ARCHITECTURE.md §8.2 `scoring.v2` weight *rescaling* (the intel factor itself is implemented; the pre-existing weights are unchanged); stats endpoints + daily digest workflow (WF6, Phase 3.9); runbook linkage from decisions; TheHive CE export; containment approval/response runbook; Phase 4 failure-spool, duplicate-delivery, `/metrics` hygiene, and 10k alerts/day soak validations; CI coverage threshold and nightly compose smoke job. (The Phase 2.2 static allowlist + asset-inventory loaders, the Phase 2.3 enrichment TTL cache, the Phase 2.6 late-enrichment re-score, the Phase 2.7A automatic sweep, the Phase 2.7B provider verdict visibility, and the Phase 3.8 PostgreSQL profile previously listed here are implemented · locally validated; what remains for allowlisting is an operator-side run with a populated policy and a corpus-level `suppress` pin, what remains for cache and late-enrichment is a live-provider run, sweep disabled by default, and PostgreSQL live validation requires an operator-supplied `postgres` profile.)
+** Outstanding (scoped, not done):** `scripts/send_test_alert` simulator; the ARCHITECTURE.md §8.2 `scoring.v2` weight *rescaling* (the intel factor itself is implemented; the pre-existing weights are unchanged); runbook linkage from decisions; TheHive CE export; containment approval/response runbook; Phase 4 failure-spool, duplicate-delivery, `/metrics` hygiene, and 10k alerts/day soak validations; CI coverage threshold and nightly compose smoke job. WF6/n8n live execution is not claimed in this sandbox. (The Phase 2.2 static allowlist + asset-inventory loaders, the Phase 2.3 enrichment TTL cache, the Phase 2.6 late-enrichment re-score, the Phase 2.7A automatic sweep, the Phase 2.7B provider verdict visibility, and the Phase 3.8 PostgreSQL profile previously listed here are implemented · locally validated; what remains for allowlisting is an operator-side run with a populated policy and a corpus-level `suppress` pin, what remains for cache and late-enrichment is a live-provider run, sweep disabled by default, and PostgreSQL live validation requires an operator-supplied `postgres` profile.)
 
 **🔮 Future / planned:** a pinned corpus-level correlation outcome. The detection coverage
 framework, ATT&CK mapping registry, 24-scenario regression corpus, cross-alert correlation,
@@ -626,10 +628,11 @@ provider/loader exists and is disabled by default; only the missing corpus-level
   placeholders. If it is ever built, it must be off by default, non-load-bearing, and
   strictly additive: scores, tiers, decisions, routing, and audit rows must remain
   byte-identical with it disabled or enabled (ADR-5 in `ARCHITECTURE.md`).
-- **TheHive CE case export** (optional) and **daily digest** (Phase 3.9)
-  remain additive lab conveniences with no implementation today; **PostgreSQL profile**
-  (Phase 3.8) is implemented · locally validated (optional `postgres` compose profile,
-  SQLite default preserved).
+- **TheHive CE case export** (optional) remains an additive future lab convenience.
+  The Phase 3.9 daily digest is implemented through the aggregate stats endpoint and
+  WF6 export; its Docker/n8n runtime execution is not claimed here. The **PostgreSQL
+  profile** (Phase 3.8) remains implemented · locally validated (optional `postgres`
+  compose profile, SQLite default preserved).
 
 ## Documentation Index
 
