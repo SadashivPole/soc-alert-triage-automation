@@ -10,7 +10,12 @@ Three wiring defects were identified by auditing against the `wazuh/wazuh-manage
 - **Defect 3**: All integrator logs discarded — now appends structured JSON to `/var/ossec/logs/integrations.log` (still mirrored to stderr), matching Wazuh's own shipped integrations (instead of `> /dev/null 2>&1`).
 
 **B. Live runtime validation performed by the user on 2026-09-06**
-The full Phase 4.1/4.2 pipeline was live-validated on the user's Windows/Docker Desktop environment. The following checks were verified:
+The full Phase 4.1/4.2 pipeline was live-validated on the user's Windows/Docker Desktop environment using a disposable Windows Wazuh agent (007). The following checks were verified:
+
+**C. Additional live runtime validation performed by the user on 2026-09-19**
+Additional V7/V9 validation was performed on the same Windows/Docker Desktop environment using active Windows Wazuh agent 009. Three fresh `Phase4Test` / rule `60602` detections (`V7-SPOOL-01`, `V7-SPOOL-02`, `V7-SPOOL-03`) were generated while `triage-api` was unavailable. The events were confirmed in `alerts.json`, but `wazuh-integratord` was processing an older rule `19007` backlog and did not reach the fresh `60602` events during the outage window.
+
+For controlled replay testing, the exact real Wazuh alert bodies were extracted from `alerts.json` and replayed through the **real installed** `/var/ossec/integrations/custom-triage` integrator using a dedicated `WAZUH_INTEGRATOR_SPOOL_DIR` (`/tmp/v7-controlled-spool`) inside the running Wazuh manager container. This controlled spool was separate from the production spool and was owned by `wazuh:wazuh` with mode `0700`. The API was stopped for the buffering portion and restarted for replay/drain validation.
 
 ## V1. Preconditions
 - `docker compose --profile full up -d` succeeded
@@ -54,13 +59,12 @@ The full Phase 4.1/4.2 pipeline was live-validated on the user's Windows/Docker 
 ## V7. Failure / spool behaviour
 - [x] Retry budget exercised against the stopped `triage-api`; `integrations.log` showed `attempts=3` followed by `alert_buffered` — **VERIFIED**
 - [x] Spool directory is `0700`; buffered entries are `0600`; no `.tmp` files remained — **VERIFIED**
-- [ ] A fresh Wazuh-agent-generated detection while `triage-api` is unavailable reaches the real installed integrator and is buffered — **REMAINS OUTSTANDING**. A real Windows Wazuh agent (009) generated three fresh `60602` detections during the API outage and the events were written to `alerts.json`, but `wazuh-integratord` was still processing an older `19007` backlog and did not reach those fresh `60602` events during the outage window.
+- [ ] A fresh Wazuh-agent-generated detection while `triage-api` is unavailable reaches the real installed integrator and is buffered — **REMAINS OUTSTANDING**. Agent 009 generated three fresh `60602` detections during the API outage and the events were written to `alerts.json`, but `wazuh-integratord` was still processing an older `19007` backlog and did not reach those fresh `60602` events during the outage window.
 - [x] Three exact real Wazuh-generated alert bodies from the fresh-agent run were replayed through the real installed integrator after API recovery; `spool_flush` delivered `3`, the controlled spool drained to empty, and the API received `V7-SPOOL-01` → `V7-SPOOL-02` → `V7-SPOOL-03` in marker order — **VERIFIED**
 - [x] Multi-entry replay ordering beyond a single buffered item was exercised with three real Wazuh alert bodies and replayed oldest-first through the real installed integrator — **VERIFIED**
 - [x] Replay produced occurrence aggregation for `wazuh:60602:009`; the new generation recorded occurrences `1 → 2 → 3` — **VERIFIED**
 - [x] Exact replay of `V7-SPOOL-03` was absorbed as an idempotent duplicate: `delivery_count` changed `1 → 2`, `duplicate_deliveries` changed `0 → 1`, and the `alert.duplicate_absorbed` audit record was persisted — **VERIFIED**
 - [x] No duplicate incident was observed in the previously validated live Wazuh incident replay path; the two validated Wazuh alerts were linked to the same incident (`INC-2026-09-19-0001`) — **VERIFIED**
-- [ ] V7-specific fresh-agent outage-trigger validation remains outstanding because the fresh `60602` detections were not reached by `wazuh-integratord` during the outage window — **REMAINS OUTSTANDING**
 
 ## V8. Secret / log hygiene (partially verified)
 - [x] API key absent from `integrations.log`, `ossec.log`, and `docker compose logs` — **VERIFIED**

@@ -5,21 +5,34 @@ the `integrator` script that forwards manager alerts to the Triage API, plus the
 custom rules/decoders that generate them. Design:
 [ARCHITECTURE.md](../ARCHITECTURE.md#13-docker--deployment-architecture), ADR-6.
 
-**Status: Phase 4.1 + 4.2 implemented — NOT yet validated against a live manager.**
-The `full` profile and the `custom-triage` integrator are complete and covered by
-static/mocked tests, and the wiring has been audited line-by-line against the
-pinned `wazuh/wazuh-manager:4.9.2` image and Wazuh 4.9.2 sources (that audit found
-and fixed three defects that would have broken the integration entirely — see
-CHANGELOG). **However, no real Wazuh manager or agent has been run against it yet**:
-`docker compose --profile full up`, agent enrollment, and the live
-agent → manager → integrator → API path (Phase 4.4 acceptance) remain **unverified**.
-Treat the lab steps below as untested-in-anger until someone completes them on a
-machine with Docker; the outstanding items are tracked in
-[docs/specs/phase-4-live-validation-checklist.md](../docs/specs/phase-4-live-validation-checklist.md). Custom rules/decoders (4.3) and the human-approved containment
-runbook (4.5) are still pending. The default `sim`
-mode is unchanged: with the profile disabled the pipeline runs entirely on the
-synthetic payloads in [docs/sample-alerts](../docs/sample-alerts/README.md), so
-the zero-external fallback still holds.
+**Status: Phase 4.1 + 4.2 implemented and live-validated end-to-end; V7/V8/V9 are
+partially live-validated with explicit remaining checks.**
+The `full` profile and the `custom-triage` integrator are covered by static/mocked
+tests and were audited line-by-line against the pinned `wazuh/wazuh-manager:4.9.2`
+image and Wazuh 4.9.2 sources; that audit found and fixed three defects that would
+have broken the integration entirely (see `CHANGELOG`). The fixed wiring was then
+confirmed against a real Wazuh manager on 2026-09-06 using a disposable Windows
+Wazuh agent 007: the running `ossec.conf` contained the integration block, the
+integrator was installed as `root:wazuh` `0750`, structured `integrations.log`
+entries were observed, and a real Windows alert reached the Triage API and n8n
+(checklist V2–V6).
+
+Additional V7/V9 validation was performed on 2026-09-19 with active Windows Wazuh
+agent 009. Retry/buffering, spool permissions, controlled oldest-first replay,
+occurrence aggregation, and exact-duplicate absorption were live-verified through
+the real installed integrator. The fresh agent → `wazuh-integratord` → spool path
+during an API outage remains unverified because an older rule `19007` backlog
+delayed the fresh `60602` events. The post-Phase-4 `/metrics` hygiene re-check
+remains outstanding; the secret/log hygiene checks themselves are verified. An
+exact duplicate of an `open_incident`-producing live event also remains
+unverified. See the complete evidence and remaining checks in
+[docs/specs/phase-4-live-validation-checklist.md](../docs/specs/phase-4-live-validation-checklist.md).
+
+Custom rules/decoders (4.3) and the human-approved containment runbook (4.5) are
+still pending. The default `sim` mode is unchanged: with the profile disabled the
+pipeline runs entirely on the synthetic payloads in
+[docs/sample-alerts](../docs/sample-alerts/README.md), so the zero-external
+fallback still holds.
 
 ```
 wazuh/
@@ -72,8 +85,10 @@ agent → wazuh-manager → integratord → custom-triage → POST /api/v1/alert
 
 ## Configuration (environment only — never hardcoded)
 
-All variables are documented in [`.env.example`](../.env.example) and injected by
-the `full` compose profile.
+All variables are documented in [`.env.example`](../.env.example). The `full`
+compose profile injects the variables currently forwarded by `docker-compose.yml`;
+the remaining documented tuning variables are retained for the integrator runtime
+configuration and are tracked for Compose alignment.
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
