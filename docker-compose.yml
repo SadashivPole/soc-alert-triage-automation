@@ -36,6 +36,17 @@ services:
       MISP_URL: ${MISP_URL:-}
       MISP_API_KEY: ${MISP_API_KEY:-}
       MISP_VERIFY_TLS: ${MISP_VERIFY_TLS:-1}
+      # Phase 4.6 — TheHive CE case export (optional `thehive` profile).
+      # Disable-by-empty: both THEHIVE_URL and THEHIVE_API_KEY must be non-empty
+      # to enable outbound case export (app/src/soc_triage/thehive/client.py);
+      # the defaults stay empty, so the deterministic path is untouched unless an
+      # operator opts in. The API key is never inlined here — it comes from
+      # .env / the secret store only (SECURITY.md §2).
+      THEHIVE_URL: ${THEHIVE_URL:-}
+      THEHIVE_API_KEY: ${THEHIVE_API_KEY:-}
+      THEHIVE_ORGANISATION: ${THEHIVE_ORGANISATION:-}
+      THEHIVE_VERIFY_TLS: ${THEHIVE_VERIFY_TLS:-1}
+      THEHIVE_TIMEOUT_SECONDS: ${THEHIVE_TIMEOUT_SECONDS:-10}
       # Phase 2.7A — automatic late-enrichment trigger (disabled by default).
       # Background re-assessment of persisted alerts whose enrichment changed
       # (late verdicts, retried failed lookups). No new services or queues;
@@ -376,7 +387,7 @@ services:
       - |
         set -eu
         missing=""
-        require() { [ -n "$2" ] || missing="$missing $1"; }
+        require() { [ -n "$${2}" ] || missing="$${missing} $${1}"; }
         require MISP_DB_PASSWORD "$${MISP_DB_PASSWORD:-}"
         require MISP_DB_ROOT_PASSWORD "$${MISP_DB_ROOT_PASSWORD:-}"
         require MISP_REDIS_PASSWORD "$${MISP_REDIS_PASSWORD:-}"
@@ -385,8 +396,8 @@ services:
         require MISP_ADMIN_KEY "$${MISP_ADMIN_KEY:-}"
         require MISP_GPG_PASSPHRASE "$${MISP_GPG_PASSPHRASE:-}"
         require MISP_ENCRYPTION_KEY "$${MISP_ENCRYPTION_KEY:-}"
-        if [ -n "$missing" ]; then
-          echo "ERROR: the 'intel' profile is missing required .env values:$missing" >&2
+        if [ -n "$${missing}" ]; then
+          echo "ERROR: the 'intel' profile is missing required .env values:$${missing}" >&2
           echo "Generate each value locally (see misp/seeding.md) - no defaults are shipped on purpose." >&2
           exit 1
         fi
@@ -677,6 +688,259 @@ services:
           cpus: "1.0"
           memory: 512M
 
+  # ---------------------------------------------------------------------------
+  # Phase 4.6 — optional `thehive` profile: TheHive 5 Community Edition (CE).
+  #
+  # `docker compose --profile thehive up -d` adds ONLY the TheHive CE stack
+  # (Cassandra database + Elasticsearch index + TheHive application) behind a
+  # one-shot preflight guard. It is strictly additive and OPTIONAL: no default
+  # service depends_on it, nothing is published to the host (internal
+  # `soc-core` only), and with the profile disabled the stack keeps running
+  # unchanged — `POST /api/v1/incidents/{id}/thehive` stays disabled by empty
+  # `THEHIVE_URL`/`THEHIVE_API_KEY` (app/src/soc_triage/core/config.py,
+  # app/src/soc_triage/thehive/client.py). SQLite remains the triage-api
+  # default; TheHive is an unrelated case-management convenience.
+  #
+  # Community Edition, never Premium: `strangebee/thehive` is the free,
+  # open-source TheHive 5 CE image (AGPL-3.0 licensed core; no license key is
+  # required to run it). No Premium image, connector, or feature is referenced
+  # anywhere in this repository. TheHive 5 requires Cassandra (database) and
+  # Elasticsearch (index) — they are part of this profile for the same reason.
+  #
+  # Every image is pinned to the exact vendor tags from the upstream
+  # StrangeBeeCorp/docker `versions.env` (2026-09-19 audit): cassandra 4.1.12,
+  # elasticsearch 8.19.21, thehive 5.7.6. No floating/`latest` tags.
+  #
+  # Why a guard container instead of `${VAR:?}` on the services below: Compose
+  # interpolates the WHOLE file (profile-gated services included) before it
+  # filters inactive profiles, so a required-variable syntax here would make the
+  # default `docker compose up -d` fail until TheHive was configured — the
+  # opposite of "strictly additive". `thehive-preflight` runs only with the
+  # profile and aborts it, with an explicit message, before any container can
+  # start with an upstream default credential. TheHive/Cassandra/Elasticsearch
+  # defaults therefore stay empty and unsafe states are impossible rather than
+  # merely discouraged (same pattern as misp-preflight / postgres-preflight).
+  #
+  # The TheHive image self-configures its Cassandra and Elasticsearch wiring
+  # from entrypoint flags (`--cql-hostnames`, `--cql-username`, `--es-*`,
+  # `--secret`) per the vendor's Docker entrypoint documentation, so this
+  # profile owns no HOCON config files and no committed secrets.
+  # ---------------------------------------------------------------------------
+
+  # One-shot, network-less secret/certificate guard for the `thehive` profile.
+  thehive-preflight:
+    image: busybox:1.37.0
+    container_name: soc-thehive-preflight
+    profiles: ["thehive"]
+    restart: "no"
+    # No network, no capabilities, no writable filesystem: it only inspects env.
+    network_mode: none
+    read_only: true
+    environment:
+      # Interpolation-safe (`:-` with an empty default) so every other profile
+      # keeps parsing; the check below is what enforces "must be set" at runtime.
+      THEHIVE_SECRET: ${THEHIVE_SECRET:-}
+      THEHIVE_ORG_NAME: ${THEHIVE_ORG_NAME:-}
+      THEHIVE_ADMIN_USERNAME: ${THEHIVE_ADMIN_USERNAME:-}
+      THEHIVE_ADMIN_PASSWORD: ${THEHIVE_ADMIN_PASSWORD:-}
+      THEHIVE_API_KEY: ${THEHIVE_API_KEY:-}
+      ELASTICSEARCH_PASSWORD: ${ELASTICSEARCH_PASSWORD:-}
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -eu
+        missing=""
+        require() { [ -n "$${2}" ] || missing="$${missing} $${1}"; }
+        require THEHIVE_SECRET "$${THEHIVE_SECRET:-}"
+        require THEHIVE_ORG_NAME "$${THEHIVE_ORG_NAME:-}"
+        require THEHIVE_ADMIN_USERNAME "$${THEHIVE_ADMIN_USERNAME:-}"
+        require THEHIVE_ADMIN_PASSWORD "$${THEHIVE_ADMIN_PASSWORD:-}"
+        require THEHIVE_API_KEY "$${THEHIVE_API_KEY:-}"
+        require ELASTICSEARCH_PASSWORD "$${ELASTICSEARCH_PASSWORD:-}"
+        if [ -n "$${missing}" ]; then
+          echo "ERROR: the 'thehive' profile is missing required .env values:$${missing}" >&2
+          echo "Generate each value locally (see thehive/README.md) - no defaults are shipped on purpose." >&2
+          exit 1
+        fi
+        echo "thehive profile: required secrets are present"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 32M
+
+  thehive-cassandra:
+    image: cassandra:4.1.12
+    container_name: soc-thehive-cassandra
+    restart: unless-stopped
+    profiles: ["thehive"]
+    depends_on:
+      thehive-preflight:
+        condition: service_completed_successfully
+    environment:
+      # Mirrors the vendor's own `testing` stack exactly: these are the only
+      # variables the upstream TheHive/Cassandra stack sets. The official
+      # Docker Hub cassandra image runs with the default superuser
+      # `cassandra` / password `cassandra` until an operator alters them; the
+      # app connects with those documented upstream defaults below. This is a
+      # lab posture matching the vendor's testing stack — NOT production (no
+      # production claims anywhere in this repo).
+      CASSANDRA_CLUSTER_NAME: TheHive
+      CASSANDRA_AUTHENTICATOR: PasswordAuthenticator
+      CASSANDRA_NUM_TOKENS: "4"
+      MAX_HEAP_SIZE: 1024M
+      HEAP_NEWSIZE: 256M
+    volumes:
+      - thehive-cassandra-data:/var/lib/cassandra
+    networks:
+      - soc-core
+    healthcheck:
+      # Same readiness probe as the vendor's own prod/testing stacks: the DB is
+      # ready once cqlsh can list keyspaces with the default superuser.
+      test:
+        - "CMD-SHELL"
+        - "cqlsh -u cassandra -p cassandra -e 'describe keyspaces' || exit 1"
+      start_period: 120s
+      interval: 2s
+      timeout: 1s
+      retries: 3
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 2G
+
+  thehive-elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.19.21
+    container_name: soc-thehive-elasticsearch
+    restart: unless-stopped
+    profiles: ["thehive"]
+    depends_on:
+      thehive-preflight:
+        condition: service_completed_successfully
+    environment:
+      # The vendor's `testing`/`prod1-thehive` Elasticsearch variables, with
+      # two explicit additions required to keep ES 8's auto-enabled security
+      # coherent with TheHive's plain-HTTP basic-auth index connector
+      # (`elasticsearch.http.auth type=basic` over hostname:9200): HTTP and
+      # transport TLS are disabled for the single-node lab index. TheHive
+      # reaches ES only over the internal `soc-core` network. `ELASTIC_PASSWORD`
+      # is the ES `elastic` superuser password, supplied from .env and enforced
+      # by `thehive-preflight` (never committed).
+      http.host: 0.0.0.0
+      discovery.type: single-node
+      cluster.name: ${THEHIVE_ES_CLUSTER_NAME:-hive}
+      bootstrap.memory_lock: "true"
+      ES_JAVA_OPTS: -Xms1G -Xmx1G
+      xpack.security.enabled: "true"
+      xpack.security.http.ssl.enabled: "false"
+      xpack.security.transport.ssl.enabled: "false"
+      ELASTIC_PASSWORD: ${ELASTICSEARCH_PASSWORD:-}
+    volumes:
+      - thehive-elasticsearch-data:/usr/share/elasticsearch/data
+    networks:
+      - soc-core
+    healthcheck:
+      # Plain-HTTP basic-auth readiness probe (SSL disabled above) — the same
+      # `_cat/health` path the vendor's stacks probe.
+      test:
+        - "CMD-SHELL"
+        - "curl -s -f -u 'elastic:$${ELASTIC_PASSWORD}' http://localhost:9200/_cat/health || exit 1"
+      start_period: 60s
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+      memlock:
+        soft: -1
+        hard: -1
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 2G
+
+  thehive:
+    image: strangebee/thehive:5.7.6
+    container_name: soc-thehive
+    restart: unless-stopped
+    profiles: ["thehive"]
+    depends_on:
+      thehive-preflight:
+        condition: service_completed_successfully
+      thehive-cassandra:
+        condition: service_healthy
+      thehive-elasticsearch:
+        condition: service_healthy
+    command:
+      # Vendor-documented entrypoint flags (TheHive 5 Docker entrypoint
+      # settings): wire Cassandra + Elasticsearch and pin the session secret
+      # from .env. No HOCON is committed; no Cortex is enabled.
+      - "--secret"
+      - "${THEHIVE_SECRET:-}"
+      - "--cql-hostnames"
+      - "thehive-cassandra"
+      - "--cql-username"
+      - "cassandra"
+      - "--cql-password"
+      - "cassandra"
+      - "--cql-keyspace"
+      - "thehive"
+      - "--es-hostnames"
+      - "thehive-elasticsearch"
+      - "--es-username"
+      - "elastic"
+      - "--es-password"
+      - "${ELASTICSEARCH_PASSWORD:-}"
+      - "--es-index"
+      - "thehive"
+      - "--storage-directory"
+      - "/opt/thp/thehive/files"
+    environment:
+      JAVA_OPTS: >-
+        -Xms1G
+        -Xmx1G
+        -XX:MaxMetaspaceSize=400m
+        -XX:ReservedCodeCacheSize=250m
+    volumes:
+      - thehive-data:/opt/thp/thehive/files
+    networks:
+      - soc-core
+    healthcheck:
+      # The application exposes the public status on port 9000; the vendor's own
+      # stacks use this exact HTTP path. TheHive 5.7 is intended to sit behind
+      # Nginx; this profile intentionally does NOT publish port 9000, so the
+      # probe is the only consumer (internal, no off-stack request is made).
+      test: ["CMD-SHELL", "curl -sf http://localhost:9000/thehive/api/status || exit 1"]
+      start_period: 120s
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 2G
+
 networks:
   soc-core:
     driver: bridge
@@ -717,4 +981,13 @@ volumes:
   # default stack). Holds the PostgreSQL data; TRIAGE_DB_URL must point at it
   # when the profile is enabled.
   postgres-data:
+    driver: local
+  # Phase 4.6 — `thehive` profile state only (additive; never required by the
+  # default stack). Holds Cassandra data, the Elasticsearch index, and TheHive
+  # file storage. TheHive case data is lab-synthetic only (SECURITY.md §5).
+  thehive-cassandra-data:
+    driver: local
+  thehive-elasticsearch-data:
+    driver: local
+  thehive-data:
     driver: local

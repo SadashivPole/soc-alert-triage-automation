@@ -158,6 +158,7 @@ def _app_health_paths() -> set[str]:
         triage_db_url="sqlite:///:memory:",
         triage_ingest_api_key="test-ingest-key-not-a-real-secret",
         n8n_callback_token="test-callback-token-not-a-real-secret",
+        n8n_webhook_token="test-webhook-token-not-a-real-secret",
     )
     app = create_app(settings=settings)
     return set(app.openapi()["paths"])
@@ -294,7 +295,7 @@ def _observability_files() -> dict[str, str]:
     }
 
 
-def test_observability_profile_gates_only_the_two_new_services() -> None:
+def test_optional_profiles_gate_only_expected_services() -> None:
     """prometheus/grafana are profile-gated; default services are not."""
     compose = _compose()
     assert set(compose["services"]) == {
@@ -316,6 +317,12 @@ def test_observability_profile_gates_only_the_two_new_services() -> None:
         # Phase 3.8: postgres profile (postgres + preflight guard).
         "postgres-preflight",
         "postgres",
+        # Phase 4.6: TheHive CE profile is separately gated and asserted
+        # in test_thehive_profile.py.
+        "thehive-preflight",
+        "thehive-cassandra",
+        "thehive-elasticsearch",
+        "thehive",
     }
     for name in ("prometheus", "grafana"):
         assert compose["services"][name].get("profiles") == ["observability"], name
@@ -324,6 +331,13 @@ def test_observability_profile_gates_only_the_two_new_services() -> None:
         assert compose["services"][name].get("profiles") == ["intel"], name
     for name in ("postgres-preflight", "postgres"):
         assert compose["services"][name].get("profiles") == ["postgres"], name
+    for name in (
+        "thehive-preflight",
+        "thehive-cassandra",
+        "thehive-elasticsearch",
+        "thehive",
+    ):
+        assert compose["services"][name].get("profiles") == ["thehive"], name
     for name in ("triage-api", "n8n", "mailpit"):
         assert "profiles" not in compose["services"][name], name
 
@@ -395,6 +409,11 @@ def test_observability_services_are_not_required_dependencies() -> None:
             "wazuh-manager",
             "postgres",
             "postgres-preflight",
+            # Phase 4.6: TheHive remains optional for the default stack.
+            "thehive-preflight",
+            "thehive-cassandra",
+            "thehive-elasticsearch",
+            "thehive",
         }, (name, depends_on)
         assert service.get("ports") == facts["ports"], name
         assert service.get("networks") == facts["networks"], name
@@ -418,6 +437,10 @@ def test_observability_services_are_not_required_dependencies() -> None:
         "misp-core-gnupg",
         # Phase 3.8 — `postgres` profile state only (additive).
         "postgres-data",
+        # Phase 4.6: TheHive profile state only (additive).
+        "thehive-cassandra-data",
+        "thehive-elasticsearch-data",
+        "thehive-data",
     }
 
 

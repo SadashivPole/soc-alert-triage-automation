@@ -34,7 +34,7 @@ history. Status claims elsewhere are descriptive, not authoritative.
 | **Phase 1 — MVP triage pipeline** | ✅ Implemented · locally validated | Ingest → normalize → dedupe → score → decide → notify, tests green (⬜ simulator script) |
 | **Phase 2 — Enrichment & threat intelligence** | ✅ Implemented · locally validated | 2.2 static allowlist + asset inventory ✅ (47 tests); 2.3 enrichment response TTL cache ✅ (61 tests); 2.4 MISP client + `intel` profile + seeding guide ✅ statically validated (57 tests — no live MISP run); 2.5 scoring v2 `threat_intel` factor ✅ (56 tests); 2.6 late-enrichment re-score ✅ (12 unit +3 integration); 2.7A automatic sweep ✅ (7+9 tests, disabled by default, idempotent); 2.7B provider-specific IOC verdict visibility in WF2 ✅; VT/MISP fake-transport, disabled by default; §8.2 weight rescaling explicit open item |
 | **Phase 3 — Incidents, analyst workflow & observability** | 🟡 Partially validated | Incidents, lifecycle, read APIs, timeline, sweeper, console, runbooks, `/metrics` + Grafana profile, PostgreSQL profile, and Phase 3.9 stats/WF6 are implemented; Docker/n8n runtime validation and other named gaps remain |
-| **Phase 4 — Real Wazuh integration & approved response** | 🟡 Partially validated | 4.1/4.2 source-audited + live-validated end-to-end; 4.4 validated; 4.3 authored but not live-validated; 4.5/4.6/4.7 and runtime failure/duplicate checks ⬜ |
+| **Phase 4 — Real Wazuh integration & approved response** | 🟡 Partially validated | 4.1/4.2 source-audited + live-validated end-to-end; 4.4 validated; 4.3 authored but not live-validated; 4.6 TheHive CE export + `thehive` profile ✅ implemented · test-validated only (no live CE run claimed); 4.7 soak harness ✅ authored (`scripts/phase47_soak.py`), execution not performed; 4.5 containment runbook and runtime failure/duplicate checks ⬜ |
 | **Phase 5 — Deterministic detection evaluation** | ✅ Implemented · locally validated | Labeled corpus, ground truth, confusion matrix, precision/recall/F1/FPR, runtime evaluation tests |
 | **Phase 6 — Detection quality & correlation** | ✅ Implemented · locally validated | Detection coverage framework ✅ (6.1); ATT&CK mapping ✅ (6.2 — registry + rendered view + validation tests); expanded regression corpus ✅ (6.3, 24 scenarios); cross-alert correlation ✅ (6.4); analyst explainability ✅ (6.5); detection-quality CI gates ✅ (6.6 — precision/recall/F1/FPR and confusion-matrix bounds asserted by the existing pytest CI job) |
 
@@ -165,8 +165,8 @@ aggregates, while mutating paths remain audit-logged.
 | 4.3 | Custom rules/decoders showcase (SSH, FIM, web) | 🟡 authored, **not live-validated** | `wazuh/ruleset/rules/soc-triage-rules.xml` (rules 100100–100121 with ATT&CK tags) + decoders, mounted read-only in the `full` profile; no live rule match recorded |
 | 4.4 | Agent enrollment docs (lab agents) | ✅ documented + live-validated | `wazuh/README.md`; a real Windows agent (007) enrolled and active during live validation |
 | 4.5 | Human-approved containment runbook (active-response *proposal* + audit) | ⬜ outstanding | the API records `contain_requested` as an **approval-required request** and writes `incident.containment_requested` audit entries; there is no response-execution runbook or approval workflow |
-| 4.6 | Optional TheHive CE case export (CE only) | ⬜ outstanding | no TheHive code, profile, or docs beyond design |
-| 4.7 | Performance soak: 10k synthetic alerts/day with SLA-safe timings | ⬜ outstanding | no soak harness exists |
+| 4.6 | Optional TheHive CE case export (CE only) | ✅ implemented · locally validated (fake-transport/tests; **no live TheHive CE run**) | `app/src/soc_triage/thehive/{client,export}.py` + `api/incident_thehive.py` + settings (`THEHIVE_*`, disable-by-empty) + optional additive `thehive` compose profile (pinned CE image `strangebee/thehive:5.7.6` + Cassandra/Elasticsearch, internal `soc-core` only, no host ports, preflight guard, `no-new-privileges`) + contract tests + `thehive/README.md`. Premium never required. Live validation is operator-side only. |
+| 4.7 | Performance soak: 10k synthetic alerts/day with SLA-safe timings | ✅ implemented · locally validated as authored/tested artifact; **soak execution not performed here** | `scripts/phase47_soak.py` (subprocess `curl.exe` POSTs unique synthetic alerts to `/api/v1/alerts/ingest`, expects HTTP 202, reports throughput/latency percentiles + the 10k/day arrival rate); documented in `scripts/README.md` (defaults: `--count 100`, `--base-url http://127.0.0.1:8000`, `--timeout 30`, Windows `curl.exe` dependency). Not executed in this validation run. |
 
 **Acceptance:** real Wazuh alert (agent → manager → integrator → API) visible with
 enrichment and scoring (✅ met in the live validation below) · containment proposal
@@ -228,8 +228,8 @@ Desktop, real Windows Wazuh agent 007) — ✅ locally validated**
 | V9 idempotent duplicate delivery at runtime (occurrences increment, no duplicate row/incident) | ⬜ outstanding (covered by automated tests, not by a live run) |
 | 4.3 custom rules/decoder live match | ⬜ outstanding |
 | 4.5 containment approval runbook / response proposal flow | ⬜ outstanding |
-| 4.6 TheHive CE export | ⬜ outstanding |
-| 4.7 10k alerts/day soak with SLA-safe timings | ⬜ outstanding |
+| 4.6 TheHive CE export **live** run against a started CE instance | ⬜ outstanding (client/export/API + `thehive` profile implemented · test-validated only; **no live CE run claimed**, operator-side) |
+| 4.7 10k alerts/day soak execution | ⬜ outstanding (harness `scripts/phase47_soak.py` authored; **not executed here**) |
 
 ---
 
@@ -554,8 +554,8 @@ deterministic seeds for any randomized behavior (jitter tests use seeded RNG).
 
 - Semantic versioning intent from `v0.1.0`; **no tags have been cut yet** — `CHANGELOG.md`
   remains under `[Unreleased]` and the package version is `0.1.0a1`.
-- `CHANGELOG.md` documents changes per phase (Phases 1A–4.2 today; the Phase 5 entry is
-  ⬜ outstanding).
+- `CHANGELOG.md` documents changes per phase (Phases 1A–4.7 recorded today; the Phase 5
+  entry is ⬜ outstanding).
 - Branching: trunk-based — short-lived feature branches → PR → CI gates → merge to `main`
   (see CONTRIBUTING.md).
 
