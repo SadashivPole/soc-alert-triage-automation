@@ -308,8 +308,19 @@ def test_postgres_data_roundtrip(postgres_engine) -> None:
             "last_seen": now.isoformat(),
             "event_identity": f"test:{alert_id}",
         },
-        "risk": {"score": 63, "tier": "medium", "factors": []},
-        "decision": {"action": "queue_l1", "severity": "SEV2", "reasons": []},
+        "risk": {
+            "score": 63,
+            "tier": "medium",
+            "engine_version": "scoring.v2",
+            "factors": [],
+            "summary": "Score 63 (medium)",
+        },
+        "decision": {
+            "action": "queue_l1",
+            "severity": "SEV2",
+            "reasons": [],
+            "decided_at": now.isoformat(),
+        },
         "iocs": [],
         "enrichment_status": "skipped",
     }
@@ -481,7 +492,18 @@ def test_postgres_utc_datetime_behavior(postgres_engine) -> None:
                 rule_level=5,
                 agent_id="001",
                 agent_name="host-001",
-                normalized_payload={"test": True},
+                normalized_payload={
+                    "alert_id": str(alert_id),
+                    "source": "wazuh",
+                    "received_at": aware.isoformat(),
+                    "source_event": {
+                        "rule": {"id": "5710", "level": 5, "description": "test"},
+                        "agent": {"id": "001", "name": "host-001"},
+                        "location": "/var/log/auth.log",
+                    },
+                    "iocs": [],
+                    "enrichment_status": "skipped",
+                },
                 created_at=aware,
             )
         )
@@ -503,8 +525,29 @@ def test_postgres_json_payload_behavior(postgres_engine) -> None:
     alert_id = uuid.uuid4()
     now = datetime.now(UTC)
     payload = {
-        "risk": {"tier": "critical", "score": 88},
-        "decision": {"severity": "SEV1", "action": "open_incident"},
+        "alert_id": str(alert_id),
+        "source": "wazuh",
+        "received_at": now.isoformat(),
+        "source_event": {
+            "rule": {"id": "5710", "level": 12, "description": "test"},
+            "agent": {"id": "001", "name": "host-001"},
+            "location": "/var/log/auth.log",
+        },
+        "risk": {
+            "score": 88,
+            "tier": "critical",
+            "engine_version": "scoring.v2",
+            "factors": [],
+            "summary": "Score 88 (critical)",
+        },
+        "decision": {
+            "severity": "SEV1",
+            "action": "open_incident",
+            "reasons": [],
+            "decided_at": now.isoformat(),
+        },
+        "iocs": [],
+        "enrichment_status": "skipped",
         "nested": {"a": {"b": "deep"}},
     }
 

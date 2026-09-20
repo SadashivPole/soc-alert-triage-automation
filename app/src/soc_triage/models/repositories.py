@@ -108,7 +108,8 @@ class _JsonExtractCompat(expression.FunctionElement):
 
     type = String()
     name = "json_extract_compat"
-    inherit_cache = True
+    # SQL generation depends on the instance-specific JSON path; do not cache it.
+    inherit_cache = False
 
     def __init__(self, column: Any, path: str) -> None:
         if isinstance(path, str) and path.startswith("$."):
