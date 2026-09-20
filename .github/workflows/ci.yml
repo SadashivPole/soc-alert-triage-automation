@@ -37,6 +37,12 @@ jobs:
       - run: mypy src
       - run: pytest
 
+  compose-config:
+    name: Docker Compose config validation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker compose config -q
   secret-scan:
     name: Secret scan
     runs-on: ubuntu-latest
