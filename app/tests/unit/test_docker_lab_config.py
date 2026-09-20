@@ -623,6 +623,21 @@ def test_wazuh_manager_takes_all_credentials_from_the_environment() -> None:
     assert env["TRIAGE_API_BASE_URL"] == "${TRIAGE_API_BASE_URL:-http://triage-api:8000}"
 
 
+def test_wazuh_manager_forwards_all_integrator_tunables() -> None:
+    """Compose must forward every Wazuh integrator tuning variable."""
+    env = _wazuh_service()["environment"]
+
+    expected = {
+        "WAZUH_INTEGRATOR_BACKOFF_SECONDS": "${WAZUH_INTEGRATOR_BACKOFF_SECONDS:-0.5}",
+        "WAZUH_INTEGRATOR_SPOOL_MAX_AGE_SECONDS": "${WAZUH_INTEGRATOR_SPOOL_MAX_AGE_SECONDS:-604800}",
+        "WAZUH_INTEGRATOR_SPOOL_FLUSH_BATCH": "${WAZUH_INTEGRATOR_SPOOL_FLUSH_BATCH:-25}",
+        "WAZUH_INTEGRATOR_LOG_FILE": "${WAZUH_INTEGRATOR_LOG_FILE:-/var/ossec/logs/integrations.log}",
+    }
+
+    for name, value in expected.items():
+        assert env[name] == value, (name, env.get(name))
+
+
 def test_full_profile_mounts_are_read_only_and_repo_sourced() -> None:
     """Config/scripts come from this repo, read-only; only state is writable."""
     volumes = _wazuh_service()["volumes"]
