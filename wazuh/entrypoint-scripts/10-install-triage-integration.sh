@@ -25,7 +25,7 @@ set -euo pipefail
 
 SRC_DIR=${TRIAGE_INTEGRATION_SRC:-/triage-integration}
 DEST_DIR=/var/ossec/integrations
-LOG_FILE=/var/ossec/logs/integrations.log
+LOG_FILE=${WAZUH_INTEGRATOR_LOG_FILE:-/var/ossec/logs/integrations.log}
 
 log() { echo "[triage-integration] $*"; }
 
