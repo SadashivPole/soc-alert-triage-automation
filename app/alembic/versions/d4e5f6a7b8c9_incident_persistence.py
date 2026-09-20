@@ -143,6 +143,7 @@ def _column_defs(inspector: Any, table: str) -> dict[str, tuple[str, bool]]:
         definitions[col["name"].lower()] = (rendered_type, bool(col["nullable"]))
     return definitions
 
+
 def _index_defs(inspector: Any, table: str) -> dict[str, tuple[tuple[str, ...], bool]]:
     """Index name -> (lower-cased column tuple, unique)."""
     return {

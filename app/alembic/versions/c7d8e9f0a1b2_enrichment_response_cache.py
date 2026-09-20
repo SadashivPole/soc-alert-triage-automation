@@ -88,6 +88,7 @@ def _column_defs(inspector: Any, table: str) -> dict[str, tuple[str, bool]]:
         definitions[column["name"]] = (rendered_type, bool(column["nullable"]))
     return definitions
 
+
 def _index_defs(inspector: Any, table: str) -> dict[str, tuple[tuple[str, ...], bool]]:
     return {
         index["name"]: (tuple(index["column_names"]), bool(index["unique"]))
