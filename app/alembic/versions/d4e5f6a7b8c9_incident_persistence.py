@@ -134,10 +134,14 @@ def _table_exists(inspector: Any, name: str) -> bool:
 
 def _column_defs(inspector: Any, table: str) -> dict[str, tuple[str, bool]]:
     """Column name -> (upper-cased type rendering, nullable)."""
-    return {
-        col["name"].lower(): (str(col["type"]).strip().upper(), bool(col["nullable"]))
-        for col in inspector.get_columns(table)
-    }
+    definitions: dict[str, tuple[str, bool]] = {}
+    for col in inspector.get_columns(table):
+        column_type = col["type"]
+        rendered_type = str(column_type).strip().upper()
+        if rendered_type == "TIMESTAMP" and getattr(column_type, "timezone", False):
+            rendered_type = "TIMESTAMP WITH TIME ZONE"
+        definitions[col["name"].lower()] = (rendered_type, bool(col["nullable"]))
+    return definitions
 
 
 def _index_defs(inspector: Any, table: str) -> dict[str, tuple[tuple[str, ...], bool]]:
