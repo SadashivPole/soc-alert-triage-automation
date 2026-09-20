@@ -42,7 +42,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: docker compose config -q
+
+      - name: Configure CI-only Compose secrets
+        run: |
+          echo "N8N_ENCRYPTION_KEY=$(openssl rand -hex 24)" >> "$GITHUB_ENV"
+
+      - name: Validate Docker Compose configuration
+        run: docker compose config -q
   secret-scan:
     name: Secret scan
     runs-on: ubuntu-latest
