@@ -476,6 +476,35 @@ def test_spool_flush_preserves_chronological_order(tmp_path: Path) -> None:
     assert [json.loads(c["body"])["n"] for c in sender.calls] == [0, 1, 2, 3, 4]
 
 
+def test_spool_flush_honors_configured_batch_limit(tmp_path: Path) -> None:
+    config = make_config(
+        tmp_path,
+        WAZUH_INTEGRATOR_MAX_ATTEMPTS="1",
+        WAZUH_INTEGRATOR_SPOOL_FLUSH_BATCH="2",
+    )
+    assert config.spool_flush_batch == 2
+
+    spool = integrator.Spool(config.spool_dir)
+
+    for index in range(5):
+        spool.enqueue(json.dumps({"n": index}).encode())
+
+    sender = FakeSender([ok(202), ok(202)])
+
+    delivered, remaining = integrator.flush_spool(
+        spool,
+        config,
+        sender=sender,
+        sleep=lambda _: None,
+    )
+
+    assert delivered == 2
+    assert remaining == 3
+    assert len(sender.calls) == 2
+    assert [json.loads(call["body"])["n"] for call in sender.calls] == [0, 1]
+    assert [json.loads(path.read_text())["n"] for path in spool.entries()] == [2, 3, 4]
+
+
 def test_spool_flush_stops_at_the_first_transient_failure(tmp_path: Path) -> None:
     """A still-down API must not be hammered with the whole backlog."""
     config = make_config(tmp_path, WAZUH_INTEGRATOR_MAX_ATTEMPTS="1")
