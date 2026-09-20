@@ -68,11 +68,11 @@ For controlled replay testing, the exact real Wazuh alert bodies were extracted 
 - [x] Exact replay of `V7-SPOOL-03` was absorbed as an idempotent duplicate: `delivery_count` changed `1 → 2`, `duplicate_deliveries` changed `0 → 1`, and the `alert.duplicate_absorbed` audit record was persisted — **VERIFIED**
 - [x] No duplicate incident was observed in the previously validated live Wazuh incident replay path; the two validated Wazuh alerts were linked to the same incident (`INC-2026-09-19-0001`) — **VERIFIED**
 
-## V8. Secret / log hygiene (partially verified)
+## V8. Secret / log hygiene (verified)
 - [x] API key absent from `integrations.log`, `ossec.log`, and `docker compose logs` — **VERIFIED**
 - [x] No alert body / `full_log` content in any log line — **VERIFIED**
 - [x] No `user:pass@` URL anywhere in logs — **VERIFIED**
-- [ ] `/metrics` unchanged — no new families, no Wazuh data — **REMAINS OUTSTANDING** (verify after any fix)
+- [x] `/metrics` unchanged — live scrape on 2026-09-20 exposed only the approved application metric families and no Wazuh-related metric data — **VERIFIED**
 
 ## V9. Idempotent duplicate delivery
 - [x] Exact same alert/rule/agent replay was absorbed idempotently; no second alert row was created, `delivery_count` incremented `1 → 2`, and `duplicate_deliveries` incremented `0 → 1` — **VERIFIED**

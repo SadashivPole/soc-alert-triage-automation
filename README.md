@@ -675,9 +675,9 @@ docker compose --profile intel up -d          # + self-hosted MISP (internal onl
 > Desktop — `triage-api` (`/health`, `/ready`, `/metrics` all 200), Prometheus
 > (`triage-api:8000/metrics` UP, 15 s scrape, port 9090 not host-published), and Grafana
 > (localhost:3000, Phase 3.7 dashboard loading with metrics populated) all verified
-> healthy. That validation predates the Phase 4 Wazuh work; the follow-up check that
-> `/metrics` exposes no new families and no Wazuh data (checklist V8) is still outstanding
-> until it is reconciled with recorded evidence.
+> healthy. That validation predates the Phase 4 Wazuh work; the post-Phase-4 `/metrics`
+> hygiene re-check is now runtime-verified on 2026-09-20: the live scrape exposes only
+> the approved application metric families and no Wazuh-related metric data.
 
 ## Validation Status & Known Gaps
 
@@ -715,20 +715,18 @@ integrator → API end-to-end). The custom rules/decoders in `wazuh/ruleset/` re
   path, repeated Wazuh alerts attached to one incident (`INC-2026-09-19-0001`) rather
   than opening a second. The production spool contained unrelated older `19007` backlog
   entries during this validation and was not treated as an empty baseline. Still
-  outstanding: an exact duplicate of an `open_incident`-producing live event; and the
-  post-Phase-4 `/metrics` hygiene re-check (V8 — the secret/log hygiene checks themselves
-  are verified).
+  outstanding: an exact duplicate of an `open_incident`-producing live event.
 - **Phase 2 enrichment** — provider logic is covered by fake HTTP transports; Phase 2.7B also received live VirusTotal enrichment + Mailpit notification verification. No live MISP lookup has been recorded. The Phase 2.4 `intel` profile and seeding guide/fixture are validated statically only — MISP was not started, so no live lookup is claimed. Phase 2.2 static policies need no transport (local file load + pure matching), validated by automated tests and CI only — shipped policy files contain no entries, no Docker-lab operator run. Phase 2.3 response TTL cache likewise validated by automated tests and CI only (fake transports, temporary SQLite) — no live-provider run, disabled by default. Phase 2.6 re-score and 2.7A sweep are validated by targeted unit/integration tests only — no live-provider run, sweep disabled by default, idempotent fingerprint guard, fail-open.
 - **n8n workflows** — exported JSON, import helper, and static/security tests pass.
   Docker/n8n runtime startup and workflow activation were live-validated on
   Windows/Docker Desktop, and the notification/Mailpit flow was validated; WF6
   scheduled execution itself was not live-triggered, and there is no automated n8n
   execution test in CI.
-- **Observability** — runtime-validated for Phase 3.7; the post-Phase-4 `/metrics` hygiene
-  re-check (no new families, no Wazuh data — checklist V8) remains outstanding until it is
-  reconciled with recorded evidence.
+- **Observability** — runtime-validated for Phase 3.7, with the post-Phase-4 `/metrics`
+  hygiene re-check now runtime-verified on 2026-09-20. The live scrape exposes only the
+  approved application metric families and no Wazuh-related metric data.
 
-** Outstanding (scoped, not done):** the ARCHITECTURE.md §8.2 `scoring.v2` weight *rescaling* (the intel factor itself is implemented; the pre-existing weights are unchanged); runbook linkage from decisions; containment approval/response runbook; the remaining Phase 4 live checks — an exact duplicate of an `open_incident`-producing live event (V9) and the post-Phase-4 `/metrics` hygiene re-check (V8); CI coverage threshold and nightly compose smoke job. WF6 scheduled execution itself was not live-triggered. **Not outstanding (implemented · test-validated only):** the TheHive CE client/export/API and the optional `thehive` compose profile (no live TheHive CE run claimed — see `thehive/README.md`), and the Phase 4.7 soak harness `scripts/phase47_soak.py` plus its CI-runnable integrity tests (`app/tests/integration/test_phase47_soak_integrity.py`) — both implemented; the live 10k/day soak execution is not performed or claimed (see `docs/specs/phase-4.7-soak-runbook.md` and `scripts/README.md`). (The Phase 2.2 static allowlist + asset-inventory loaders, the Phase 2.3 enrichment TTL cache, the Phase 2.6 late-enrichment re-score, the Phase 2.7A automatic sweep, the Phase 2.7B provider verdict visibility, and the Phase 3.8 PostgreSQL profile previously listed here are implemented · locally validated; what remains for allowlisting is an operator-side run with a populated policy and a corpus-level `suppress` pin, what remains for cache and late-enrichment is a live-provider run, sweep disabled by default, and PostgreSQL live validation requires an operator-supplied `postgres` profile.)
+** Outstanding (scoped, not done):** the ARCHITECTURE.md §8.2 `scoring.v2` weight *rescaling* (the intel factor itself is implemented; the pre-existing weights are unchanged); runbook linkage from decisions; containment approval/response runbook; the remaining Phase 4 live check — an exact duplicate of an `open_incident`-producing live event (V9); CI coverage threshold and nightly compose smoke job. WF6 scheduled execution itself was not live-triggered. **Not outstanding (implemented · test-validated only):** the TheHive CE client/export/API and the optional `thehive` compose profile (no live TheHive CE run claimed — see `thehive/README.md`), and the Phase 4.7 soak harness `scripts/phase47_soak.py` plus its CI-runnable integrity tests (`app/tests/integration/test_phase47_soak_integrity.py`) — both implemented; the live 10k/day soak execution is not performed or claimed (see `docs/specs/phase-4.7-soak-runbook.md` and `scripts/README.md`). (The Phase 2.2 static allowlist + asset-inventory loaders, the Phase 2.3 enrichment TTL cache, the Phase 2.6 late-enrichment re-score, the Phase 2.7A automatic sweep, the Phase 2.7B provider verdict visibility, and the Phase 3.8 PostgreSQL profile previously listed here are implemented · locally validated; what remains for allowlisting is an operator-side run with a populated policy and a corpus-level `suppress` pin, what remains for cache and late-enrichment is a live-provider run, sweep disabled by default, and PostgreSQL live validation requires an operator-supplied `postgres` profile.)
 
 **🔮 Future / planned:** a pinned corpus-level correlation outcome. The detection coverage
 framework, ATT&CK mapping registry, 24-scenario regression corpus, cross-alert correlation,
