@@ -37,6 +37,21 @@ jobs:
       - run: mypy src
       - run: pytest
 
+  compose-config:
+    name: Docker Compose config validation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure CI-only Compose secrets
+        run: |
+          echo "N8N_ENCRYPTION_KEY=$(openssl rand -hex 24)" >> "$GITHUB_ENV"
+          echo "WAZUH_API_USERNAME=ci-wazuh-user" >> "$GITHUB_ENV"
+          echo "WAZUH_API_PASSWORD=ci-wazuh-password" >> "$GITHUB_ENV"
+          echo "TRIAGE_INGEST_API_KEY=ci-triage-key" >> "$GITHUB_ENV"
+
+      - name: Validate Docker Compose configuration
+        run: docker compose config -q
   secret-scan:
     name: Secret scan
     runs-on: ubuntu-latest
