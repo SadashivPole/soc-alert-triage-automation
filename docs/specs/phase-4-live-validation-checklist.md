@@ -79,6 +79,22 @@ For controlled replay testing, the exact real Wazuh alert bodies were extracted 
 - [x] Repeated alerts in the same Wazuh group incremented occurrences `1 → 2 → 3` without creating a second alert row for the exact duplicate — **VERIFIED**
 - [ ] Duplicate delivery through an `open_incident`-producing live event remains separately unverified in this Phase4Test replay, because the controlled `60602` events scored into `monitor` / `queue_l1` rather than `open_incident` — **REMAINS OUTSTANDING**
 
+## Phase 4.6 - TheHive CE live validation (VERIFIED 2026-09-21)
+
+A controlled synthetic incident was created through the supported triage API path and exported to a running TheHive Community Edition instance.
+
+- Incident: `INC-2026-09-21-0001`
+- Risk/decision: score `73`, tier `high`, `open_incident`, severity `SEV2`
+- D1 note propagation: the investigation-note endpoint returned `201`; the analyst note was present in the TheHive case description.
+- First TheHive export: case `~4320`, `created=true`, `duplicate=false`.
+- Second TheHive export: same case `~4320`, `created=false`, `duplicate=true`.
+- PostgreSQL audit: exactly one `incident.thehive_exported` row for the incident.
+- TheHive uniqueness: exactly one matching case for the incident.
+- Durable case tag: `soc-triage:INC-2026-09-21-0001`.
+- Validation scope: controlled synthetic lab event; this does not constitute a production endpoint or performance/10k-day soak claim.
+
+D1 note propagation and repeated-export idempotency are runtime-validated. The D2 recovery lookup endpoint and TheHive client path are live-validated; the complete orphan-recovery export route remains regression-tested only. Phase 4.7 soak execution is separately validated operator-side.
+
 ## V10. Regression gate
 ```bash
 cd app && pytest && ruff check . && ruff format --check . && mypy src

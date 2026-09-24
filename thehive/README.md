@@ -6,14 +6,7 @@ instance for incident case management. The platform's deterministic triage,
 scoring, and decision path runs fully without it, and outbound case export is
 **disabled unless configured** (disable-by-empty).
 
-**Status — implemented, source- and test-validated only; no live CE run is
-claimed.** The code path (`app/src/soc_triage/thehive/`), the export API
-(`POST /api/v1/incidents/{incident_id}/thehive`), and this compose profile are
-implemented and exercised by fake-transport/static tests. **TheHive CE has not
-been started in this repository's validation environment** — the development
-sandbox has no Docker daemon, so **live TheHive startup is operator-side work
-and is not claimed anywhere**. This is exactly the same posture as the MISP
-`intel` and PostgreSQL `postgres` profiles.
+**Status - implemented and live-validated on 2026-09-21.** A controlled synthetic incident (`INC-2026-09-21-0001`) was ingested through the triage API, an investigation note was persisted, and the incident was exported to a running TheHive CE instance. The first export created case `~4320`; the second export returned the same case with `duplicate: true`. PostgreSQL contained exactly one `incident.thehive_exported` audit row and the TheHive query returned exactly one matching case. The investigation note was present in the case description and the durable `soc-triage:<incident_id>` tag was present. This is operator-side lab evidence using synthetic data. The D2 recovery lookup endpoint and TheHive client path are live-validated against the running TheHive CE instance; the complete orphan-recovery export route remains covered by automated regression tests only. Phase 4.7 is separately validated operator-side.
 
 ## Community Edition only — never Premium
 
@@ -141,8 +134,17 @@ container environment dumps (the API-side client never logs secrets).
 - Defensive-only: the platform only ever **creates** cases/observables in
   TheHive; nothing deletes, closes, or otherwise modifies cases, and nothing
   reads TheHive back into the triage decision path.
-- CE only, `soc-core` only, no host ports, `no-new-privileges:true`, `cap_drop: ALL`
-  on every profile service, pinned images only.
+- CE only, `soc-core` only, no host ports, pinned images only.
+- `no-new-privileges:true` + `cap_drop: ALL` on every profile service, except
+  **`thehive-cassandra`** — a documented, runtime-proven compatibility
+  exception: the official `cassandra:4.1.12` image entrypoint drops privileges
+  with **`gosu`**, which cannot run under those two restrictions (the container
+  exits during startup). The Cassandra service is unprivileged in every other
+  respect (no host ports, `soc-core` only, pinned image, resource limits), and
+  **every other** TheHive service keeps the full `no-new-privileges:true` +
+  `cap_drop: ALL` hardening. The exception is declared and asserted by
+  `app/tests/unit/test_thehive_profile.py`, so a second service cannot lose its
+  hardening silently.
 - TheHive never serves as the `triage-api` database: **SQLite remains the default
   `TRIAGE_DB_URL`**, and the TheHive profile changes nothing about triage-api
   persistence.
@@ -150,11 +152,7 @@ container environment dumps (the API-side client never logs secrets).
 
 ## Known status & cleanup
 
-- Live validation is **operator-side**: start the profile once with a real
-  Docker host, complete the CE first login, create the service user/API key,
-  point `THEHIVE_URL`/`THEHIVE_API_KEY` at it, and exercise one export. Until
-  then the profile is static/test-validated only, and **no live TheHive CE run
-  is claimed anywhere in this repository**.
+- Live validation was completed operator-side on 2026-09-21 using controlled synthetic data. D1 investigation-note propagation and D2 idempotent export/recovery were verified against the running CE instance; case uniqueness and the single export audit row were also verified. No production-scale or 10k/day performance claim is made.
 - Tear down/cleanup (removes the containers **and the lab data volumes**):
 
   ```bash
@@ -165,3 +163,5 @@ container environment dumps (the API-side client never logs secrets).
 - Case data must follow SECURITY.md §5: synthetic lab data only, never real
   IOCs, customer data, or credentials (the export path already refuses
   `full_log`).
+
+Premium TheHive features are **not claimed or validated** by this project; the documented scope is limited to TheHive Community Edition.

@@ -66,6 +66,49 @@ def test_raw_full_log_is_not_exported():
     assert "full_log" not in result.description
 
 
+def test_route_style_note_key_is_exported():
+    """Regression: the route emits ``{"note": ...}`` and it must be exported.
+
+    Covers (1) route-style ``"note"`` key, (2) legacy ``"text"`` key still works,
+    (3) ``full_log``/secrets stay excluded from the description.
+    """
+    result = build_thehive_case_export(
+        incident={
+            "incident_id": "INC-2026-0004",
+            "status": "investigating",
+            "severity": "SEV2",
+            "full_log": "SECRET_RAW_LOG_SHOULD_NEVER_BE_EXPORTED",
+        },
+        alerts=[
+            {
+                "alert_id": "ALERT-004",
+                "full_log": "ANOTHER_SECRET_RAW_LOG",
+            }
+        ],
+        notes=[
+            # Exact shape api/incident_thehive.py builds for note_added rows.
+            {
+                "actor": "analyst",
+                "note": "Route-style investigation note",
+                "created_at": "2026-09-20T10:00:00Z",
+            },
+            # Legacy shape must keep working.
+            {"actor": "analyst", "text": "Legacy-style investigation note"},
+        ],
+    )
+
+    # 1. route-style "note" is exported (silently dropped before the fix)
+    assert "analyst: Route-style investigation note" in result.description
+    # 2. existing "text" behavior is preserved
+    assert "analyst: Legacy-style investigation note" in result.description
+    assert "Investigation Notes:" in result.description
+
+    # 3. full_log/secrets remain excluded
+    assert "SECRET_RAW_LOG_SHOULD_NEVER_BE_EXPORTED" not in result.description
+    assert "ANOTHER_SECRET_RAW_LOG" not in result.description
+    assert "full_log" not in result.description
+
+
 def test_unsupported_ioc_types_are_ignored():
     result = build_thehive_case_export(
         incident={

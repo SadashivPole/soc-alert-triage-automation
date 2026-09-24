@@ -1,6 +1,7 @@
 """TheHive integration package."""
 
 from .client import (
+    CASE_TAG_PREFIX,
     TheHiveAuthenticationError,
     TheHiveCaseResult,
     TheHiveClient,
@@ -11,6 +12,7 @@ from .client import (
 )
 
 __all__ = [
+    "CASE_TAG_PREFIX",
     "TheHiveAuthenticationError",
     "TheHiveCaseResult",
     "TheHiveClient",

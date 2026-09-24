@@ -182,7 +182,11 @@ def build_thehive_case_export(
         if not isinstance(note, dict):
             continue
 
-        text = _safe_value(note.get("notes") or note.get("text") or note.get("content"))
+        # First non-empty key wins. ``"note"`` is the key the export route emits
+        # (api/incident_thehive.py); the others are kept for compatibility.
+        text = _safe_value(
+            note.get("notes") or note.get("text") or note.get("content") or note.get("note")
+        )
 
         actor = _safe_value(note.get("actor"))
 
