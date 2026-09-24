@@ -20,12 +20,13 @@ plus one executable check of the profile's secret guard:
   preserving disable-by-empty and the deterministic-sans-TheHive default;
 * SQLite remains the triage-api default database (``TRIAGE_DB_URL`` SQLite).
 
-Out of scope here and intentionally NOT claimed: TheHive 5.7.6 wires Cassandra
-and Elasticsearch from the vendor-documented entrypoint flags; the runtime
-contracts of those flags are asserted by *playing the vendor's own* convention
-(the upstream ``prod1-thehive``/``testing`` stacks use the same Cassandra
-healthcheck, ES healthcheck, and TheHive status path), but **no live TheHive CE
-run is claimed anywhere** — live validation is operator-side only.
+Out of scope here and intentionally NOT claimed: production-scale or
+production-readiness claims. TheHive 5.7.6 wires Cassandra and Elasticsearch
+from the vendor-documented entrypoint flags; the runtime contracts of those
+flags are asserted by *playing the vendor's own* convention (the upstream
+``prod1-thehive``/``testing`` stacks use the same Cassandra healthcheck,
+ES healthcheck, and TheHive status path). Separate operator-side live
+validation evidence is documented for the TheHive CE integration.
 """
 
 from __future__ import annotations
@@ -55,6 +56,25 @@ THEHIVE_STACK_SERVICES = tuple(EXPECTED_IMAGES)
 THEHIVE_GUARD_SERVICE = "thehive-preflight"
 THEHIVE_SERVICES = (THEHIVE_GUARD_SERVICE, *THEHIVE_STACK_SERVICES)
 DEFAULT_SERVICES = ("triage-api", "n8n", "mailpit")
+
+#: TheHive services that cannot carry the default container hardening, each with
+#: the runtime-proven reason. This is an *explicit declaration*, never a silent
+#: skip: every service outside this mapping must carry the full hardening, so a
+#: newly added (or newly unhardened) service still fails the hardening test. The
+#: reasons here are mirrored in `thehive/README.md` § "Security constraints" and
+#: asserted by `test_thehive_hardening_exceptions_are_declared_and_documented`.
+#:
+#: `thehive-cassandra`: the official `cassandra:4.1.12` image entrypoint drops
+#: privileges with `gosu`, which cannot run under `no-new-privileges:true` +
+#: `cap_drop: ALL` — the container exits during startup. Runtime-proven lab
+#: finding; the service stays unprivileged otherwise (no host ports, `soc-core`
+#: only, pinned image, resource limits).
+THEHIVE_HARDENING_EXCEPTIONS: dict[str, str] = {
+    "thehive-cassandra": (
+        "the official cassandra image entrypoint drops privileges with gosu, "
+        "which fails under no-new-privileges + cap_drop:ALL"
+    ),
+}
 
 #: Secrets the profile requires — sourced from `.env`, never committed, and
 #: enforced by `thehive-preflight` (see the module docstring for why not
@@ -269,13 +289,77 @@ def test_thehive_stack_services_have_healthchecks_and_resource_limits() -> None:
 
 
 def test_thehive_services_are_hardened() -> None:
+    """Full hardening on every TheHive service except declared exceptions.
+
+    ``thehive-cassandra`` is a documented, runtime-proven exception (see
+    ``THEHIVE_HARDENING_EXCEPTIONS``). It is *exempted* explicitly — never
+    skipped blindly — so every other service must still carry the full
+    hardening, and an excepted service that does carry it must be hardened
+    consistently (no half-applied ``cap_drop``-only states).
+    """
     services = _compose()["services"]
+
     for name in THEHIVE_SERVICES:
-        assert services[name]["security_opt"] == ["no-new-privileges:true"], name
-        assert services[name]["cap_drop"] == ["ALL"], name
+        security_opt = services[name].get("security_opt")
+        cap_drop = services[name].get("cap_drop")
+
+        if name in THEHIVE_HARDENING_EXCEPTIONS:
+            # All-or-nothing: the two directives are removed together for the
+            # documented exception, never one without the other.
+            assert (security_opt is None) == (cap_drop is None), name
+
+            if security_opt is not None:
+                assert security_opt == ["no-new-privileges:true"], name
+                assert cap_drop == ["ALL"], name
+
+            continue
+
+        assert security_opt == ["no-new-privileges:true"], name
+        assert cap_drop == ["ALL"], name
+
     guard = services[THEHIVE_GUARD_SERVICE]
     assert guard["read_only"] is True
     assert guard["deploy"]["resources"]["limits"]["memory"]
+
+
+def _security_constraints_section() -> str:
+    """Return the ``## Security constraints`` section of ``thehive/README.md``."""
+    readme = THEHIVE_README.read_text(encoding="utf-8")
+    start = readme.index("## Security constraints")
+    remainder = readme[start:]
+    end = remainder.find("\n## ", 1)
+    return remainder if end == -1 else remainder[:end]
+
+
+def test_thehive_hardening_exceptions_are_declared_and_documented() -> None:
+    """The Cassandra hardening exception is explicit, bounded, and documented.
+
+    Regression guard for the runtime-proven Cassandra exception: it must not
+    silently grow (a second service quietly losing hardening) and it must not
+    exist without an in-tree rationale — so the exception can never become an
+    undocumented hole in the hardening requirement.
+    """
+    # Exactly one exception, and it is the known Cassandra compatibility case.
+    assert set(THEHIVE_HARDENING_EXCEPTIONS) == {"thehive-cassandra"}
+
+    section = _security_constraints_section()
+
+    for name, reason in THEHIVE_HARDENING_EXCEPTIONS.items():
+        # The exception must name a real profile service (typo guard)…
+        assert name in THEHIVE_STACK_SERVICES, name
+
+        # …carry a non-empty reason here…
+        assert reason.strip(), name
+
+        # …and be documented in the README's security section, together with
+        # the hardening it is exempt from and why (the gosu entrypoint).
+        assert name in section, name
+        assert "gosu" in section.lower(), name
+        assert "no-new-privileges" in section, name
+        assert "cap_drop" in section, name
+
+    # The exemption is Cassandra-only: the rest of the stack keeps the rule.
+    assert "every other" in section.lower() or "all other" in section.lower()
 
 
 def test_thehive_healthchecks_probe_real_internal_listeners() -> None:

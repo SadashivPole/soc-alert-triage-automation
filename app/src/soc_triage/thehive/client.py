@@ -6,6 +6,7 @@ It does not make incident/scoring decisions and never logs secrets.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urljoin
@@ -13,6 +14,10 @@ from urllib.parse import urljoin
 import httpx
 
 from ..core.config import Settings
+
+#: Tag prefix that makes an exported case findable by incident (D2 idempotency).
+#: Unlike the case title it is stable: it never varies with severity.
+CASE_TAG_PREFIX = "soc-triage:"
 
 
 class TheHiveError(RuntimeError):
@@ -121,7 +126,9 @@ class TheHiveClient:
             if len(detail) > 500:
                 detail = detail[:500]
 
-            raise TheHiveRequestError(f"TheHive API returned HTTP {response.status_code}: {detail}")
+            raise TheHiveRequestError(
+                f"TheHive API returned HTTP {response.status_code}: {detail}"
+            )
 
         return response
 
@@ -133,6 +140,7 @@ class TheHiveClient:
         severity: int,
         pap: int = 2,
         tlp: int = 2,
+        tags: Sequence[str] = (),
     ) -> TheHiveCaseResult:
         """Create a TheHive case and return its identifier."""
 
@@ -150,6 +158,13 @@ class TheHiveClient:
             "tlp": tlp,
         }
 
+        # D2: the incident tag is the durable key that lets a later export
+        # recognise this case before creating another one.
+        clean_tags = [tag.strip() for tag in tags if tag and tag.strip()]
+
+        if clean_tags:
+            payload["tags"] = clean_tags
+
         response = self._request(
             "POST",
             "/api/v1/case",
@@ -159,12 +174,16 @@ class TheHiveClient:
         try:
             data = response.json()
         except ValueError as exc:
-            raise TheHiveRequestError("TheHive returned a non-JSON case response") from exc
+            raise TheHiveRequestError(
+                "TheHive returned a non-JSON case response"
+            ) from exc
 
         case_id = data.get("_id") or data.get("id")
 
         if not isinstance(case_id, str) or not case_id.strip():
-            raise TheHiveRequestError("TheHive case response did not contain a case identifier")
+            raise TheHiveRequestError(
+                "TheHive case response did not contain a case identifier"
+            )
 
         return TheHiveCaseResult(
             case_id=case_id,
@@ -207,15 +226,112 @@ class TheHiveClient:
         try:
             result = response.json()
         except ValueError as exc:
-            raise TheHiveRequestError("TheHive returned a non-JSON observable response") from exc
+            raise TheHiveRequestError(
+                "TheHive returned a non-JSON observable response"
+            ) from exc
 
         if not isinstance(result, dict):
-            raise TheHiveRequestError("TheHive observable response was not an object")
+            raise TheHiveRequestError(
+                "TheHive observable response was not an object"
+            )
 
         return result
 
+    def find_case_by_incident(
+        self,
+        incident_id: str,
+        *,
+        case_range: str = "0-200",
+    ) -> str | None:
+        """Return the id of an existing case for ``incident_id``, else ``None``.
+
+        D2 recovery: the export route writes its idempotency audit row *after*
+        the case is created, so a failed export can leave a case in TheHive
+        that nothing tracks. Before creating a case the caller asks this
+        method whether one already exists. Two identifiers are matched:
+
+        * the durable tag ``soc-triage:<incident_id>`` written on new cases;
+        * ``incident_id`` appearing in the case title — this also finds cases
+          created before the tag existed (legacy/untracked cases).
+
+        The earliest match wins so repeated lookups agree. Read-only in
+        effect; the caller decides whether a lookup failure is fatal.
+        """
+
+        marker = f"{CASE_TAG_PREFIX}{incident_id}"
+
+        try:
+            range_from, range_to = (
+                int(value.strip())
+                for value in case_range.split("-", 1)
+            )
+        except ValueError as exc:
+            raise ValueError(
+                f"Invalid TheHive case range: {case_range!r}"
+            ) from exc
+
+        if range_from < 0 or range_to < range_from:
+            raise ValueError(
+                f"Invalid TheHive case range: {case_range!r}"
+            )
+
+        # TheHive 5 Query API uses the `page` query operation rather than
+        # the removed `/api/v1/case/_search` endpoint.
+        payload = {
+            "query": [
+                {"_name": "listCase"},
+                {
+                    "_name": "page",
+                    "from": range_from,
+                    "to": range_to,
+                },
+            ]
+        }
+
+        response = self._request(
+            "POST",
+            "/api/v1/query",
+            json=payload,
+        )
+
+        try:
+            cases = response.json()
+        except ValueError as exc:
+            raise TheHiveRequestError(
+                "TheHive returned a non-JSON case query response"
+            ) from exc
+
+        if not isinstance(cases, list):
+            return None
+
+        matches = [
+            case
+            for case in cases
+            if isinstance(case, dict)
+            and (
+                marker in (case.get("tags") or [])
+                or incident_id in str(case.get("title") or "")
+            )
+        ]
+
+        matches.sort(
+            key=lambda case: (
+                case.get("createdAt") or 0,
+                str(case.get("_id") or ""),
+            )
+        )
+
+        for case in matches:
+            case_id = case.get("_id") or case.get("id")
+
+            if isinstance(case_id, str) and case_id.strip():
+                return case_id.strip()
+
+        return None
+
 
 __all__ = [
+    "CASE_TAG_PREFIX",
     "TheHiveAuthenticationError",
     "TheHiveCaseResult",
     "TheHiveClient",

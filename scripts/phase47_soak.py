@@ -5,12 +5,14 @@ from __future__ import annotations
 import argparse
 import copy
 import json
+import socket
 import statistics
-import subprocess
 import time
 import uuid
 from pathlib import Path
 from typing import Any
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
 
 DEFAULT_BASE_URL = "http://127.0.0.1:8000"
 DEFAULT_COUNT = 100
@@ -69,66 +71,45 @@ def post_json(
     api_key: str,
     timeout: float,
 ) -> tuple[int, float, str]:
-    """POST one request with a hard subprocess-level wall-clock deadline."""
-    body = json.dumps(payload, separators=(",", ":"))
+    """POST one request with urllib and measure the wall-clock round-trip."""
+    body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
 
-    command = [
-        "curl.exe",
-        "--silent",
-        "--show-error",
-        "--max-time",
-        str(timeout),
-        "--connect-timeout",
-        str(timeout),
-        "-X",
-        "POST",
+    request = Request(
         url,
-        "-H",
-        "Content-Type: application/json",
-        "-H",
-        f"X-API-Key: {api_key}",
-        "--data-binary",
-        body,
-        "--write-out",
-        "\n__PHASE47_STATUS__:%{http_code}",
-    ]
+        data=body,
+        method="POST",
+        headers={
+            "Content-Type": "application/json",
+            "X-API-Key": api_key,
+        },
+    )
 
     started = time.perf_counter()
 
     try:
-        completed = subprocess.run(
-            command,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=timeout + 2.0,
-            check=False,
-        )
-    except subprocess.TimeoutExpired:
+        with urlopen(request, timeout=timeout) as response:
+            status = int(response.status)
+            response_body = response.read().decode("utf-8", errors="replace")
+    except HTTPError as error:
         elapsed_ms = (time.perf_counter() - started) * 1000.0
-        return 0, elapsed_ms, "transport_error: hard timeout"
+        detail = error.read().decode("utf-8", errors="replace")
+        return error.code, elapsed_ms, detail
+    except TimeoutError:
+        elapsed_ms = (time.perf_counter() - started) * 1000.0
+        return 0, elapsed_ms, "transport_error: timeout"
+    except URLError as error:
+        elapsed_ms = (time.perf_counter() - started) * 1000.0
+        reason = error.reason
+
+        if isinstance(reason, (socket.timeout, TimeoutError)):
+            return 0, elapsed_ms, "transport_error: timeout"
+
+        return 0, elapsed_ms, f"transport_error: {reason}"[:300]
+    except OSError as error:
+        elapsed_ms = (time.perf_counter() - started) * 1000.0
+        return 0, elapsed_ms, f"transport_error: {error}"[:300]
 
     elapsed_ms = (time.perf_counter() - started) * 1000.0
-
-    output = completed.stdout
-    stderr = completed.stderr.strip()
-
-    marker = "\n__PHASE47_STATUS__:"
-    if marker in output:
-        response_body, status_text = output.rsplit(marker, 1)
-        try:
-            status = int(status_text.strip())
-        except ValueError:
-            status = 0
-    else:
-        response_body = output
-        status = 0
-
-    if completed.returncode != 0 and status == 0:
-        detail = stderr or response_body or f"curl exit code {completed.returncode}"
-        return 0, elapsed_ms, f"transport_error: {detail[:300]}"
-
     return status, elapsed_ms, response_body
 
 

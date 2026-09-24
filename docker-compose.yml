@@ -810,12 +810,8 @@ services:
         - "cqlsh -u cassandra -p cassandra -e 'describe keyspaces' || exit 1"
       start_period: 120s
       interval: 2s
-      timeout: 1s
+      timeout: 5s
       retries: 3
-    security_opt:
-      - no-new-privileges:true
-    cap_drop:
-      - ALL
     deploy:
       resources:
         limits:
@@ -857,7 +853,7 @@ services:
       # `_cat/health` path the vendor's stacks probe.
       test:
         - "CMD-SHELL"
-        - "curl -s -f -u 'elastic:$${ELASTIC_PASSWORD}' http://localhost:9200/_cat/health || exit 1"
+        - "curl -s -f -u \"elastic:$${ELASTIC_PASSWORD}\" http://localhost:9200/_cat/health || exit 1"
       start_period: 60s
       interval: 10s
       timeout: 5s
@@ -905,6 +901,8 @@ services:
       - "cassandra"
       - "--cql-keyspace"
       - "thehive"
+      - "--index-backend"
+      - "elasticsearch"
       - "--es-hostnames"
       - "thehive-elasticsearch"
       - "--es-username"
