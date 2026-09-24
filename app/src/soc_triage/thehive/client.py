@@ -126,9 +126,7 @@ class TheHiveClient:
             if len(detail) > 500:
                 detail = detail[:500]
 
-            raise TheHiveRequestError(
-                f"TheHive API returned HTTP {response.status_code}: {detail}"
-            )
+            raise TheHiveRequestError(f"TheHive API returned HTTP {response.status_code}: {detail}")
 
         return response
 
@@ -174,16 +172,12 @@ class TheHiveClient:
         try:
             data = response.json()
         except ValueError as exc:
-            raise TheHiveRequestError(
-                "TheHive returned a non-JSON case response"
-            ) from exc
+            raise TheHiveRequestError("TheHive returned a non-JSON case response") from exc
 
         case_id = data.get("_id") or data.get("id")
 
         if not isinstance(case_id, str) or not case_id.strip():
-            raise TheHiveRequestError(
-                "TheHive case response did not contain a case identifier"
-            )
+            raise TheHiveRequestError("TheHive case response did not contain a case identifier")
 
         return TheHiveCaseResult(
             case_id=case_id,
@@ -226,14 +220,10 @@ class TheHiveClient:
         try:
             result = response.json()
         except ValueError as exc:
-            raise TheHiveRequestError(
-                "TheHive returned a non-JSON observable response"
-            ) from exc
+            raise TheHiveRequestError("TheHive returned a non-JSON observable response") from exc
 
         if not isinstance(result, dict):
-            raise TheHiveRequestError(
-                "TheHive observable response was not an object"
-            )
+            raise TheHiveRequestError("TheHive observable response was not an object")
 
         return result
 
@@ -261,19 +251,12 @@ class TheHiveClient:
         marker = f"{CASE_TAG_PREFIX}{incident_id}"
 
         try:
-            range_from, range_to = (
-                int(value.strip())
-                for value in case_range.split("-", 1)
-            )
+            range_from, range_to = (int(value.strip()) for value in case_range.split("-", 1))
         except ValueError as exc:
-            raise ValueError(
-                f"Invalid TheHive case range: {case_range!r}"
-            ) from exc
+            raise ValueError(f"Invalid TheHive case range: {case_range!r}") from exc
 
         if range_from < 0 or range_to < range_from:
-            raise ValueError(
-                f"Invalid TheHive case range: {case_range!r}"
-            )
+            raise ValueError(f"Invalid TheHive case range: {case_range!r}")
 
         # TheHive 5 Query API uses the `page` query operation rather than
         # the removed `/api/v1/case/_search` endpoint.
@@ -297,9 +280,7 @@ class TheHiveClient:
         try:
             cases = response.json()
         except ValueError as exc:
-            raise TheHiveRequestError(
-                "TheHive returned a non-JSON case query response"
-            ) from exc
+            raise TheHiveRequestError("TheHive returned a non-JSON case query response") from exc
 
         if not isinstance(cases, list):
             return None
@@ -308,10 +289,7 @@ class TheHiveClient:
             case
             for case in cases
             if isinstance(case, dict)
-            and (
-                marker in (case.get("tags") or [])
-                or incident_id in str(case.get("title") or "")
-            )
+            and (marker in (case.get("tags") or []) or incident_id in str(case.get("title") or ""))
         ]
 
         matches.sort(
