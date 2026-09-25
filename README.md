@@ -10,6 +10,25 @@ workflows, and a Docker lab.
 ![n8n](https://img.shields.io/badge/n8n-workflows-orange)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
+## What You Can Do With This Project
+
+- Ingest Wazuh alerts (or replay synthetic samples), then normalize, deduplicate, and track recurrence.
+- Explore optional VirusTotal/MISP IOC enrichment; provider clients are disabled by default, and MISP has not been live-validated.
+- Inspect deterministic scores and factor explanations, then deterministic routes to monitor, queue for L1, suppress allowlisted sources, or open an incident.
+- Use n8n workflows for notifications, escalation, and feedback capture; review incident and audit history.
+- Evaluate labeled scenarios against ground truth with confusion-matrix metrics and CI quality gates. The corpus is not a benchmark.
+- Run the Docker Compose lab.
+
+**Designed for:** SOC learning, portfolio projects, interview demonstrations, and homelab experimentation.
+
+## 60-Second Overview
+
+Wazuh alert or sample → FastAPI ingest → normalize + deduplicate → optional IOC enrichment → explainable deterministic score → deterministic route → incident/audit records → n8n analyst workflows
+
+Feedback is captured and audited; it does not automatically tune scoring. Containment is an approval-required request, and execution is not implemented.
+
+Detection-quality evaluation is a separate labeled-corpus replay through the ingest path, compared with ground truth and checked by CI quality gates.
+
 > **Project status (honest).** Phase 0 and Phase 1 are complete. **Phase 2 is implemented · locally validated** — Phase 2.2 (static local policy wiring: allowlist `allowlist.v1` + asset inventory `asset_inventory.v1`), Phase 2.3 (enrichment response TTL cache), Phase 2.5 (deterministic `scoring.v2` `threat_intel` factor), Phase 2.6 (late-enrichment re-score), Phase 2.7A (automatic late-enrichment sweep, disabled by default, idempotent), and Phase 2.7B (provider-specific IOC verdict visibility in WF2) are implemented · locally validated (payload-level and fake-transport tests, with live VirusTotal/Mailpit verification; MISP not live-validated); the optional MISP `intel` compose profile and its deterministic synthetic seeding guide (Phase 2.4) are implemented and statically validated (not live-started in CI). §8.2 weight rescaling remains explicit open item. **Phase 3** remains implemented with named items outstanding; **Phase 4 (real Wazuh integration)** is implemented and partially live-validated; **Phase 5 (deterministic detection evaluation)** is implemented and locally validated; **Phase 6 (detection quality & correlation) is implemented · locally validated — 6 of 6 items** (detection coverage, ATT&CK mapping, 24-scenario corpus, correlation, explainability, and detection-quality CI gates asserting precision/recall/F1/FPR and confusion-matrix bounds) — see [Development Roadmap](#development-roadmap) and [DEVELOPMENT_PLAN.md](DEVELOPMENT_PLAN.md).
 >
 > The **authoritative triage path is deterministic**: alert → ingest → normalize → dedupe
@@ -29,27 +48,29 @@ workflows, and a Docker lab.
 
 ## Table of Contents
 
-1. [Status & Evidence Vocabulary](#status--evidence-vocabulary)
-2. [Purpose](#purpose)
-3. [What This Project Is / Is Not](#what-this-project-is--is-not)
-4. [SOC Use Cases](#soc-use-cases)
-5. [Architecture Overview](#architecture-overview)
-6. [Deterministic Scoring & Decision Routing](#deterministic-scoring--decision-routing)
-7. [Phase 5 — Deterministic Detection Evaluation](#phase-5--deterministic-detection-evaluation)
-8. [Phase 6 — Detection Quality & Correlation (Implemented)](#phase-6--detection-quality--correlation-implemented)
-9. [Triage Pipeline (End to End)](#triage-pipeline-end-to-end)
-10. [Technologies](#technologies)
-11. [Repository Layout](#repository-layout)
-12. [Testing & CI](#testing--ci)
-13. [Security Considerations](#security-considerations)
-14. [Installation & Quick Start](#installation--quick-start)
-15. [Development Roadmap](#development-roadmap)
-16. [SOC Console](#soc-console)
-17. [Observability](#observability)
-18. [Validation Status & Known Gaps](#validation-status--known-gaps)
-19. [Optional Future Functionality (Not Implemented)](#optional-future-functionality-not-implemented)
-20. [Documentation Index](#documentation-index)
-21. [Contributing & License](#contributing--license)
+1. [What You Can Do With This Project](#what-you-can-do-with-this-project)
+2. [60-Second Overview](#60-second-overview)
+3. [Status & Evidence Vocabulary](#status--evidence-vocabulary)
+4. [Purpose](#purpose)
+5. [What This Project Is / Is Not](#what-this-project-is--is-not)
+6. [SOC Use Cases](#soc-use-cases)
+7. [Architecture Overview](#architecture-overview)
+8. [Deterministic Scoring & Decision Routing](#deterministic-scoring--decision-routing)
+9. [Phase 5 — Deterministic Detection Evaluation](#phase-5--deterministic-detection-evaluation)
+10. [Phase 6 — Detection Quality & Correlation (Implemented)](#phase-6--detection-quality--correlation-implemented)
+11. [Triage Pipeline (End to End)](#triage-pipeline-end-to-end)
+12. [Technologies](#technologies)
+13. [Repository Layout](#repository-layout)
+14. [Testing & CI](#testing--ci)
+15. [Security Considerations](#security-considerations)
+16. [Installation & Quick Start](#installation--quick-start)
+17. [Development Roadmap](#development-roadmap)
+18. [SOC Console](#soc-console)
+19. [Observability](#observability)
+20. [Validation Status & Known Gaps](#validation-status--known-gaps)
+21. [Optional Future Functionality (Not Implemented)](#optional-future-functionality-not-implemented)
+22. [Documentation Index](#documentation-index)
+23. [Contributing & License](#contributing--license)
 
 ---
 
