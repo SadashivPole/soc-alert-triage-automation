@@ -366,12 +366,11 @@ soc-alert-triage-automation/
 
 ## Testing & CI
 
-**Recorded full-suite runs — historical evidence, not a re-verified current total:** this
-README recorded `pytest` → **930 passed** (571 unit, 318 integration, 41 evaluation) on
-Python 3.11, and [DEVELOPMENT_PLAN.md](DEVELOPMENT_PLAN.md) records a later dated run —
-**998 passed** (595 unit · 346 integration · 57 evaluation; Python 3.11, 2026-09-11, after
-Phase 6.4). Neither figure was re-run for a docs change, and **no current suite total is
-claimed here**.
+**Latest verified local full-suite run (2026-09-24):** `pytest -q` run from the
+`app/` directory completed with **1536 passed, 12 skipped, 2 warnings in 283.09s**.
+The 12 skips were **9 PostgreSQL migration-parity tests** without
+`POSTGRES_TEST_URL`/test credentials and **3 POSIX-only Wazuh permission tests** on
+Windows. This is local validation evidence, not a production or SLA claim.
 
 Phase 2.2 (static local policies) is evidenced by its own **47 targeted tests**
 (26 allowlist unit · 16 asset-inventory unit · 5 integration wiring) plus the standard CI
