@@ -17,7 +17,7 @@ from __future__ import annotations
 import uuid
 from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, cast
 
 from sqlalchemy import Integer, Select, String, delete, func, select, update
 from sqlalchemy.engine import CursorResult
@@ -248,11 +248,14 @@ class AlertRepository:
         total = self._session.execute(
             select(func.count()).select_from(stmt.subquery())
         ).scalar_one()
-        rows = self._session.scalars(
-            stmt.order_by(Alert.received_at.desc(), Alert.alert_id.desc())
-            .limit(limit)
-            .offset(offset)
-        ).all()
+        rows = cast(
+            list[Alert],
+            self._session.scalars(
+                stmt.order_by(Alert.received_at.desc(), Alert.alert_id.desc())
+                .limit(limit)
+                .offset(offset)
+            ).all(),
+        )
         return [_alert_to_persisted(row) for row in rows], int(total)
 
     def for_incident(self, incident_id: str) -> list[PersistedAlert]:
@@ -394,7 +397,7 @@ class StatsRepository:
             end,
         )
         total, false_positive = self._session.execute(statement).one()
-        return int(total), int(false_positive)
+        return cast(int, total), cast(int, false_positive)
 
     def top_rules(self, start: datetime, end: datetime) -> list[tuple[str, int]]:
         """Return the ten highest-volume rules with stable tie-breaking."""
@@ -405,7 +408,7 @@ class StatsRepository:
         rows = self._session.execute(
             statement.group_by(Alert.rule_id).order_by(count.desc(), Alert.rule_id.asc()).limit(10)
         ).all()
-        return [(str(rule_id), int(rule_count)) for rule_id, rule_count in rows]
+        return [(str(rule_id), cast(int, rule_count)) for rule_id, rule_count in rows]
 
     def tuning_suggestions(self, start: datetime, end: datetime) -> list[tuple[str, str, int]]:
         """Find rule/agent pairs with at least three false-positive records.
@@ -431,7 +434,7 @@ class StatsRepository:
             .limit(self.MAX_TUNING_SUGGESTIONS)
         ).all()
         return [
-            (str(rule_id), str(agent_id), int(false_positive_count))
+            (str(rule_id), str(agent_id), cast(int, false_positive_count))
             for rule_id, agent_id, false_positive_count in rows
         ]
 
